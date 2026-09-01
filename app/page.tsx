@@ -17,10 +17,15 @@ export default async function Home() {
     : null;
 
   return (
-    <div className="min-h-screen gradient-surface">
+    <div className="min-h-screen bg-page-landing relative">
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[10%] left-[20%] w-[500px] h-[500px] rounded-full bg-[radial-gradient(circle,rgba(212,167,145,0.12)_0%,transparent_70%)]" />
+        <div className="absolute bottom-[10%] right-[15%] w-[400px] h-[400px] rounded-full bg-[radial-gradient(circle,rgba(89,23,27,0.2)_0%,transparent_70%)]" />
+      </div>
+
       <HomepageHeader user={githubUser} />
 
-      <main>
+      <main className="relative z-10">
         <Hero user={githubUser} />
         <FeatureSteps />
         <ProductPreview />

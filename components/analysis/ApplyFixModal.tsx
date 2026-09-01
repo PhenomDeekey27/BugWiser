@@ -75,32 +75,32 @@ export function ApplyFixModal({
         onClick={!applying ? onClose : undefined}
       />
 
-      <div className="relative glass-strong border border-outline-variant/50 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl">
-        <h2 className="text-lg font-semibold text-on-surface mb-2">
+      <div className="relative bg-surface-container/98 border border-bw-burgundy/40 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl card-depth-lg">
+        <h2 className="text-lg font-semibold text-bw-peach-light mb-2">
           Create Fix Branch?
         </h2>
-        <p className="text-sm text-on-surface-variant leading-relaxed mb-4">
+        <p className="text-sm text-bw-peach leading-relaxed mb-4">
           This will create a new branch from the repository&apos;s default
           branch and apply the proposed changes.
         </p>
 
         <div className="space-y-3 mb-6">
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-20 shrink-0">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-20 shrink-0">
               Repository
             </span>
-            <span className="text-sm font-mono text-on-surface">
+            <span className="text-sm font-mono text-bw-peach-light">
               {repositoryFullName}
             </span>
           </div>
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-20 shrink-0">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-20 shrink-0">
               Base
             </span>
-            <span className="text-sm font-mono text-on-surface">main</span>
+            <span className="text-sm font-mono text-bw-peach-light">main</span>
           </div>
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-20 shrink-0">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-20 shrink-0">
               Branch
             </span>
             <span className="text-sm font-mono text-primary-container">
@@ -108,10 +108,10 @@ export function ApplyFixModal({
             </span>
           </div>
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-20 shrink-0">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-20 shrink-0">
               Files
             </span>
-            <div className="text-sm font-mono text-on-surface">
+            <div className="text-sm font-mono text-bw-peach-light">
               {patch.files.map((f) => (
                 <div key={f.path} className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />
@@ -142,7 +142,7 @@ export function ApplyFixModal({
           <Button
             variant="outline"
             size="sm"
-            className="border-outline-variant/50 text-on-surface-variant"
+            className="border-bw-burgundy/40 text-bw-peach"
             onClick={onClose}
             disabled={applying}
           >
@@ -150,13 +150,13 @@ export function ApplyFixModal({
           </Button>
           <Button
             size="sm"
-            className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+            className="btn-bw-primary font-medium"
             onClick={handleApply}
             disabled={applying}
           >
             {applying ? (
               <span className="flex items-center gap-2">
-                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span className="w-3 h-3 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                 Applying...
               </span>
             ) : (

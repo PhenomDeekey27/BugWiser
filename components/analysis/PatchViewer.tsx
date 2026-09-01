@@ -92,11 +92,11 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
   const addedCode = getAddedCode(file);
 
   return (
-    <div className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest overflow-hidden">
-      <div className="px-3 py-2 border-b border-outline-variant/50 bg-surface-container/50">
+    <div className="rounded-lg border border-bw-burgundy/30 bg-[#18090B] overflow-hidden card-depth">
+      <div className="px-3 py-2 border-b border-bw-burgundy/20 bg-surface-container/60">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-on-surface">{file.path}</span>
+            <span className="text-xs font-mono text-bw-peach-light">{file.path}</span>
             <Badge
               variant="outline"
               className={`text-[10px] font-mono ${
@@ -121,21 +121,21 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
         </div>
       </div>
 
-      <div className="px-3 py-2 border-b border-outline-variant/30">
-        <p className="text-xs text-on-surface-variant">{reason}</p>
+      <div className="px-3 py-2 border-b border-bw-burgundy/20">
+        <p className="text-xs text-bw-peach">{reason}</p>
       </div>
 
       <DiffViewer hunks={file.hunks} />
 
       {(removedCode || addedCode) && (
-        <div className="px-3 py-2 border-t border-outline-variant/30">
+        <div className="px-3 py-2 border-t border-bw-burgundy/20">
           <div className="grid grid-cols-2 gap-2">
             {removedCode && (
               <div>
                 <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-red-400 mb-1">
                   Before
                 </p>
-                <pre className="text-[11px] font-mono text-on-surface-variant bg-red-500/5 p-2 rounded overflow-x-auto max-h-32 overflow-y-auto">
+                <pre className="text-[11px] font-mono text-bw-peach bg-red-500/5 p-2 rounded overflow-x-auto max-h-32 overflow-y-auto border border-red-500/20">
                   {removedCode}
                 </pre>
               </div>
@@ -145,7 +145,7 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
                 <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-green-400 mb-1">
                   After
                 </p>
-                <pre className="text-[11px] font-mono text-on-surface-variant bg-green-500/5 p-2 rounded overflow-x-auto max-h-32 overflow-y-auto">
+                <pre className="text-[11px] font-mono text-bw-peach bg-green-500/5 p-2 rounded overflow-x-auto max-h-32 overflow-y-auto border border-green-500/20">
                   {addedCode}
                 </pre>
               </div>
@@ -201,7 +201,7 @@ export function PatchViewer({
     <div>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-on-surface">
+          <h2 className="text-lg font-semibold text-bw-peach-light">
             Proposed Patch
           </h2>
           <Badge variant="outline" className="text-xs font-mono">
@@ -212,20 +212,20 @@ export function PatchViewer({
           <Button
             variant="outline"
             size="sm"
-            className="border-outline-variant/50 text-on-surface-variant hover:text-on-surface"
+            className="border-bw-burgundy/40 text-bw-peach hover:text-bw-peach-light"
             onClick={handleCopy}
           >
             Copy Patch
           </Button>
           <Button
             size="sm"
-            className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+            className="btn-bw-primary font-medium"
             onClick={() => setShowApplyModal(true)}
             disabled={patchStatus === 'pending'}
           >
             {patchStatus === 'pending' ? (
               <span className="flex items-center gap-2">
-                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span className="w-3 h-3 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                 Applying...
               </span>
             ) : (
@@ -235,16 +235,16 @@ export function PatchViewer({
         </div>
       </div>
 
-      <div className="p-4 rounded-lg glass border border-outline-variant/50 mb-4">
-        <p className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant mb-1">
+      <div className="p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 mb-4 card-depth">
+        <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-1">
           Summary
         </p>
-        <p className="text-sm text-on-surface leading-relaxed">
+        <p className="text-sm text-bw-peach-light leading-relaxed">
           {patch.summary}
         </p>
       </div>
 
-      <div className="p-3 rounded-lg glass border border-green-500/30 bg-green-500/5 mb-4">
+      <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/30 mb-4">
         <p className="text-xs text-green-400 leading-relaxed">
           Your default branch will not be modified. A new fix branch will be
           created from the latest commit.

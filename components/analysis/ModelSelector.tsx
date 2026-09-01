@@ -133,14 +133,14 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
         return (
           <div
             key={tier}
-            className="p-3 rounded-lg glass border border-outline-variant/30"
+            className="p-3 rounded-lg bg-surface-container/80 border border-bw-burgundy/30"
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <span className={`text-xs font-mono font-bold uppercase tracking-wider ${meta.color}`}>
                   {meta.label}
                 </span>
-                <span className="text-xs text-on-surface-variant">{meta.description}</span>
+                <span className="text-xs text-bw-peach">{meta.description}</span>
               </div>
               {models.find((m) => m.id === value[tier])?.isFree && (
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
@@ -151,7 +151,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
             <select
               value={value[tier]}
               onChange={(e) => updateTier(tier, e.target.value)}
-              className="w-full bg-surface-container-high border border-outline-variant/50 rounded px-3 py-2 text-sm font-mono text-on-surface focus:outline-none focus:border-primary-container/50 focus:shadow-[0_0_12px_rgba(255,86,37,0.15)] appearance-none cursor-pointer"
+              className="w-full bg-surface-container-high border border-bw-burgundy/30 rounded px-3 py-2 text-sm font-mono text-bw-peach-light focus:outline-none focus:border-primary-container/50 focus:shadow-[0_0_12px_rgba(255,86,37,0.1)] appearance-none cursor-pointer"
             >
               <option value="">Select model...</option>
               {models.map((model) => (
@@ -165,7 +165,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
               const selected = models.find((m) => m.id === value[tier]);
               if (!selected) return null;
               return (
-                <div className="mt-2 flex items-center gap-3 text-[10px] font-mono text-on-surface-variant/70">
+                <div className="mt-2 flex items-center gap-3 text-[10px] font-mono text-bw-peach/60">
                   <span>Context: {formatContext(selected.contextLength)}</span>
                   <span>Output: {formatContext(selected.maxOutput)}</span>
                   <span>Input: ${selected.inputPrice}/1K</span>

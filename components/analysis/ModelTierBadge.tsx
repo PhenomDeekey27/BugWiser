@@ -104,7 +104,7 @@ export function ModelTierBadge({
               statusInfo.animate && 'animate-pulse'
             )}
           />
-          <span className="text-[10px] font-mono text-on-surface-variant">
+          <span className="text-[10px] font-mono text-bw-peach">
             {statusInfo.label}
           </span>
         </div>
@@ -112,17 +112,17 @@ export function ModelTierBadge({
 
       {showDetails && (
         <div className="relative mt-2 space-y-1">
-          <p className="text-[10px] font-mono text-on-surface-variant">
+          <p className="text-[10px] font-mono text-bw-peach">
             {config.description}
           </p>
           {provider && (
-            <p className="text-[10px] font-mono text-on-surface-variant">
-              Provider: <span className="text-on-surface">{provider}</span>
+            <p className="text-[10px] font-mono text-bw-peach">
+              Provider: <span className="text-bw-peach-light">{provider}</span>
             </p>
           )}
           {model && (
-            <p className="text-[10px] font-mono text-on-surface-variant">
-              Model: <span className="text-on-surface">{model}</span>
+            <p className="text-[10px] font-mono text-bw-peach">
+              Model: <span className="text-bw-peach-light">{model}</span>
             </p>
           )}
         </div>
@@ -149,11 +149,11 @@ export function ModelTierPipeline({
   return (
     <div className={cn('space-y-2', className)}>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant">
+        <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach">
           AI Pipeline
         </span>
         {provider && (
-          <span className="text-[10px] font-mono text-on-surface-variant">
+          <span className="text-[10px] font-mono text-bw-peach/60">
             via {provider}
           </span>
         )}
@@ -173,7 +173,7 @@ export function ModelTierPipeline({
                 isCurrent && 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_12px_rgba(34,197,94,0.15)]',
                 isUsed && !isCurrent && 'bg-green-500/5 border-green-500/20 text-green-400/50',
                 isFailed && 'bg-red-500/5 border-red-500/20 text-red-400/50 line-through',
-                !isCurrent && !isUsed && !isFailed && 'bg-surface-container border-outline-variant/30 text-on-surface-variant/50'
+                !isCurrent && !isUsed && !isFailed && 'bg-surface-container border-bw-burgundy/20 text-bw-peach/60'
               )}
             >
               <span className={cn(
@@ -196,8 +196,8 @@ export function ModelTierPipeline({
       </div>
 
       {activeModel && (
-        <p className="text-[10px] font-mono text-on-surface-variant mt-2">
-          Using: <span className="text-on-surface">{activeModel}</span>
+        <p className="text-[10px] font-mono text-bw-peach mt-2">
+          Using: <span className="text-bw-peach-light">{activeModel}</span>
         </p>
       )}
     </div>

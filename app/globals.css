@@ -47,64 +47,91 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 
-  /* IssuePilot Core Design System */
-  --color-surface: #131316;
-  --color-surface-dim: #131316;
-  --color-surface-bright: #39393c;
-  --color-surface-container-lowest: #0e0e11;
-  --color-surface-container-low: #1b1b1e;
-  --color-surface-container: #1f1f22;
-  --color-surface-container-high: #2a2a2d;
-  --color-surface-container-highest: #353438;
-  --color-on-surface: #e5e1e6;
-  --color-on-surface-variant: #e7bdb2;
-  --color-outline: #ad887e;
-  --color-outline-variant: #5d4038;
+  /* BugWiser Brand: Burgundy-to-Peach Gradient System */
+  --color-bw-burgundy: #59171B;
+  --color-bw-burgundy-dark: #431116;
+  --color-bw-wine: #6E292C;
+  --color-bw-terracotta: #834742;
+  --color-bw-dusty-rose: #AA776A;
+  --color-bw-peach: #D4A791;
+  --color-bw-peach-light: #FED7B8;
+  --color-bw-cream: #FFF0E6;
+
+  /* Surfaces */
+  --color-surface: #1a0c0e;
+  --color-surface-dim: #15090b;
+  --color-surface-bright: #3a1f22;
+  --color-surface-container-lowest: #120809;
+  --color-surface-container-low: #1e1113;
+  --color-surface-container: #241416;
+  --color-surface-container-high: #2e1a1d;
+  --color-surface-container-highest: #3a2225;
+
+  /* Text on dark surfaces */
+  --color-on-surface: #FED7B8;
+  --color-on-surface-variant: #D4A791;
+  --color-on-surface-muted: #D4A791;
+
+  /* Text on light surfaces */
+  --color-on-light: #431116;
+  --color-on-light-muted: #59171B;
+
+  /* Borders */
+  --color-outline: #AA776A;
+  --color-outline-variant: #59171B;
+
+  /* Primary — Ignition Orange (kept for CTA continuity) */
   --color-primary-default: #ffb5a0;
-  --color-on-primary: #601400;
+  --color-on-primary: #431116;
   --color-primary-container: #ff5625;
   --color-on-primary-container: #fff0ec;
-  --color-secondary-default: #ffb4a4;
-  --color-secondary-container: #ff5633;
-  --color-tertiary: #c1c6d4;
-  --color-tertiary-container: #8b919d;
+
+  /* Secondary */
+  --color-secondary-default: #D4A791;
+  --color-secondary-container: #834742;
+
+  /* Tertiary */
+  --color-tertiary: #AA776A;
+  --color-tertiary-container: #6E292C;
+
+  /* Error */
   --color-error-default: #ffb4ab;
   --color-error-container: #93000a;
 }
 
 :root {
-  --background: #0b0b0e;
-  --foreground: #e5e1e6;
-  --card: rgba(20, 28, 36, 0.75);
-  --card-foreground: #e5e1e6;
-  --popover: rgba(28, 38, 49, 0.9);
-  --popover-foreground: #e5e1e6;
-  --primary: #ffb5a0;
-  --primary-foreground: #601400;
-  --secondary: #ffb4a4;
-  --secondary-foreground: #630e00;
-  --muted: #2a2a2d;
-  --muted-foreground: #ad887e;
-  --accent: #2a2a2d;
-  --accent-foreground: #e5e1e6;
+  --background: #120809;
+  --foreground: #FED7B8;
+  --card: rgba(30, 17, 19, 0.85);
+  --card-foreground: #FED7B8;
+  --popover: rgba(36, 20, 22, 0.95);
+  --popover-foreground: #FED7B8;
+  --primary: #D4A791;
+  --primary-foreground: #431116;
+  --secondary: #AA776A;
+  --secondary-foreground: #1a0c0e;
+  --muted: #2e1a1d;
+  --muted-foreground: #D4A791;
+  --accent: #2e1a1d;
+  --accent-foreground: #FED7B8;
   --destructive: #ffb4ab;
-  --destructive-foreground: #0e0e11;
-  --border: #5d4038;
-  --input: #5d4038;
+  --destructive-foreground: #120809;
+  --border: #59171B;
+  --input: #59171B;
   --ring: #ff5625;
   --chart-1: #ff5625;
-  --chart-2: #ffb5a0;
-  --chart-3: #c1c6d4;
-  --chart-4: #ffb4a4;
+  --chart-2: #D4A791;
+  --chart-3: #AA776A;
+  --chart-4: #834742;
   --chart-5: #ffb4ab;
-  --radius: 0.25rem;
-  --sidebar: rgba(20, 28, 36, 0.85);
-  --sidebar-foreground: #e5e1e6;
+  --radius: 0.375rem;
+  --sidebar: rgba(26, 12, 14, 0.96);
+  --sidebar-foreground: #FED7B8;
   --sidebar-primary: #ff5625;
   --sidebar-primary-foreground: #fff0ec;
-  --sidebar-accent: rgba(42, 42, 45, 0.6);
-  --sidebar-accent-foreground: #e5e1e6;
-  --sidebar-border: #5d4038;
+  --sidebar-accent: rgba(46, 26, 29, 0.7);
+  --sidebar-accent-foreground: #FED7B8;
+  --sidebar-border: #59171B;
   --sidebar-ring: #ff5625;
 }
 
@@ -117,116 +144,264 @@
   }
 }
 
-/* Glassmorphism utilities */
+/* ========================================
+   PAGE GRADIENT BACKGROUNDS
+   ======================================== */
+
+/* Landing: Dark → Light (top to bottom) */
+.bg-page-landing {
+  background: linear-gradient(
+    180deg in oklch,
+    #59171B 0%,
+    #834742 25%,
+    #AA776A 50%,
+    #D4A791 75%,
+    #FED7B8 100%
+  );
+}
+
+/* Dashboard: Light → Dark (top to bottom) */
+.bg-page-dashboard {
+  background: linear-gradient(
+    180deg in oklch,
+    #FED7B8 0%,
+    #D4A791 20%,
+    #AA776A 45%,
+    #834742 70%,
+    #59171B 100%
+  );
+}
+
+/* Auth: Dark → Light with radial peach glow */
+.bg-page-auth {
+  background:
+    radial-gradient(ellipse 600px 400px at 50% 40%, rgba(212, 167, 145, 0.3), transparent),
+    linear-gradient(180deg in oklch, #431116 0%, #59171B 30%, #834742 60%, #AA776A 100%);
+}
+
+/* New Analysis: Diagonal Dark → Light */
+.bg-page-new-analysis {
+  background: linear-gradient(
+    135deg in oklch,
+    #59171B 0%,
+    #834742 30%,
+    #AA776A 60%,
+    #D4A791 85%,
+    #FED7B8 100%
+  );
+}
+
+/* Investigation Workspace: Light → Dark */
+.bg-page-workspace {
+  background: linear-gradient(
+    180deg in oklch,
+    #FED7B8 0%,
+    #D4A791 20%,
+    #AA776A 45%,
+    #834742 70%,
+    #59171B 100%
+  );
+}
+
+/* ========================================
+   SURFACE LAYER SYSTEM
+   ======================================== */
+
+/* Primary content surface — opaque, for cards/panels on any background */
+.surface-primary {
+  background: rgba(26, 12, 14, 0.92);
+  border: 1px solid rgba(89, 23, 27, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+/* Elevated surface — slightly brighter */
+.surface-elevated {
+  background: rgba(36, 20, 22, 0.95);
+  border: 1px solid rgba(89, 23, 27, 0.5);
+  backdrop-filter: blur(12px);
+}
+
+/* Glassmorphism with warm tones */
+.surface-glass {
+  background: rgba(30, 17, 19, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(89, 23, 27, 0.4);
+}
+
+.surface-glass-strong {
+  background: rgba(36, 20, 22, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(89, 23, 27, 0.5);
+}
+
+.surface-glass-sidebar {
+  background: rgba(26, 12, 14, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(89, 23, 27, 0.5);
+}
+
+/* Code surface — dedicated dark for code blocks */
+.surface-code {
+  background: #18090B;
+  border: 1px solid rgba(89, 23, 27, 0.4);
+}
+
+/* ========================================
+   GLASSMORPHISM UTILITIES (backwards compat)
+   ======================================== */
 @layer utilities {
   .glass {
-    background: rgba(20, 28, 36, 0.75);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-  }
-  .glass-strong {
-    background: rgba(28, 38, 49, 0.9);
+    background: rgba(30, 17, 19, 0.92);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(89, 23, 27, 0.4);
+  }
+  .glass-strong {
+    background: rgba(36, 20, 22, 0.96);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(89, 23, 27, 0.5);
   }
   .glass-sidebar {
-    background: rgba(20, 28, 36, 0.85);
+    background: rgba(26, 12, 14, 0.96);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(89, 23, 27, 0.5);
   }
   .glow-primary {
-    box-shadow: 0 0 64px rgba(255, 86, 37, 0.15);
+    box-shadow: 0 0 64px rgba(255, 86, 37, 0.12);
   }
   .glow-primary-sm {
-    box-shadow: 0 0 32px rgba(255, 86, 37, 0.1);
+    box-shadow: 0 0 32px rgba(255, 86, 37, 0.08);
+  }
+  .glow-peach {
+    box-shadow: 0 0 64px rgba(212, 167, 145, 0.15);
+  }
+  .glow-peach-sm {
+    box-shadow: 0 0 32px rgba(212, 167, 145, 0.1);
+  }
+  .glow-burgundy {
+    box-shadow: 0 0 64px rgba(89, 23, 27, 0.3);
   }
   .border-glow {
     border-color: rgba(255, 86, 37, 0.4);
   }
   .gradient-primary {
-    background: linear-gradient(135deg, #ff4500, #ff3300);
+    background: linear-gradient(135deg, #59171B, #834742);
   }
   .gradient-primary-hover {
-    background: linear-gradient(135deg, #ff5500, #ff4000);
+    background: linear-gradient(135deg, #6E292C, #AA776A);
   }
   .gradient-surface {
-    background: linear-gradient(180deg, #131316 0%, #0b0b0e 100%);
+    background: linear-gradient(180deg, #1a0c0e 0%, #120809 100%);
   }
 
-  .text-surface { color: #131316; }
-  .text-surface-dim { color: #131316; }
-  .text-surface-bright { color: #39393c; }
-  .text-surface-container-lowest { color: #0e0e11; }
-  .text-surface-container-low { color: #1b1b1e; }
-  .text-surface-container { color: #1f1f22; }
-  .text-surface-container-high { color: #2a2a2d; }
-  .text-surface-container-highest { color: #353438; }
-  .text-on-surface { color: #e5e1e6; }
-  .text-on-surface-variant { color: #e7bdb2; }
-  .text-outline { color: #ad887e; }
-  .text-outline-variant { color: #5d4038; }
+  /* Brand color utilities */
+  .text-bw-burgundy { color: #59171B; }
+  .text-bw-wine { color: #6E292C; }
+  .text-bw-terracotta { color: #834742; }
+  .text-bw-dusty-rose { color: #AA776A; }
+  .text-bw-peach { color: #D4A791; }
+  .text-bw-peach-light { color: #FED7B8; }
+  .text-bw-cream { color: #FFF0E6; }
+
+  .bg-bw-burgundy { background-color: #59171B; }
+  .bg-bw-wine { background-color: #6E292C; }
+  .bg-bw-terracotta { background-color: #834742; }
+  .bg-bw-dusty-rose { background-color: #AA776A; }
+  .bg-bw-peach { background-color: #D4A791; }
+  .bg-bw-peach-light { background-color: #FED7B8; }
+  .bg-bw-cream { background-color: #FFF0E6; }
+
+  .border-bw-burgundy { border-color: #59171B; }
+  .border-bw-wine { border-color: #6E292C; }
+  .border-bw-terracotta { border-color: #834742; }
+  .border-bw-dusty-rose { border-color: #AA776A; }
+  .border-bw-peach { border-color: #D4A791; }
+  .border-bw-peach-light { border-color: #FED7B8; }
+
+  .text-surface { color: #1a0c0e; }
+  .text-surface-dim { color: #15090b; }
+  .text-surface-bright { color: #3a1f22; }
+  .text-surface-container-lowest { color: #120809; }
+  .text-surface-container-low { color: #1e1113; }
+  .text-surface-container { color: #241416; }
+  .text-surface-container-high { color: #2e1a1d; }
+  .text-surface-container-highest { color: #3a2225; }
+  .text-on-surface { color: #FED7B8; }
+  .text-on-surface-variant { color: #D4A791; }
+  .text-on-surface-muted { color: #D4A791; }
+  .text-on-light { color: #431116; }
+  .text-on-light-muted { color: #59171B; }
+  .text-outline { color: #AA776A; }
+  .text-outline-variant { color: #59171B; }
   .text-primary-default { color: #ffb5a0; }
-  .text-on-primary { color: #601400; }
+  .text-on-primary { color: #431116; }
   .text-primary-container { color: #ff5625; }
   .text-on-primary-container { color: #fff0ec; }
-  .text-secondary-default { color: #ffb4a4; }
-  .text-secondary-container { color: #ff5633; }
-  .text-tertiary { color: #c1c6d4; }
-  .text-tertiary-container { color: #8b919d; }
+  .text-secondary-default { color: #D4A791; }
+  .text-secondary-container { color: #834742; }
+  .text-tertiary { color: #AA776A; }
+  .text-tertiary-container { color: #6E292C; }
   .text-error-default { color: #ffb4ab; }
   .text-error-container { color: #93000a; }
 
-  .bg-surface { background-color: #131316; }
-  .bg-surface-dim { background-color: #131316; }
-  .bg-surface-bright { background-color: #39393c; }
-  .bg-surface-container-lowest { background-color: #0e0e11; }
-  .bg-surface-container-low { background-color: #1b1b1e; }
-  .bg-surface-container { background-color: #1f1f22; }
-  .bg-surface-container-high { background-color: #2a2a2d; }
-  .bg-surface-container-highest { background-color: #353438; }
-  .bg-on-surface { background-color: #e5e1e6; }
-  .bg-on-surface-variant { background-color: #e7bdb2; }
-  .bg-outline { background-color: #ad887e; }
-  .bg-outline-variant { background-color: #5d4038; }
+  .bg-surface { background-color: #1a0c0e; }
+  .bg-surface-dim { background-color: #15090b; }
+  .bg-surface-bright { background-color: #3a1f22; }
+  .bg-surface-container-lowest { background-color: #120809; }
+  .bg-surface-container-low { background-color: #1e1113; }
+  .bg-surface-container { background-color: #241416; }
+  .bg-surface-container-high { background-color: #2e1a1d; }
+  .bg-surface-container-highest { background-color: #3a2225; }
+  .bg-on-surface { background-color: #FED7B8; }
+  .bg-on-surface-variant { background-color: #D4A791; }
+  .bg-outline { background-color: #AA776A; }
+  .bg-outline-variant { background-color: #59171B; }
   .bg-primary-default { background-color: #ffb5a0; }
-  .bg-on-primary { background-color: #601400; }
+  .bg-on-primary { background-color: #431116; }
   .bg-primary-container { background-color: #ff5625; }
   .bg-on-primary-container { background-color: #fff0ec; }
-  .bg-secondary-default { background-color: #ffb4a4; }
-  .bg-secondary-container { background-color: #ff5633; }
-  .bg-tertiary { background-color: #c1c6d4; }
-  .bg-tertiary-container { background-color: #8b919d; }
+  .bg-secondary-default { background-color: #D4A791; }
+  .bg-secondary-container { background-color: #834742; }
+  .bg-tertiary { background-color: #AA776A; }
+  .bg-tertiary-container { background-color: #6E292C; }
   .bg-error-default { background-color: #ffb4ab; }
   .bg-error-container { background-color: #93000a; }
 
-  .border-surface { border-color: #131316; }
-  .border-surface-dim { border-color: #131316; }
-  .border-surface-bright { border-color: #39393c; }
-  .border-surface-container-lowest { border-color: #0e0e11; }
-  .border-surface-container-low { border-color: #1b1b1e; }
-  .border-surface-container { border-color: #1f1f22; }
-  .border-surface-container-high { border-color: #2a2a2d; }
-  .border-surface-container-highest { border-color: #353438; }
-  .border-on-surface { border-color: #e5e1e6; }
-  .border-on-surface-variant { border-color: #e7bdb2; }
-  .border-outline { border-color: #ad887e; }
-  .border-outline-variant { border-color: #5d4038; }
+  .border-surface { border-color: #1a0c0e; }
+  .border-surface-dim { border-color: #15090b; }
+  .border-surface-bright { border-color: #3a1f22; }
+  .border-surface-container-lowest { border-color: #120809; }
+  .border-surface-container-low { border-color: #1e1113; }
+  .border-surface-container { border-color: #241416; }
+  .border-surface-container-high { border-color: #2e1a1d; }
+  .border-surface-container-highest { border-color: #3a2225; }
+  .border-on-surface { border-color: #FED7B8; }
+  .border-on-surface-variant { border-color: #D4A791; }
+  .border-outline { border-color: #AA776A; }
+  .border-outline-variant { border-color: #59171B; }
   .border-primary-default { border-color: #ffb5a0; }
-  .border-on-primary { border-color: #601400; }
+  .border-on-primary { border-color: #431116; }
   .border-primary-container { border-color: #ff5625; }
   .border-on-primary-container { border-color: #fff0ec; }
-  .border-secondary-default { border-color: #ffb4a4; }
-  .border-secondary-container { border-color: #ff5633; }
-  .border-tertiary { border-color: #c1c6d4; }
-  .border-tertiary-container { border-color: #8b919d; }
+  .border-secondary-default { border-color: #D4A791; }
+  .border-secondary-container { border-color: #834742; }
+  .border-tertiary { border-color: #AA776A; }
+  .border-tertiary-container { border-color: #6E292C; }
   .border-error-default { border-color: #ffb4ab; }
   .border-error-container { border-color: #93000a; }
 }
 
-/* Scrollbar styling */
+/* ========================================
+   SCROLLBAR STYLING
+   ======================================== */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #5d4038 transparent;
+  scrollbar-color: #59171B transparent;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
@@ -239,28 +414,40 @@
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #5d4038;
+  background-color: #59171B;
   border-radius: 3px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #ad887e;
+  background-color: #834742;
 }
 
-/* Analysis progress animations */
+/* ========================================
+   ANALYSIS PROGRESS ANIMATIONS
+   ======================================== */
 @keyframes analysisPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
 
 @keyframes analysisGlow {
-  0%, 100% { box-shadow: 0 0 8px rgba(255, 86, 37, 0.1); }
-  50% { box-shadow: 0 0 20px rgba(255, 86, 37, 0.3); }
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 86, 37, 0.08); }
+  50% { box-shadow: 0 0 20px rgba(255, 86, 37, 0.2); }
 }
 
 @keyframes scanLine {
   0% { transform: translateY(-100%); }
   100% { transform: translateY(100%); }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes warmPulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(212, 167, 145, 0.1); }
+  50% { box-shadow: 0 0 24px rgba(212, 167, 145, 0.2); }
 }
 
 .analysis-pulse {
@@ -269,6 +456,10 @@
 
 .analysis-glow {
   animation: analysisGlow 2s ease-in-out infinite;
+}
+
+.warm-pulse {
+  animation: warmPulse 3s ease-in-out infinite;
 }
 
 .scan-line {
@@ -283,6 +474,68 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(255, 86, 37, 0.6), transparent);
+  background: linear-gradient(90deg, transparent, rgba(212, 167, 145, 0.6), transparent);
   animation: scanLine 2s ease-in-out infinite;
+}
+
+/* ========================================
+   CARD DEPTH / 3D EFFECTS
+   ======================================== */
+.card-depth {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 4px 8px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(89, 23, 27, 0.3);
+}
+
+.card-depth-lg {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.25),
+    0 8px 16px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(89, 23, 27, 0.3);
+}
+
+.card-depth-hover {
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.card-depth-hover:hover {
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.3),
+    0 12px 24px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(255, 86, 37, 0.2);
+  transform: translateY(-1px);
+}
+
+/* ========================================
+   BUTTON DIMENSIONAL EFFECTS
+   ======================================== */
+.btn-bw-primary {
+  background: linear-gradient(135deg, #59171B, #834742);
+  color: #FED7B8;
+  border: 1px solid rgba(170, 119, 106, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(254, 215, 184, 0.1);
+  transition: all 0.2s ease;
+}
+.btn-bw-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #6E292C, #AA776A);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(254, 215, 184, 0.15);
+  transform: translateY(-1px);
+}
+.btn-bw-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ========================================
+   REDUCED MOTION
+   ======================================== */
+@media (prefers-reduced-motion: reduce) {
+  .analysis-pulse,
+  .analysis-glow,
+  .warm-pulse,
+  .scan-line::after {
+    animation: none;
+  }
+  .card-depth-hover:hover {
+    transform: none;
+  }
 }

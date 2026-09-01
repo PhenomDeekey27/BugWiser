@@ -6,7 +6,7 @@ interface DiffViewerProps {
 
 export function DiffViewer({ hunks }: DiffViewerProps) {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto bg-[#18090B]">
       <pre className="p-3 font-mono text-xs">
         {hunks.map((hunk, hunkIndex) => (
           <div key={hunkIndex}>
@@ -21,7 +21,7 @@ export function DiffViewer({ hunks }: DiffViewerProps) {
                     : ''
                 }`}
               >
-                <span className="w-12 text-right pr-3 text-on-surface-variant select-none">
+                <span className="w-12 text-right pr-3 text-bw-dusty-rose/70 select-none">
                   {line.number}
                 </span>
                 <span
@@ -30,7 +30,7 @@ export function DiffViewer({ hunks }: DiffViewerProps) {
                       ? 'text-green-400'
                       : line.type === 'removed'
                       ? 'text-red-400'
-                      : 'text-on-surface'
+                      : 'text-bw-peach-light'
                   }
                 >
                   {line.content}

@@ -1,6 +1,6 @@
 # TESTING.md
 
-End-to-end testing guide for IssuePilot.
+End-to-end testing guide for BugWiser.
 
 ---
 
@@ -317,7 +317,7 @@ Times vary based on repository size, AI provider response time, and model select
 
 ## Automated Testing
 
-IssuePilot does not currently include automated test suites. The testing approach is manual end-to-end verification as described above.
+BugWiser does not currently include automated test suites. The testing approach is manual end-to-end verification as described above.
 
 ### What Could Be Automated
 

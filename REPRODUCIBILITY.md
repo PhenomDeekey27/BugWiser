@@ -1,11 +1,11 @@
 # REPRODUCIBILITY.md
 
-Technical guide for reproducing the IssuePilot workflow from a clean environment.
+Technical guide for reproducing the BugWiser workflow from a clean environment.
 
 ## 🔗 Links
 
-- **Live Demo:**  https://issuepilot-nine.vercel.app/
-- **Source Code:** https://github.com/PhenomDeekey27/IssuePilot
+- **Live Demo:**  https://BugWiser-nine.vercel.app/
+- **Source Code:** https://github.com/PhenomDeekey27/BugWiser
 - **Demo Video:**  https://drive.google.com/file/d/1P1AcylAB4JAaG7QHiw6dKXRNJWhYIgvd/view?pli=1
 
 
@@ -27,8 +27,8 @@ Technical guide for reproducing the IssuePilot workflow from a clean environment
 ## 1. Repository Setup
 
 ```bash
-git clone https://github.com/your-org/issuepilot.git
-cd issuepilot
+git clone https://github.com/your-org/BugWiser.git
+cd BugWiser
 npm install
 ```
 
@@ -75,7 +75,7 @@ Each migration uses `IF NOT EXISTS` and is idempotent — safe to re-run.
 1. Go to [github.com/settings/developers](https://github.com/settings/developers)
 2. Click "New OAuth App"
 3. Fill in:
-   - **Application name:** `IssuePilot`
+   - **Application name:** `BugWiser`
    - **Homepage URL:** `http://localhost:3000`
    - **Authorization callback URL:** `https://{YOUR_SUPABASE_PROJECT_REF}.supabase.co/auth/v1/callback`
      - Replace `{YOUR_SUPABASE_PROJECT_REF}` with your Supabase project reference (found in Settings > API > Project URL)
@@ -92,7 +92,7 @@ Each migration uses `IF NOT EXISTS` and is idempotent — safe to re-run.
 
 ### Required Scopes
 
-IssuePilot uses these GitHub OAuth scopes (requested automatically by Supabase):
+BugWiser uses these GitHub OAuth scopes (requested automatically by Supabase):
 
 - `repo` — Read/write access to repositories (needed for branch creation, commits, PRs)
 - `read:user` — Read user profile
@@ -245,7 +245,7 @@ Discount should be applied to the subtotal before tax calculation.
 Customers are charged tax on the full price instead of the discounted price.
 ```
 
-### Step 3: Sign In to IssuePilot
+### Step 3: Sign In to BugWiser
 
 1. Open http://localhost:3000
 2. Click "Continue with GitHub"
@@ -279,7 +279,7 @@ Watch the investigation workspace as each stage completes:
 1. Click "Apply Fix to New Branch"
 2. Confirm in the modal
 3. Verify:
-   - A new branch `issuepilot/fix/issue-{N}-{id}` is created on GitHub
+   - A new branch `BugWiser/fix/issue-{N}-{id}` is created on GitHub
    - The patched file is committed on that branch
    - A pull request is created linking to the default branch
 

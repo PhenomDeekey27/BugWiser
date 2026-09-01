@@ -113,7 +113,7 @@ export default async function DashboardPage() {
   }
 
   return (
-    <AppShell user={githubUser}>
+    <AppShell user={githubUser} gradient="dashboard">
       <Suspense>
         <WelcomeToast />
       </Suspense>
@@ -127,12 +127,12 @@ export default async function DashboardPage() {
         <RecentAnalyses analyses={recentAnalyses} />
 
         <div className="mt-8">
-          <h2 className="text-lg font-semibold text-on-surface mb-4">
+          <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
             Quick Actions
           </h2>
           <div className="flex gap-4">
             <Link href="/analysis/new">
-              <Button className="gradient-primary text-white hover:gradient-primary-hover font-medium">
+              <Button className="btn-bw-primary font-medium">
                 Analyze an Issue
               </Button>
             </Link>

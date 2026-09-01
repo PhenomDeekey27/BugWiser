@@ -23,25 +23,25 @@ export function ApplyFixSuccess({
   const shortSha = commitSha.substring(0, 7);
 
   return (
-    <div className="p-6 rounded-xl glass-strong border border-green-500/30 bg-green-500/5">
+    <div className="p-6 rounded-xl bg-surface-container/95 border border-green-500/30 bg-green-500/5 card-depth-lg">
       <div className="flex items-center gap-2 mb-4">
         <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">
           <span className="text-green-400 text-lg">✓</span>
         </div>
-        <h2 className="text-lg font-semibold text-on-surface">Fix Applied</h2>
+        <h2 className="text-lg font-semibold text-bw-peach-light">Fix Applied</h2>
       </div>
 
       <div className="space-y-3 mb-6">
         <div className="flex items-start gap-2">
-          <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-24 shrink-0">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
             Repository
           </span>
-          <span className="text-sm font-mono text-on-surface">
+          <span className="text-sm font-mono text-bw-peach-light">
             {repositoryFullName}
           </span>
         </div>
         <div className="flex items-start gap-2">
-          <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-24 shrink-0">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
             Branch
           </span>
           <span className="text-sm font-mono text-primary-container">
@@ -49,17 +49,17 @@ export function ApplyFixSuccess({
           </span>
         </div>
         <div className="flex items-start gap-2">
-          <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-24 shrink-0">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
             Commit
           </span>
-          <span className="text-sm font-mono text-on-surface">{shortSha}</span>
+          <span className="text-sm font-mono text-bw-peach-light">{shortSha}</span>
         </div>
         {filesChanged.length > 0 && (
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant w-24 shrink-0">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
               Files Changed
             </span>
-            <div className="text-sm font-mono text-on-surface">
+            <div className="text-sm font-mono text-bw-peach-light">
               {filesChanged.map((f) => (
                 <div key={f}>{f}</div>
               ))}
@@ -78,7 +78,7 @@ export function ApplyFixSuccess({
           >
             <Button
               size="sm"
-              className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+              className="btn-bw-primary font-medium"
             >
               View Pull Request →
             </Button>

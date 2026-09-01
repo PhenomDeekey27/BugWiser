@@ -21,7 +21,7 @@ export function IssueSelector({
 }: IssueSelectorProps) {
   return (
     <div>
-      <h2 className="text-lg font-semibold text-on-surface mb-4">
+      <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
         Select Issue
       </h2>
 
@@ -30,7 +30,7 @@ export function IssueSelector({
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}
-              className="w-full p-4 rounded-lg glass border border-outline-variant/50 animate-pulse"
+              className="w-full p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 animate-pulse"
             >
               <div className="h-4 bg-surface-container-high rounded w-1/4 mb-2" />
               <div className="h-3 bg-surface-container-high rounded w-2/3" />
@@ -46,8 +46,8 @@ export function IssueSelector({
       )}
 
       {!loading && !error && issues.length === 0 && (
-        <div className="p-8 rounded-lg glass border border-outline-variant/50 text-center">
-          <p className="text-sm text-on-surface-variant">
+        <div className="p-8 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 text-center">
+          <p className="text-sm text-bw-peach">
             No open issues found in this repository.
           </p>
         </div>
@@ -63,11 +63,11 @@ export function IssueSelector({
                 'w-full p-4 rounded-lg border text-left transition-all',
                 selectedIssue?.id === issue.id
                   ? 'border-primary-container bg-primary-container/10 glow-primary-sm'
-                  : 'border-outline-variant/50 glass hover:border-primary-container/30'
+                  : 'border-bw-burgundy/30 bg-surface-container/80 hover:border-bw-terracotta/50'
               )}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-sm font-mono text-on-surface">
+                <span className="text-sm font-mono text-bw-peach-light">
                   #{issue.number}
                 </span>
                 <div className="flex gap-1">
@@ -78,7 +78,7 @@ export function IssueSelector({
                   ))}
                 </div>
               </div>
-              <p className="text-sm text-on-surface-variant truncate">
+              <p className="text-sm text-bw-peach truncate">
                 {issue.title}
               </p>
             </button>

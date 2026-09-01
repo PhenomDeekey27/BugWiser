@@ -1,14 +1,14 @@
-# IssuePilot
+# BugWiser
 
 ## 🔗 Links
 
-- **Live Demo:**  https://issuepilot-nine.vercel.app/
-- **Source Code:** https://github.com/PhenomDeekey27/IssuePilot
+- **Live Demo:**  https://BugWiser-nine.vercel.app/
+- **Source Code:** https://github.com/PhenomDeekey27/BugWiser
 - **Demo Video:**  https://drive.google.com/file/d/1P1AcylAB4JAaG7QHiw6dKXRNJWhYIgvd/view?pli=1
 
 **AI-powered GitHub issue investigation — from issue to pull request.**
 
-IssuePilot connects to your GitHub account, analyzes a repository issue using a multi-stage AI pipeline, identifies the root cause, generates a code patch, and automatically creates a fix branch with a pull request. Developers get an actionable fix without manually tracing code across the repository.
+BugWiser connects to your GitHub account, analyzes a repository issue using a multi-stage AI pipeline, identifies the root cause, generates a code patch, and automatically creates a fix branch with a pull request. Developers get an actionable fix without manually tracing code across the repository.
 
 ---
 
@@ -27,7 +27,7 @@ When a developer encounters a GitHub issue, the investigation workflow is slow a
 9. Commit the changes
 10. Open a pull request
 
-IssuePilot automates steps 2 through 10 using AI.
+BugWiser automates steps 2 through 10 using AI.
 
 ---
 
@@ -41,7 +41,7 @@ Repository Selection
 Issue Selection
      ↓
 ┌─────────────────────────────────────┐
-│   IssuePilot Analysis Pipeline      │
+│   BugWiser Analysis Pipeline      │
 │                                     │
 │   Repository Index & Fingerprint    │
 │            ↓                        │
@@ -67,16 +67,16 @@ Create Pull Request
 
 | Step | What Happens |
 |------|-------------|
-| **GitHub OAuth** | User authenticates via GitHub. IssuePilot receives a token with repository read access. |
-| **Repository Selection** | IssuePilot lists the user's accessible repositories. |
+| **GitHub OAuth** | User authenticates via GitHub. BugWiser receives a token with repository read access. |
+| **Repository Selection** | BugWiser lists the user's accessible repositories. |
 | **Issue Selection** | User picks a GitHub issue to investigate. |
-| **Repository Index** | IssuePilot fetches the repository file tree, filters irrelevant files, and builds a fingerprint (language, framework, project type). |
+| **Repository Index** | BugWiser fetches the repository file tree, filters irrelevant files, and builds a fingerprint (language, framework, project type). |
 | **Relevant File Discovery** | AI identifies which source files are most likely related to the issue, using the issue description and repository structure. |
 | **Root Cause Analysis** | AI analyzes the relevant source code and issue context to identify the underlying cause of the bug. |
 | **Evidence Extraction** | AI extracts concrete code references — specific files, line ranges, and explanations — that support the root cause. |
 | **Solution Generation** | AI proposes an actionable solution with implementation steps, affected files, and risk assessment. |
 | **Patch Generation** | AI generates a unified diff patch that implements the proposed solution. |
-| **Create Fix Branch** | IssuePilot creates a new branch from the repository's default branch. |
+| **Create Fix Branch** | BugWiser creates a new branch from the repository's default branch. |
 | **Apply Patch & Commit** | The generated patch is applied to the fix branch. Each file is fetched, patched, and committed via the GitHub Contents API. |
 | **Create Pull Request** | A pull request is automatically created on GitHub, linking the fix branch to the default branch. |
 
@@ -84,7 +84,7 @@ Create Pull Request
 
 ## AI Pipeline
 
-IssuePilot uses a context-aware, multi-stage AI pipeline. Each stage receives context from previous stages, building toward a complete investigation.
+BugWiser uses a context-aware, multi-stage AI pipeline. Each stage receives context from previous stages, building toward a complete investigation.
 
 ### Stage 1: Relevant File Discovery
 
@@ -125,7 +125,7 @@ Each context builder estimates token usage and truncates source code to fit with
 
 ## AI Provider Architecture
 
-IssuePilot supports multiple AI providers with intelligent fallback. The system tries free models first, then falls back to paid providers if needed.
+BugWiser supports multiple AI providers with intelligent fallback. The system tries free models first, then falls back to paid providers if needed.
 
 ### Configured Providers
 
@@ -161,7 +161,7 @@ All AI provider keys are server-side only (no `NEXT_PUBLIC_` prefix). Set only t
 
 ### OAuth Flow
 
-IssuePilot uses Supabase's GitHub OAuth provider. The flow:
+BugWiser uses Supabase's GitHub OAuth provider. The flow:
 
 1. User clicks "Continue with GitHub"
 2. Redirected to GitHub OAuth authorization
@@ -179,7 +179,7 @@ IssuePilot uses Supabase's GitHub OAuth provider. The flow:
 
 ### Branch Creation and PR
 
-- Creates a new branch from the default branch HEAD: `issuepilot/fix/issue-{number}-{randomId}`
+- Creates a new branch from the default branch HEAD: `BugWiser/fix/issue-{number}-{randomId}`
 - Applies patches using the GitHub Contents API (`PUT /contents/{path}`)
 - Each file is fetched from the fix branch, patched in-memory, and committed
 - A pull request is automatically created via `POST /repos/{owner}/{repo}/pulls`
@@ -272,8 +272,8 @@ Database (Supabase)
 ### Installation
 
 ```bash
-git clone https://github.com/your-org/issuepilot.git
-cd issuepilot
+git clone https://github.com/your-org/BugWiser.git
+cd BugWiser
 npm install
 ```
 
@@ -334,14 +334,14 @@ At least one AI provider key must be configured. The system automatically skips 
 1. Go to [GitHub Settings > Developer settings > OAuth Apps](https://github.com/settings/developers)
 2. Click "New OAuth App"
 3. Fill in:
-   - **Application name:** IssuePilot
+   - **Application name:** BugWiser
    - **Homepage URL:** `http://localhost:3000`
    - **Authorization callback URL:** `https://{your-project-ref}.supabase.co/auth/v1/callback`
 4. Register the application
 5. Copy the Client ID and Client Secret
 6. In your [Supabase Dashboard](https://supabase.com/dashboard), go to Authentication > Providers > GitHub
 7. Enable GitHub provider and paste the Client ID and Client Secret
-8. IssuePilot requests `repo read:user user:email` scopes through Supabase
+8. BugWiser requests `repo read:user user:email` scopes through Supabase
 
 ---
 
@@ -369,12 +369,12 @@ Apply all 8 migrations in `supabase/migrations/` via the Supabase SQL Editor or 
 
 ---
 
-## How to Use IssuePilot
+## How to Use BugWiser
 
 1. **Sign in with GitHub** — Click "Continue with GitHub" on the landing page
 2. **Select a repository** — From your accessible repositories, choose one to analyze
 3. **Select an issue** — Pick a GitHub issue to investigate
-4. **Start analysis** — IssuePilot begins the multi-stage AI pipeline
+4. **Start analysis** — BugWiser begins the multi-stage AI pipeline
 5. **Review relevant files** — See which files the AI identified as related to the issue
 6. **Review root cause** — Understand the underlying cause with confidence score
 7. **Review evidence** — See concrete code references supporting the root cause
@@ -387,12 +387,12 @@ Apply all 8 migrations in `supabase/migrations/` via the Supabase SQL Editor or 
 
 ## Patch / Pull Request Flow
 
-IssuePilot does not simply output an AI-generated answer. It produces a working pull request on GitHub.
+BugWiser does not simply output an AI-generated answer. It produces a working pull request on GitHub.
 
 ### What Happens
 
 1. AI generates a unified diff for each affected file
-2. IssuePilot creates a new branch: `repolens/fix/issue-{number}-{randomId}`
+2. BugWiser creates a new branch: `repolens/fix/issue-{number}-{randomId}`
 3. For each file in the patch:
    - Fetches the current file content from the fix branch
    - Applies the generated hunks to produce the patched content
@@ -417,14 +417,14 @@ Use a repository with a known bug. For example:
 
 - **Repository:** A project with an intentional calculation error
 - **Issue:** A bug report describing incorrect behavior
-- **Expected:** IssuePilot identifies the buggy file, explains the root cause, and generates a patch that fixes the calculation
+- **Expected:** BugWiser identifies the buggy file, explains the root cause, and generates a patch that fixes the calculation
 
 ### Expected Flow
 
 ```
 GitHub Issue: "Calculator returns wrong total for discount codes"
      ↓
-IssuePilot Relevant Files: src/services/calculator.ts
+BugWiser Relevant Files: src/services/calculator.ts
      ↓
 Root Cause: The discount amount is subtracted from the subtotal
             before tax calculation, but the code subtracts it

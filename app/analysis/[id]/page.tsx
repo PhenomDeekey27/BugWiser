@@ -538,14 +538,14 @@ export default function InvestigationPage() {
   return (
     <AppShell user={user}>
       <div className="flex h-[calc(100vh-48px)]">
-        <div className="w-48 border-r border-outline-variant/50 glass-sidebar p-3 hidden md:block">
+        <div className="w-48 border-r border-bw-burgundy/50 bg-surface-glass-sidebar p-3 hidden md:block">
           <AnalysisStepper stages={analysis.stages} onStageClick={handleStageClick} />
         </div>
 
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 overflow-auto p-6 surface-primary">
           {loading && (
             <div className="flex items-center justify-center py-16">
-              <div className="flex items-center gap-3 text-on-surface-variant">
+              <div className="flex items-center gap-3 text-bw-peach">
                 <div className="w-5 h-5 border-2 border-primary-container/30 border-t-primary-container rounded-full animate-spin" />
                 <span className="text-sm">Loading analysis...</span>
               </div>
@@ -557,8 +557,8 @@ export default function InvestigationPage() {
               <div className="w-12 h-12 rounded-full bg-error-container/20 flex items-center justify-center mb-4">
                 <span className="text-error-default text-xl">✕</span>
               </div>
-              <p className="text-sm text-on-surface mb-4">{error}</p>
-              <Button variant="outline" size="sm" className="border-outline-variant/50 text-on-surface-variant" onClick={() => router.push('/analysis/new')}>
+              <p className="text-sm text-bw-peach-light mb-4">{error}</p>
+              <Button variant="outline" size="sm" className="border-bw-burgundy/40 text-bw-peach" onClick={() => router.push('/analysis/new')}>
                 Start New Analysis
               </Button>
             </div>
@@ -573,17 +573,17 @@ export default function InvestigationPage() {
               <AnalysisHeader analysis={analysis} />
 
               {(isComplete || record.status === 'ready_for_analysis' || record.status === 'relevant_files_ready' || isDiscoveryRunning) && (
-                <div className="mb-6 p-4 rounded-lg glass border border-green-500/30 bg-green-500/5">
+                <div className="mb-6 p-4 rounded-lg bg-surface-container/80 border border-green-500/30 bg-green-500/5">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-2 h-2 rounded-full bg-green-500" />
-                    <span className="text-sm font-semibold text-on-surface">
+                    <span className="text-sm font-semibold text-bw-peach-light">
                       {record.status === 'relevant_files_ready' ? 'Relevant Files Ready' : 
                        isDiscoveryRunning ? 'Discovering Relevant Files...' :
                        'Repository Index Ready'}
                     </span>
                   </div>
                   {record.fingerprint && (
-                    <div className="flex flex-wrap gap-4 text-xs font-mono text-on-surface-variant mt-2">
+                    <div className="flex flex-wrap gap-4 text-xs font-mono text-bw-peach mt-2">
                       {record.fingerprint.primaryLanguage && <span>{record.fingerprint.primaryLanguage}</span>}
                       {record.fingerprint.framework && <span>{record.fingerprint.framework}</span>}
                       {record.fingerprint.packageManager && <span>{record.fingerprint.packageManager}</span>}
@@ -605,11 +605,11 @@ export default function InvestigationPage() {
                     <Button
                       onClick={handleStartDiscovery}
                       disabled={startingDiscovery || isDiscoveryRunning || anyStageRunning}
-                      className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+                      className="btn-bw-primary font-medium"
                     >
                       {startingDiscovery || isDiscoveryRunning ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                           {isDiscoveryRunning ? 'Discovering Relevant Files...' : 'Starting...'}
                         </span>
                       ) : record?.status === 'failed' ? (
@@ -634,11 +634,11 @@ export default function InvestigationPage() {
                     <Button
                       onClick={() => handleStartRootCause(false)}
                       disabled={startingRootCause || isRootCauseRunning || anyStageRunning}
-                      className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+                      className="btn-bw-primary font-medium"
                     >
                       {startingRootCause || isRootCauseRunning ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                           Analyzing...
                         </span>
                       ) : record?.status === 'failed' && record?.current_stage === 'root_cause_analysis' ? (
@@ -652,7 +652,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartRootCause(true)}
                         disabled={startingRootCause || anyStageRunning}
                         variant="outline"
-                        className="border-outline-variant/50 text-on-surface-variant"
+                        className="border-bw-burgundy/40 text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -673,11 +673,11 @@ export default function InvestigationPage() {
                     <Button
                       onClick={() => handleStartEvidence(false)}
                       disabled={startingEvidence || isEvidenceRunning || anyStageRunning}
-                      className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+                      className="btn-bw-primary font-medium"
                     >
                       {startingEvidence || isEvidenceRunning ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                           Extracting...
                         </span>
                       ) : record?.status === 'failed' && record?.current_stage === 'evidence_extraction' ? (
@@ -691,7 +691,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartEvidence(true)}
                         disabled={startingEvidence || anyStageRunning}
                         variant="outline"
-                        className="border-outline-variant/50 text-on-surface-variant"
+                        className="border-bw-burgundy/40 text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -712,11 +712,11 @@ export default function InvestigationPage() {
                     <Button
                       onClick={() => handleStartSolution(false)}
                       disabled={startingSolution || isSolutionRunning || anyStageRunning}
-                      className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+                      className="btn-bw-primary font-medium"
                     >
                       {startingSolution || isSolutionRunning ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                           Generating...
                         </span>
                       ) : record?.status === 'failed' && record?.current_stage === 'solution_generation' ? (
@@ -730,7 +730,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartSolution(true)}
                         disabled={startingSolution || anyStageRunning}
                         variant="outline"
-                        className="border-outline-variant/50 text-on-surface-variant"
+                        className="border-bw-burgundy/40 text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -751,11 +751,11 @@ export default function InvestigationPage() {
                     <Button
                       onClick={() => handleStartPatch(false)}
                       disabled={startingPatch || isPatchRunning || anyStageRunning}
-                      className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+                      className="btn-bw-primary font-medium"
                     >
                       {startingPatch || isPatchRunning ? (
                         <span className="flex items-center gap-2">
-                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                           Generating...
                         </span>
                       ) : record?.status === 'failed' && record?.current_stage === 'patch_generation' ? (
@@ -769,7 +769,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartPatch(true)}
                         disabled={startingPatch || anyStageRunning}
                         variant="outline"
-                        className="border-outline-variant/50 text-on-surface-variant"
+                        className="border-bw-burgundy/40 text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -793,7 +793,7 @@ export default function InvestigationPage() {
                       size="sm"
                       onClick={() => setActiveTab(tab)}
                       disabled={isTabLocked && activeTab !== tab}
-                      className={activeTab === tab ? 'bg-primary-container text-on-primary-container font-medium' : 'text-on-surface-variant hover:text-on-surface'}
+                      className={activeTab === tab ? 'bg-primary-container text-on-primary-container font-medium' : 'text-bw-peach hover:text-bw-peach-light'}
                     >
                       {tab === 'root-cause' ? 'Root Cause' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                     </Button>

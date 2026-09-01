@@ -171,19 +171,19 @@ export default function NewAnalysisPage() {
   };
 
   return (
-    <AppShell user={user}>
+    <AppShell user={user} gradient="new-analysis">
       <div className="p-6 max-w-4xl mx-auto">
-        <h1 className="text-2xl font-semibold text-on-surface mb-6">
+        <h1 className="text-2xl font-semibold text-bw-peach-light mb-6">
           New Analysis
         </h1>
 
         {authExpired ? (
-          <div className="flex flex-col items-center justify-center py-16 rounded-lg glass border border-outline-variant/50">
-            <p className="text-sm text-on-surface-variant mb-4 text-center">
+          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-surface-container/90 border border-bw-burgundy/40">
+            <p className="text-sm text-bw-peach mb-4 text-center">
               Your session has expired. Please sign in again to access your repositories.
             </p>
             <Button
-              className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+              className="btn-bw-primary font-medium"
               onClick={handleReLogin}
             >
               Sign in with GitHub
@@ -211,8 +211,8 @@ export default function NewAnalysisPage() {
                   error={issuesError}
                 />
               ) : (
-                <div className="flex items-center justify-center h-64 rounded-lg glass border border-outline-variant/50">
-                  <p className="text-sm text-on-surface-variant">
+                <div className="flex items-center justify-center h-64 rounded-lg bg-surface-container/80 border border-bw-burgundy/30">
+                  <p className="text-sm text-bw-peach">
                     Select a repository first
                   </p>
                 </div>
@@ -224,13 +224,13 @@ export default function NewAnalysisPage() {
         {selectedRepository && selectedIssue && (
           <div className="mt-6 flex justify-end">
             <Button
-              className="gradient-primary text-white hover:gradient-primary-hover font-medium"
+              className="btn-bw-primary font-medium"
               onClick={handleStartAnalysis}
               disabled={startingAnalysis}
             >
               {startingAnalysis ? (
                 <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
                   Creating Analysis...
                 </span>
               ) : (

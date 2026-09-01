@@ -10,21 +10,28 @@ import { Toaster } from 'sonner';
 interface AppShellProps {
   children: React.ReactNode;
   user?: GitHubUser | null;
+  gradient?: 'dashboard' | 'workspace' | 'new-analysis';
 }
 
-export function AppShell({ children, user }: AppShellProps) {
+const gradientClasses = {
+  dashboard: 'bg-page-dashboard',
+  workspace: 'bg-page-workspace',
+  'new-analysis': 'bg-page-new-analysis',
+};
+
+export function AppShell({ children, user, gradient = 'dashboard' }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex h-screen gradient-surface overflow-hidden">
+    <div className={`flex h-screen ${gradientClasses[gradient]} overflow-hidden`}>
       <Toaster
         position="top-right"
         toastOptions={{
           style: {
-            background: 'rgba(28, 38, 49, 0.9)',
+            background: 'rgba(36, 20, 22, 0.95)',
             backdropFilter: 'blur(12px)',
-            border: '1px solid rgba(93, 64, 56, 0.5)',
-            color: '#e5e1e6',
+            border: '1px solid rgba(89, 23, 27, 0.5)',
+            color: '#FED7B8',
           },
         }}
       />
@@ -32,11 +39,11 @@ export function AppShell({ children, user }: AppShellProps) {
       <Button
         variant="ghost"
         size="icon"
-        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 glass border border-outline-variant/50"
+        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 bg-surface-container/90 border border-bw-burgundy/50 text-bw-peach-light"
         onClick={() => setSidebarOpen(!sidebarOpen)}
         aria-label="Toggle sidebar"
       >
-        <span className="text-on-surface text-sm">{sidebarOpen ? '✕' : '☰'}</span>
+        <span className="text-sm">{sidebarOpen ? '✕' : '☰'}</span>
       </Button>
 
       <div

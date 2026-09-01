@@ -132,7 +132,7 @@ Test Dirs: ${context.fingerprint.testDirectories.join(', ') || 'none'}`;
 
   const fileManifest = `\n\nFile Manifest (${reducedFiles.filter((f) => !f.isIgnored).length} of ${context.files.filter((f) => !f.isIgnored).length} files):\n${buildFileManifest(reducedFiles)}`;
 
-  const systemMessage = `You are IssuePilot Relevant File Discovery Engine.
+  const systemMessage = `You are BugWiser Relevant File Discovery Engine.
 
 TASK: Given a GitHub issue and a repository file list, identify the files most likely related to the issue.
 

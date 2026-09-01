@@ -21,14 +21,14 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
   };
 
   return (
-    <div className="rounded-lg border border-outline-variant/50 bg-surface-container-lowest overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-outline-variant/50 bg-surface-container/50">
+    <div className="rounded-lg border border-bw-burgundy/30 bg-[#18090B] overflow-hidden card-depth">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-bw-burgundy/20 bg-surface-container/60">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-on-surface-variant">
+          <span className="text-xs font-mono text-bw-peach">
             {filePath}
           </span>
           {language && (
-            <span className="text-xs font-mono text-on-surface-variant">
+            <span className="text-xs font-mono text-bw-peach/50">
               {language}
             </span>
           )}
@@ -37,7 +37,7 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 text-xs font-mono text-on-surface-variant hover:text-on-surface"
+            className="h-6 text-xs font-mono text-bw-peach hover:text-bw-peach-light"
             onClick={handleCopy}
           >
             {copied ? '✓ Copied' : 'Copy'}
@@ -45,7 +45,7 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 text-xs font-mono text-on-surface-variant hover:text-on-surface"
+            className="h-6 text-xs font-mono text-bw-peach hover:text-bw-peach-light"
           >
             Open on GitHub
           </Button>
@@ -65,7 +65,7 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
                   : ''
               }`}
             >
-              <span className="w-12 text-right pr-3 text-on-surface-variant select-none">
+              <span className="w-12 text-right pr-3 text-bw-dusty-rose/70 select-none">
                 {line.number}
               </span>
               <span
@@ -74,7 +74,7 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
                     ? 'text-green-400'
                     : line.type === 'removed'
                     ? 'text-red-400'
-                    : 'text-on-surface'
+                    : 'text-bw-peach-light'
                 }
               >
                 {line.content}

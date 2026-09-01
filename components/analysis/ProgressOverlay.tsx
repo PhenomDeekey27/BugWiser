@@ -80,7 +80,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
 
   return (
     <div className="flex flex-col items-center justify-center py-16">
-      <div className="w-full max-w-md glass rounded-xl border border-outline-variant/50 p-8">
+      <div className="w-full max-w-md bg-surface-container/95 rounded-xl border border-bw-burgundy/40 p-8 card-depth-lg">
         <div className="flex items-center gap-3 mb-6">
           {isActive && (
             <div className="w-5 h-5 border-2 border-primary-container/30 border-t-primary-container rounded-full animate-spin" />
@@ -95,7 +95,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
               <span className="text-white text-xs">✕</span>
             </div>
           )}
-          <h3 className="text-lg font-semibold text-on-surface">
+          <h3 className="text-lg font-semibold text-bw-peach-light">
             {statusMessages[record.status] || 'Processing...'}
           </h3>
         </div>
@@ -103,23 +103,23 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
         {isActive && (
           <>
             <div className="mb-4">
-              <div className="flex justify-between text-xs font-mono text-on-surface-variant mb-2">
+              <div className="flex justify-between text-xs font-mono text-bw-peach mb-2">
                 <span>{currentLabel}</span>
                 <span>{progress}%</span>
               </div>
               <div className="w-full h-2 bg-surface-container-high rounded-full overflow-hidden">
                 <div
-                  className="h-full gradient-primary rounded-full transition-all duration-500 ease-out"
+                  className="h-full bg-gradient-to-r from-bw-wine to-bw-terracotta rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${progress}%` }}
                 />
               </div>
             </div>
 
             {subLabels.length > 0 && (
-              <div className="mb-4 p-3 rounded-lg bg-surface-container/30 border border-outline-variant/30">
+              <div className="mb-4 p-3 rounded-lg bg-surface-container/50 border border-bw-burgundy/20">
                 <div className="space-y-1">
                   {subLabels.map((label, idx) => (
-                    <div key={idx} className="flex items-center gap-2 text-[11px] font-mono text-on-surface-variant/70">
+                    <div key={idx} className="flex items-center gap-2 text-[11px] font-mono text-bw-peach/70">
                       <span className="w-1.5 h-1.5 rounded-full bg-primary-container/50 animate-pulse" style={{ animationDelay: `${idx * 300}ms` }} />
                       <span>{label}</span>
                     </div>
@@ -137,13 +137,13 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
                   <div
                     key={stage}
                     className={`flex items-center gap-2 text-xs font-mono py-1 transition-colors duration-300 ${
-                      isCompleted ? 'text-green-400' : isCurrent ? 'text-primary-container' : 'text-on-surface-variant/50'
+                      isCompleted ? 'text-green-400' : isCurrent ? 'text-primary-container' : 'text-bw-peach/50'
                     }`}
                   >
                     <span className="w-3 text-center">
                       {isCompleted && <span>✓</span>}
                       {isCurrent && <span className="w-1.5 h-1.5 rounded-full bg-primary-container animate-pulse inline-block" />}
-                      {isPending && <span className="w-1.5 h-1.5 rounded-full bg-surface-bright/30 inline-block" />}
+                      {isPending && <span className="w-1.5 h-1.5 rounded-full bg-bw-burgundy/30 inline-block" />}
                     </span>
                     <span>{STAGE_LABELS[stage]}</span>
                   </div>
@@ -155,7 +155,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
 
         {!isActive && !isFailed && (
           <div className="space-y-3">
-            <p className="text-sm text-on-surface-variant">
+            <p className="text-sm text-bw-peach">
               {record.status === 'relevant_files_ready' ? 'Relevant files discovered successfully.' : 
                record.status === 'root_cause_complete' ? 'Root cause analysis complete.' :
                record.status === 'evidence_complete' ? 'Evidence extraction complete.' :
@@ -167,19 +167,19 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
               <div className="space-y-2 text-xs font-mono">
                 {record.fingerprint.primaryLanguage && (
                   <div className="flex justify-between">
-                    <span className="text-on-surface-variant">Language</span>
-                    <span className="text-on-surface">{record.fingerprint.primaryLanguage}</span>
+                    <span className="text-bw-peach">Language</span>
+                    <span className="text-bw-peach-light">{record.fingerprint.primaryLanguage}</span>
                   </div>
                 )}
                 {record.fingerprint.framework && (
                   <div className="flex justify-between">
-                    <span className="text-on-surface-variant">Framework</span>
-                    <span className="text-on-surface">{record.fingerprint.framework}</span>
+                    <span className="text-bw-peach">Framework</span>
+                    <span className="text-bw-peach-light">{record.fingerprint.framework}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span className="text-on-surface-variant">Active Files</span>
-                  <span className="text-on-surface">{record.filtered_files.toLocaleString()}</span>
+                  <span className="text-bw-peach">Active Files</span>
+                  <span className="text-bw-peach-light">{record.filtered_files.toLocaleString()}</span>
                 </div>
               </div>
             )}

@@ -21,24 +21,24 @@ export function AnalysisHeader({ analysis }: AnalysisHeaderProps) {
   return (
     <div className="mb-6">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm font-mono text-primary-container">
+        <span className="text-sm font-mono text-primary-default">
           {analysis.repository.name}
         </span>
-        <span className="text-on-surface-variant">/</span>
-        <span className="text-sm font-mono text-on-surface">
+        <span className="text-bw-peach">/</span>
+        <span className="text-sm font-mono text-bw-peach-light">
           Issue #{analysis.issue.number}
         </span>
       </div>
 
-      <h1 className="text-xl font-semibold text-on-surface mb-3">
+      <h1 className="text-xl font-semibold text-bw-peach-light mb-3">
         {analysis.issue.title}
       </h1>
 
       <div className="flex items-center gap-3">
         {analysis.repository.defaultBranch && (
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-on-surface-variant">Branch:</span>
-            <span className="text-xs font-mono text-on-surface">{analysis.repository.defaultBranch}</span>
+            <span className="text-xs font-mono text-bw-peach">Branch:</span>
+            <span className="text-xs font-mono text-bw-peach-light">{analysis.repository.defaultBranch}</span>
           </div>
         )}
         <Badge

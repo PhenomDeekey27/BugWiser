@@ -1,4 +1,4 @@
--- IssuePilot Analysis Schema
+-- BugWiser Analysis Schema
 -- Run this in your Supabase SQL Editor to create the required tables.
 
 -- Enable UUID generation

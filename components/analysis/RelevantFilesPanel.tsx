@@ -7,7 +7,7 @@ interface RelevantFilesPanelProps {
 export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
   return (
     <div>
-      <h2 className="text-lg font-semibold text-on-surface mb-4">
+      <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
         Relevant Files
       </h2>
 
@@ -15,17 +15,17 @@ export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
         {files.map((file) => (
           <div
             key={file.path}
-            className="p-3 rounded-lg glass border border-outline-variant/50"
+            className="p-3 rounded-lg bg-surface-container/80 border border-bw-burgundy/30"
           >
             <div className="flex items-center justify-between mb-1">
-              <span className="text-sm font-mono text-primary-container">
+              <span className="text-sm font-mono text-primary-default">
                 {file.path}
               </span>
-              <span className="text-xs font-mono text-on-surface-variant">
+              <span className="text-xs font-mono text-bw-peach">
                 {Math.round(file.relevanceScore * 100)}% relevance
               </span>
             </div>
-            <p className="text-xs text-on-surface-variant">
+            <p className="text-xs text-bw-peach">
               {file.description}
             </p>
           </div>

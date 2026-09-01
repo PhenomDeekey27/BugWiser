@@ -9,7 +9,7 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-lg font-semibold text-on-surface">
+        <h2 className="text-lg font-semibold text-bw-peach-light">
           Root Cause Identified
         </h2>
         <Badge variant="outline" className="text-xs font-mono">
@@ -18,22 +18,22 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
       </div>
 
       {rootCause.summary && (
-        <div className="p-4 rounded-lg glass border border-outline-variant/50 mb-4">
-          <p className="text-sm text-on-surface font-medium">
+        <div className="p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/40 mb-4 card-depth">
+          <p className="text-sm text-bw-peach-light font-medium">
             {rootCause.summary}
           </p>
         </div>
       )}
 
-      <div className="p-4 rounded-lg glass border border-outline-variant/50 mb-4">
-        <p className="text-sm text-on-surface leading-relaxed">
+      <div className="p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/40 mb-4 card-depth">
+        <p className="text-sm text-bw-peach leading-relaxed">
           {rootCause.description}
         </p>
       </div>
 
       {rootCause.affectedFiles && rootCause.affectedFiles.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-on-surface mb-2">
+          <h3 className="text-sm font-semibold text-bw-peach-light mb-2">
             Affected Files
           </h3>
           <div className="space-y-1">
@@ -42,7 +42,7 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
                 key={file}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-container/50"
               >
-                <span className="text-sm font-mono text-primary-container">
+                <span className="text-sm font-mono text-primary-default">
                   {file}
                 </span>
               </div>

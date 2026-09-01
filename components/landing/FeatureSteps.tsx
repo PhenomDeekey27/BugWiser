@@ -13,7 +13,7 @@ export function FeatureSteps() {
     {
       icon: '⊕',
       title: 'Trace Code',
-      description: 'IssuePilot identifies relevant files',
+      description: 'BugWiser identifies relevant files',
     },
     {
       icon: '⊙',
@@ -33,30 +33,32 @@ export function FeatureSteps() {
   ];
 
   return (
-    <section id="how-it-works" className="px-4 py-12 md:py-16 max-w-4xl mx-auto">
-      <h2 className="text-xl font-semibold text-on-surface text-center mb-8">
-        How it works
-      </h2>
+    <section id="how-it-works" className="px-4 py-16 md:py-20 max-w-5xl mx-auto">
+      <div className="surface-primary rounded-2xl p-8 md:p-10">
+        <h2 className="text-2xl font-semibold text-bw-peach-light text-center mb-10">
+          How it works
+        </h2>
 
-      <div className="flex flex-col md:flex-row items-center justify-between gap-6 md:gap-4">
-        {steps.map((step, index) => (
-          <div key={step.title} className="flex items-center gap-4 md:gap-6">
-            <div className="flex flex-col items-center text-center">
-              <div className="flex items-center justify-center w-12 h-12 rounded-lg glass border border-outline-variant/50 mb-3 hover:border-primary-container/40 transition-colors">
-                <span className="text-lg text-primary-container">{step.icon}</span>
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6 md:gap-4">
+          {steps.map((step, index) => (
+            <div key={step.title} className="flex items-center gap-4 md:gap-6">
+              <div className="flex flex-col items-center text-center">
+                <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-bw-burgundy/40 border border-bw-wine/60 mb-3 hover:border-bw-terracotta/80 transition-colors">
+                  <span className="text-lg text-bw-peach">{step.icon}</span>
+                </div>
+                <h3 className="text-sm font-medium text-bw-peach-light mb-1">{step.title}</h3>
+                <p className="text-xs text-bw-peach/80 max-w-35">
+                  {step.description}
+                </p>
               </div>
-              <h3 className="text-sm font-medium text-on-surface mb-1">{step.title}</h3>
-              <p className="text-xs text-on-surface-variant max-w-35">
-                {step.description}
-              </p>
+              {index < steps.length - 1 && (
+                <div className="hidden md:block text-bw-dusty-rose">
+                  →
+                </div>
+              )}
             </div>
-            {index < steps.length - 1 && (
-              <div className="hidden md:block text-on-surface-variant">
-                →
-              </div>
-            )}
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </section>
   );

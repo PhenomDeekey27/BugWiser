@@ -74,7 +74,7 @@ Confidence: ${context.solution.confidence}`;
     .map((sf) => `\n\n--- ${sf.path} (${sf.language}, ${sf.size} bytes) ---\n${truncateSourceCode(sf.content)}`)
     .join('');
 
-  const systemMessage = `You are IssuePilot Patch Generation Engine.
+  const systemMessage = `You are BugWiser Patch Generation Engine.
 
 TASK: Generate a concrete code patch that implements the proposed solution.
 

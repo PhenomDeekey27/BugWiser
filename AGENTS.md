@@ -1,4 +1,4 @@
-# IssuePilot — Engineering & UI Source of Truth
+# BugWiser — Engineering & UI Source of Truth
 
 <!-- BEGIN:nextjs-agent-rules -->
 
@@ -12,7 +12,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Product Purpose
 
-IssuePilot is an AI-powered GitHub issue investigation tool. It connects to GitHub, selects a repository and issue, then traces the relevant code, identifies root cause, and generates an actionable patch.
+BugWiser is an AI-powered GitHub issue investigation tool. It connects to GitHub, selects a repository and issue, then traces the relevant code, identifies root cause, and generates an actionable patch.
 
 ## Application Flow
 
@@ -338,7 +338,7 @@ Default application body text: 14px Inter.
 - Use shared components from `components/ui/`
 - Use shadcn/ui primitives where useful (Button, Input, Badge, Card, Dialog, Tabs, Tooltip, Separator)
 - Do NOT blindly use shadcn components everywhere
-- Final visual appearance must follow the IssuePilot design system
+- Final visual appearance must follow the BugWiser design system
 - Do not duplicate buttons, badges, cards, status indicators, search inputs, code containers, repository rows, issue rows, navigation, or analysis progress indicators
 - Cards use glassmorphic background with top-weighted "Status Bar"
 - Input fields: dark backgrounds with 1px borders, orange glow on focus

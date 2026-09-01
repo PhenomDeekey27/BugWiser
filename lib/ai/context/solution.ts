@@ -67,7 +67,7 @@ ${context.relevantFiles
     .map((sf) => `\n\n--- ${sf.path} (${sf.language}, ${sf.size} bytes) ---\n${truncateSourceCode(sf.content)}`)
     .join('');
 
-  const systemMessage = `You are IssuePilot Solution Generation Engine.
+  const systemMessage = `You are BugWiser Solution Generation Engine.
 
 TASK: Generate a proposed solution to fix the identified root cause.
 

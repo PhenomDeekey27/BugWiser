@@ -9,7 +9,7 @@ interface AnalysisStepperProps {
 export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) {
   return (
     <div className="space-y-1">
-      <p className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant mb-3 px-3">
+      <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3 px-3">
         Pipeline
       </p>
       {stages.map((stage, index) => {
@@ -23,10 +23,10 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
               disabled={!isClickable}
               className={cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded text-sm transition-all duration-300 w-full text-left',
-                stage.status === 'completed' && 'text-on-surface',
-                stage.status === 'completed' && isClickable && 'cursor-pointer hover:bg-surface-container/50 hover:border-l-2 hover:border-primary-container/50',
+                stage.status === 'completed' && 'text-bw-peach-light',
+                stage.status === 'completed' && isClickable && 'cursor-pointer hover:bg-bw-burgundy/20 hover:border-l-2 hover:border-primary-container/50',
                 stage.status === 'running' && 'text-primary-container bg-primary-container/8 border-l-2 border-primary-container',
-                stage.status === 'pending' && 'text-on-surface-variant/60',
+                stage.status === 'pending' && 'text-bw-peach/50',
                 stage.status === 'failed' && 'text-error-default',
                 stage.status === 'no_evidence' && 'text-yellow-400'
               )}
@@ -45,7 +45,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
                 )}
                 {stage.status === 'pending' && (
                   <span className="inline-flex items-center justify-center w-4 h-4">
-                    <span className="text-on-surface-variant/30 text-xs">🔒</span>
+                    <span className="text-bw-peach/50 text-xs">○</span>
                   </span>
                 )}
                 {stage.status === 'failed' && (
@@ -67,7 +67,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
                   {stage.label}
                 </span>
                 {stage.stageDetail && (
-                  <span className="text-[10px] font-mono text-on-surface-variant/50 truncate block mt-0.5">
+                  <span className="text-[10px] font-mono text-bw-peach/60 truncate block mt-0.5">
                     {stage.stageDetail}
                   </span>
                 )}
@@ -81,7 +81,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
             {!isLast && (
               <div className={cn(
                 'absolute left-[21px] top-[30px] w-px h-1',
-                stage.status === 'completed' ? 'bg-green-500/30' : 'bg-surface-bright/10'
+                stage.status === 'completed' ? 'bg-green-500/30' : 'bg-bw-burgundy/20'
               )} />
             )}
           </div>

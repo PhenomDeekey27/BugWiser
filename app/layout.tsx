@@ -14,15 +14,15 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "IssuePilot — AI-Powered GitHub Issue Investigation",
-  description: "Connect a repository, select an issue, and let IssuePilot trace the relevant code, identify the root cause, and generate an actionable patch.",
+  title: "BugWiser — AI-Powered GitHub Issue Investigation",
+  description: "Connect a repository, select an issue, and let BugWiser trace the relevant code, identify the root cause, and generate an actionable patch.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
+      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <TooltipProvider>

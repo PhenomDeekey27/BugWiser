@@ -114,11 +114,11 @@ function TreeNodeItem({
           className="w-full flex items-center gap-2 py-1 px-2 hover:bg-surface-container-high/50 rounded transition-colors text-left cursor-pointer"
           style={{ paddingLeft: `${indent + 8}px` }}
         >
-          <span className="text-xs text-on-surface-variant w-3">
+          <span className="text-xs text-bw-peach w-3">
             {isExpanded ? '▾' : '▸'}
           </span>
           <span className="text-xs font-mono text-primary-container">📁</span>
-          <span className="text-xs font-mono text-on-surface">{node.name}/</span>
+          <span className="text-xs font-mono text-bw-peach-light">{node.name}/</span>
           {hasRelevantChildren && (
             <span className="ml-auto text-[10px] text-yellow-400">★</span>
           )}
@@ -155,7 +155,7 @@ function TreeNodeItem({
       <span
         className={cn(
           'text-xs font-mono truncate',
-          node.isRelevant ? 'text-yellow-400' : 'text-on-surface'
+          node.isRelevant ? 'text-yellow-400' : 'text-bw-peach-light'
         )}
       >
         {node.name}
@@ -166,7 +166,7 @@ function TreeNodeItem({
         </span>
       )}
       {node.file && (
-        <span className="ml-auto text-[10px] font-mono text-on-surface-variant">
+        <span className="ml-auto text-[10px] font-mono text-bw-peach/60">
           {formatSize(node.file.size)}
         </span>
       )}
@@ -263,13 +263,13 @@ export function RepositoryFileTree({
   const relevantCount = relevantFiles.length;
 
   return (
-    <div className={cn('rounded-lg glass border border-outline-variant/50 overflow-hidden', className)}>
-      <div className="p-3 border-b border-outline-variant/50">
+    <div className={cn('rounded-lg bg-surface-container/80 border border-bw-burgundy/30 overflow-hidden card-depth', className)}>
+      <div className="p-3 border-b border-bw-burgundy/20">
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach">
             Repository Files
           </span>
-          <span className="text-[10px] font-mono text-on-surface-variant">
+          <span className="text-[10px] font-mono text-bw-peach/60">
             {totalFiles} files
           </span>
           {relevantCount > 0 && (
@@ -282,11 +282,11 @@ export function RepositoryFileTree({
           placeholder="Search files..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="h-7 text-xs bg-surface-container-low border-outline-variant/50"
+          className="h-7 text-xs bg-surface-container-low border-bw-burgundy/30"
         />
       </div>
 
-      <div className="max-h-[500px] overflow-y-auto scrollbar-thin p-1">
+      <div className="max-h-125 overflow-y-auto scrollbar-thin p-1">
         {filteredTree.map((node) => (
           <TreeNodeItem
             key={node.path}
@@ -299,7 +299,7 @@ export function RepositoryFileTree({
         ))}
 
         {filteredTree.length === 0 && (
-          <div className="p-4 text-center text-xs text-on-surface-variant">
+          <div className="p-4 text-center text-xs text-bw-peach">
             No files match your search
           </div>
         )}

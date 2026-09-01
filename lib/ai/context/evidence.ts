@@ -56,7 +56,7 @@ ${context.relevantFiles
     .map((sf) => `\n\n--- ${sf.path} (${sf.language}, ${sf.size} bytes) ---\n${truncateSourceCode(sf.content)}`)
     .join('');
 
-  const systemMessage = `You are IssuePilot Evidence Extraction Engine.
+  const systemMessage = `You are BugWiser Evidence Extraction Engine.
 
 TASK: Extract concrete evidence from the source code that supports the identified root cause.
 

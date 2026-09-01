@@ -20,7 +20,7 @@ export function RepositorySelector({
 }: RepositorySelectorProps) {
   return (
     <div>
-      <h2 className="text-lg font-semibold text-on-surface mb-4">
+      <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
         Select Repository
       </h2>
 
@@ -29,7 +29,7 @@ export function RepositorySelector({
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}
-              className="w-full p-4 rounded-lg glass border border-outline-variant/50 animate-pulse cursor-pointer"
+              className="w-full p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 animate-pulse"
             >
               <div className="h-4 bg-surface-container-high rounded w-1/3 mb-2" />
               <div className="h-3 bg-surface-container-high rounded w-2/3" />
@@ -45,8 +45,8 @@ export function RepositorySelector({
       )}
 
       {!loading && !error && repositories.length === 0 && (
-        <div className="p-8 rounded-lg glass border border-outline-variant/50 text-center">
-          <p className="text-sm text-on-surface-variant">
+        <div className="p-8 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 text-center">
+          <p className="text-sm text-bw-peach">
             No repositories found. Make sure your GitHub account has access to repositories.
           </p>
         </div>
@@ -59,28 +59,28 @@ export function RepositorySelector({
               key={repo.id}
               onClick={() => onSelect(repo)}
               className={cn(
-                'w-full p-4 rounded-lg border text-left transition-all cursor-pointer',
+                'w-full p-4 rounded-lg border text-left transition-all cursor-pointer card-depth-hover',
                 selectedRepository?.id === repo.id
                   ? 'border-primary-container bg-primary-container/10 glow-primary-sm cursor-pointer'
-                  : 'border-outline-variant/50 glass hover:border-primary-container/30 cursor-pointer'
+                  : 'border-bw-burgundy/30 bg-surface-container/80 hover:border-bw-terracotta/50 cursor-pointer'
               )}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="text-sm font-mono text-primary-container truncate">
+                <span className="text-sm font-mono text-primary-default truncate">
                   {repo.fullName}
                 </span>
-                <span className="text-xs font-mono text-on-surface-variant whitespace-nowrap shrink-0">
+                <span className="text-xs font-mono text-bw-peach whitespace-nowrap shrink-0">
                   {repo.language || 'N/A'}
                 </span>
               </div>
-              <p className="text-sm text-on-surface-variant truncate mt-1">
+              <p className="text-sm text-bw-peach truncate mt-1">
                 {repo.description || 'No description'}
               </p>
-              <div className="flex items-center gap-4 mt-2 text-xs text-on-surface-variant">
+              <div className="flex items-center gap-4 mt-2 text-xs text-bw-peach/70">
                 {repo.stars > 0 && <span>★ {repo.stars}</span>}
                 {repo.forks > 0 && <span>⑂ {repo.forks}</span>}
                 {repo.private && (
-                  <span className="text-primary-container font-mono text-xs">Private</span>
+                  <span className="text-primary-default font-mono text-xs">Private</span>
                 )}
               </div>
             </button>

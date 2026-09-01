@@ -13,12 +13,12 @@ export function StatsGrid({ stats = [] }: StatsGridProps) {
       {stats.map((stat) => (
         <div
           key={stat.label}
-          className="p-4 rounded-lg glass border border-outline-variant/50 hover:border-primary-container/30 transition-colors"
+          className="p-4 rounded-lg bg-surface-container/90 border border-bw-burgundy/40 hover:border-bw-terracotta/50 transition-colors card-depth"
         >
-          <p className="text-xs font-mono font-bold uppercase tracking-wider text-on-surface-variant mb-1">
+          <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-1">
             {stat.label}
           </p>
-          <p className="text-2xl font-bold text-on-surface">
+          <p className="text-2xl font-bold text-bw-peach-light">
             {stat.value}
           </p>
         </div>
