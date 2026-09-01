@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { GitHubUser } from '@/types';
-import Image from 'next/image';
+import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 import { toast } from 'sonner';
 
 interface HomepageHeaderProps {
@@ -40,21 +40,21 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
 
   return (
     <header className="flex items-center justify-between px-4 md:px-6 py-4 bg-bw-burgundy/40 backdrop-blur-md border-b border-bw-burgundy/50 relative z-20">
-      <Link href="/" className="flex items-center gap-2.5">
-        <Image src="/Logo.png" alt="BugWiser" width={28} height={28} className="rounded" />
-        <span className="text-sm font-semibold text-bw-peach-light">BugWiser</span>
+      <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
+        <BugWiserLogo className="h-8 w-auto" />
       </Link>
 
       <div className="flex items-center gap-4">
         {user ? (
           <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-bw-peach hidden sm:block">
+            <span className="text-xs font-mono hidden sm:block" style={{ color: '#D6AEA1' }}>
               @{user.login}
             </span>
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center justify-center w-8 h-8 rounded-full bg-bw-burgundy/60 overflow-hidden cursor-pointer hover:ring-2 hover:ring-bw-peach/40 transition-all"
+                className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all"
+                style={{ background: '#6F1F24' }}
               >
                 {user.avatarUrl ? (
                   <img
@@ -65,35 +65,47 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
                     height={32}
                   />
                 ) : (
-                  <span className="text-sm font-medium text-bw-peach-light">
+                  <span className="text-sm font-medium" style={{ color: '#FFE1C7' }}>
                     {user.login?.charAt(0).toUpperCase()}
                   </span>
                 )}
               </button>
 
               {dropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-56 surface-elevated rounded-lg shadow-xl z-50 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-bw-burgundy/50">
-                    <p className="text-sm font-medium text-bw-peach-light">{user.name || user.login}</p>
-                    <p className="text-xs font-mono text-bw-peach">@{user.login}</p>
+                <div
+                  className="absolute right-0 top-full mt-2 w-56 rounded-lg shadow-xl z-50 overflow-hidden"
+                  style={{ background: '#281416', border: '1px solid #542A2B' }}
+                >
+                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #542A2B' }}>
+                    <p className="text-sm font-medium" style={{ color: '#F2D1BC' }}>{user.name || user.login}</p>
+                    <p className="text-xs font-mono" style={{ color: '#C99F94' }}>@{user.login}</p>
                   </div>
                   <div className="py-1">
                     <button
                       onClick={() => { setDropdownOpen(false); router.push('/dashboard'); }}
-                      className="w-full text-left px-4 py-2 text-sm text-bw-peach hover:bg-bw-burgundy/30 transition-colors cursor-pointer"
+                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
+                      style={{ color: '#E2B9AA' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFE1C7'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#E2B9AA'; }}
                     >
                       Dashboard
                     </button>
                     <button
                       onClick={() => { setDropdownOpen(false); router.push('/analysis/new'); }}
-                      className="w-full text-left px-4 py-2 text-sm text-bw-peach hover:bg-bw-burgundy/30 transition-colors cursor-pointer"
+                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
+                      style={{ color: '#E2B9AA' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFE1C7'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#E2B9AA'; }}
                     >
                       New Analysis
                     </button>
-                    <div className="border-t border-bw-burgundy/30 my-1" />
+                    <div style={{ borderTop: '1px solid #542A2B', margin: '4px 0' }} />
                     <button
                       onClick={handleSignOut}
-                      className="w-full text-left px-4 py-2 text-sm text-error-default hover:bg-error-container/20 transition-colors cursor-pointer"
+                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
+                      style={{ color: '#F0B8AE' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFD0C7'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#F0B8AE'; }}
                     >
                       Sign Out
                     </button>
@@ -104,7 +116,20 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
           </div>
         ) : (
           <Link href="/auth/github">
-            <button className="btn-bw-primary px-4 py-2 rounded text-sm font-medium cursor-pointer">
+            <button
+              className="px-4 py-2 rounded text-sm font-medium cursor-pointer transition-colors"
+              style={{ background: '#6F1F24', color: '#FFE1C7', border: '1px solid #8C4547' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#81282D';
+                e.currentTarget.style.color = '#FFE8D5';
+                e.currentTarget.style.borderColor = '#A65A59';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#6F1F24';
+                e.currentTarget.style.color = '#FFE1C7';
+                e.currentTarget.style.borderColor = '#8C4547';
+              }}
+            >
               Continue with GitHub
             </button>
           </Link>

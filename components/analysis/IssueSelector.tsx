@@ -60,7 +60,7 @@ export function IssueSelector({
               key={issue.id}
               onClick={() => onSelect(issue)}
               className={cn(
-                'w-full p-4 rounded-lg border text-left transition-all',
+                'w-full p-4 rounded-lg border text-left transition-all cursor-pointer',
                 selectedIssue?.id === issue.id
                   ? 'border-primary-container bg-primary-container/10 glow-primary-sm'
                   : 'border-bw-burgundy/30 bg-surface-container/80 hover:border-bw-terracotta/50'

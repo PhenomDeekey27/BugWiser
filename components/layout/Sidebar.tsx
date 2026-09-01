@@ -8,7 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import { createClient } from '@/lib/supabase/client';
 import { GitHubUser } from '@/types';
 import { toast } from 'sonner';
-import Image from 'next/image';
+import { BugWiserLogo } from './BugWiserLogo';
 
 interface SidebarProps {
   className?: string;
@@ -41,13 +41,12 @@ export function Sidebar({ className, user }: SidebarProps) {
         className
       )}
     >
-      <Link href="/" className="flex items-center gap-2 px-4 py-4 pt-14 md:pt-4">
-        <Image src="/Logo.png" alt="BugWiser" width={32} height={32} className="rounded" />
-        <span className="text-sm font-semibold text-bw-peach-light">BugWiser</span>
+      <Link href="/" className="flex items-center gap-2 px-4 py-4 pt-14 md:pt-4 cursor-pointer">
+        <BugWiserLogo className="h-10 w-auto" />
       </Link>
 
       <div className="px-3 py-2">
-        <Link href="/analysis/new" className="w-full">
+        <Link href="/analysis/new" className="w-full cursor-pointer">
           <Button
             className="w-full justify-start gap-2 btn-bw-primary font-medium"
           >
@@ -67,7 +66,7 @@ export function Sidebar({ className, user }: SidebarProps) {
               key={item.href}
               href={item.href}
               className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded text-sm transition-all',
+                'flex items-center gap-3 px-3 py-2 rounded text-sm transition-all cursor-pointer',
                 isActive
                   ? 'bg-bw-burgundy/30 text-bw-peach-light border-l-2 border-primary-container'
                   : 'text-bw-peach hover:bg-bw-burgundy/20 hover:text-bw-peach-light'

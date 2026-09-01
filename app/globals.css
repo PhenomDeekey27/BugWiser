@@ -160,15 +160,15 @@
   );
 }
 
-/* Dashboard: Light → Dark (top to bottom) */
+/* Dashboard: same diagonal as new-analysis (dark→light) */
 .bg-page-dashboard {
   background: linear-gradient(
-    180deg in oklch,
-    #FED7B8 0%,
-    #D4A791 20%,
-    #AA776A 45%,
-    #834742 70%,
-    #59171B 100%
+    135deg in oklch,
+    #59171B 0%,
+    #834742 30%,
+    #AA776A 60%,
+    #D4A791 85%,
+    #FED7B8 100%
   );
 }
 
@@ -538,4 +538,133 @@
   .card-depth-hover:hover {
     transform: none;
   }
+}
+
+/* ========================================
+   DASHBOARD PAGE — HEADER TEXT VISIBILITY
+   Dashboard uses the same dark diagonal gradient.
+   Ensure header text has sufficient contrast.
+   ======================================== */
+
+[data-page="dashboard"] header .text-bw-peach {
+  color: #F6D8C2 !important;
+}
+[data-page="dashboard"] header .text-bw-peach-light {
+  color: #FFE0C7 !important;
+}
+
+/* ========================================
+   NEW ANALYSIS PAGE — VISIBILITY FIXES
+   Scoped to [data-page="new-analysis"] only.
+   No changes to other pages.
+   ======================================== */
+
+/* --- 1. Header username visibility --- */
+[data-page="new-analysis"] header .text-bw-peach {
+  color: #F6D8C2 !important;
+}
+[data-page="new-analysis"] header .hover\:bg-bw-burgundy\/20:hover {
+  background-color: rgba(255, 220, 205, 0.10) !important;
+}
+[data-page="new-analysis"] header .hover\:bg-error-container\/20:hover {
+  background-color: rgba(220, 80, 70, 0.12) !important;
+}
+[data-page="new-analysis"] header .text-error-default {
+  color: #F5C6BC !important;
+}
+[data-page="new-analysis"] header .hover\:text-error-default:hover {
+  color: #FFD0C7 !important;
+}
+
+/* --- 2. Page title + section headings --- */
+[data-page="new-analysis"] h1.text-bw-peach-light {
+  color: #FFE1C8 !important;
+}
+[data-page="new-analysis"] h2.text-bw-peach-light {
+  color: #FFD8BE !important;
+}
+
+/* --- 3. Repository cards — normal state --- */
+[data-page="new-analysis"] .border-bw-burgundy\/30.bg-surface-container\/80 {
+  border-color: rgba(255, 210, 190, 0.18) !important;
+  background-color: rgba(20, 28, 36, 0.85) !important;
+}
+[data-page="new-analysis"] .text-primary-default {
+  color: #FFD8C2 !important;
+}
+[data-page="new-analysis"] .text-bw-peach {
+  color: #E8C0AA !important;
+}
+[data-page="new-analysis"] .text-bw-peach\/70 {
+  color: #DDB19D !important;
+}
+
+/* --- 4. Repository card — hover state --- */
+[data-page="new-analysis"] .hover\:border-bw-terracotta\/50:hover {
+  border-color: #C9785F !important;
+  background-color: rgba(30, 20, 22, 0.92) !important;
+}
+[data-page="new-analysis"] button:hover .text-primary-default {
+  color: #FFE6D3 !important;
+}
+[data-page="new-analysis"] button:hover .text-bw-peach {
+  color: #F0C6B1 !important;
+}
+[data-page="new-analysis"] button:hover .text-bw-peach\/70 {
+  color: #E8BBAA !important;
+}
+
+/* --- 5. Selected repository state --- */
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 {
+  border-color: #E56F4A !important;
+  border-width: 1.5px !important;
+  background-color: rgba(229, 111, 74, 0.08) !important;
+}
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 .text-primary-default {
+  color: #FFE5D2 !important;
+}
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 .text-bw-peach {
+  color: #F0C7B2 !important;
+}
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 .text-bw-peach\/70 {
+  color: #EBC0AB !important;
+}
+
+/* --- 6. Issue card — normal state --- */
+[data-page="new-analysis"] .text-bw-peach-light {
+  color: #FFE0C8 !important;
+}
+
+/* --- 7. Issue card — hover state --- */
+[data-page="new-analysis"] button:hover .text-bw-peach-light {
+  color: #FFE8D5 !important;
+}
+
+/* --- 8. Selected issue state --- */
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 .text-bw-peach-light {
+  color: #FFE8D7 !important;
+}
+[data-page="new-analysis"] .border-primary-container.bg-primary-container\/10 .text-bw-peach {
+  color: #F4CDB8 !important;
+}
+
+/* --- 9. Auth expired card text --- */
+[data-page="new-analysis"] .bg-surface-container\/90 .text-bw-peach {
+  color: #F0D2C2 !important;
+}
+
+/* --- 10. Empty state text --- */
+[data-page="new-analysis"] .bg-surface-container\/80.border-bw-burgundy\/30 .text-bw-peach {
+  color: #E8C0AA !important;
+}
+
+/* --- 11. Scrollbar on new-analysis lists --- */
+[data-page="new-analysis"] .scrollbar-thin {
+  scrollbar-color: #6F2F2B transparent;
+}
+[data-page="new-analysis"] .scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #6F2F2B;
+}
+[data-page="new-analysis"] .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: #8D443A;
 }

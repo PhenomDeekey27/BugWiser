@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/client';
-import Image from 'next/image';
+import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 
 const permissions = [
   'Read repositories',
@@ -40,7 +40,7 @@ export function AuthCard() {
 
         <div className="relative z-10">
           <div className="flex flex-col items-center mb-8">
-            <Image src="/Logo.png" alt="BugWiser" width={64} height={64} className="rounded-lg" />
+            <BugWiserLogo variant="icon" className="h-16 w-16" />
             <h1 className="text-xl font-semibold text-bw-peach-light mt-4 mb-2">BugWiser</h1>
             <p className="text-sm text-bw-peach text-center">
               Connect your GitHub account

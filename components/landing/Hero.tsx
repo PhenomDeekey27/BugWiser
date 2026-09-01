@@ -20,23 +20,23 @@ export function Hero({ user }: HeroProps) {
       </div>
 
       <div className="relative z-10 max-w-3xl mx-auto">
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 mb-8 rounded-full bg-surface-container-low/80 border border-bw-burgundy/60 backdrop-blur-sm">
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 mb-8 rounded-full bg-surface-container-low/80 border border-[#6F302F] backdrop-blur-sm">
           <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach">
+          <span className="text-xs font-mono font-bold uppercase tracking-wider" style={{ color: '#E8C1AA' }}>
             ENGINE V2.0 ACTIVE
           </span>
         </div>
 
-        <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold text-bw-peach-light leading-[1.1] tracking-tight mb-6">
-          Understand any
+        <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold leading-[1.1] tracking-tight mb-6">
+          <span style={{ color: '#FFE1C7' }}>Understand any</span>
           <br />
-          <span className="bg-gradient-to-r from-bw-peach-light via-bw-peach to-bw-dusty-rose bg-clip-text text-transparent">
+          <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'linear-gradient(90deg, #F3C7B0, #DFAFA0)' }}>
             GitHub issue
           </span>{' '}
-          faster.
+          <span style={{ color: '#FFE1C7' }}>faster.</span>
         </h1>
 
-        <p className="max-w-xl text-lg text-bw-peach mb-10 leading-relaxed">
+        <p className="max-w-xl text-lg mb-10 leading-relaxed" style={{ color: '#E8C5B5' }}>
           Connect a repository, select an issue, and let BugWiser trace the relevant code,
           identify the root cause, and generate an actionable patch.
         </p>
@@ -46,7 +46,23 @@ export function Hero({ user }: HeroProps) {
             <Link href="/dashboard">
               <Button
                 size="lg"
-                className="btn-bw-primary px-8 h-12 font-semibold text-sm tracking-wide cursor-pointer"
+                className="px-8 h-12 font-semibold text-sm tracking-wide cursor-pointer"
+                style={{
+                  background: '#6F1F24',
+                  color: '#FFE1C7',
+                  border: '1px solid #8C4547',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,225,199,0.08)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#81282D';
+                  e.currentTarget.style.color = '#FFE8D5';
+                  e.currentTarget.style.borderColor = '#A65A59';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#6F1F24';
+                  e.currentTarget.style.color = '#FFE1C7';
+                  e.currentTarget.style.borderColor = '#8C4547';
+                }}
               >
                 Go to Dashboard
               </Button>
@@ -55,7 +71,23 @@ export function Hero({ user }: HeroProps) {
             <Link href="/auth/github">
               <Button
                 size="lg"
-                className="btn-bw-primary px-8 h-12 font-semibold text-sm tracking-wide cursor-pointer"
+                className="px-8 h-12 font-semibold text-sm tracking-wide cursor-pointer"
+                style={{
+                  background: '#6F1F24',
+                  color: '#FFE1C7',
+                  border: '1px solid #8C4547',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,225,199,0.08)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#81282D';
+                  e.currentTarget.style.color = '#FFE8D5';
+                  e.currentTarget.style.borderColor = '#A65A59';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#6F1F24';
+                  e.currentTarget.style.color = '#FFE1C7';
+                  e.currentTarget.style.borderColor = '#8C4547';
+                }}
               >
                 Continue with GitHub
               </Button>
@@ -64,7 +96,22 @@ export function Hero({ user }: HeroProps) {
           <Button
             variant="outline"
             size="lg"
-            className="border-bw-burgundy/60 text-bw-peach-light hover:bg-bw-burgundy/30 hover:text-bw-peach-light h-12 cursor-pointer backdrop-blur-sm"
+            className="h-12 cursor-pointer backdrop-blur-sm"
+            style={{
+              background: 'transparent',
+              color: '#E8C5B5',
+              border: '1px solid #8C514E',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255,225,199,0.08)';
+              e.currentTarget.style.color = '#FFE1C7';
+              e.currentTarget.style.borderColor = '#A96A65';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = '#E8C5B5';
+              e.currentTarget.style.borderColor = '#8C514E';
+            }}
             onClick={scrollToHowItWorks}
           >
             See how it works

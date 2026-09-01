@@ -23,7 +23,10 @@ export function AppShell({ children, user, gradient = 'dashboard' }: AppShellPro
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className={`flex h-screen ${gradientClasses[gradient]} overflow-hidden`}>
+    <div
+      className={`flex h-screen ${gradientClasses[gradient]} overflow-hidden`}
+      data-page={gradient}
+    >
       <Toaster
         position="top-right"
         toastOptions={{
