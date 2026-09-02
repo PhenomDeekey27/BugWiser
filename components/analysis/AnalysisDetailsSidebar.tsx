@@ -30,7 +30,7 @@ export function AnalysisDetailsSidebar({
   isFailed,
 }: AnalysisDetailsSidebarProps) {
   return (
-    <div className="w-72 border-l border-border bg-surface-glass-sidebar p-4 hidden lg:block">
+    <div className="w-72 border-l border-border bg-surface-glass-sidebar p-4 hidden lg:block overflow-y-auto scrollbar-thin">
       <h3 className="text-sm font-semibold text-bw-peach-light mb-4">
         Analysis Details
       </h3>

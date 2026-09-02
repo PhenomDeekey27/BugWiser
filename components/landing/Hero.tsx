@@ -58,7 +58,7 @@ export function Hero({ user }: HeroProps) {
           <Button
             variant="outline"
             size="lg"
-            className="h-12 cursor-pointer rounded-lg border-[rgba(70,50,40,0.14)] text-bw-peach hover:bg-bw-surface/60 hover:text-bw-peach-light transition-all"
+            className="h-12 cursor-pointer rounded-lg border-border text-bw-peach hover:bg-bw-surface/60 hover:text-bw-peach-light transition-all"
             onClick={scrollToHowItWorks}
           >
             See how it works

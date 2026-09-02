@@ -72,7 +72,7 @@ export function BugWiserLogo({ variant = 'full', className = '' }: BugWiserLogoP
         <circle cx="30" cy="30" r="6" fill="rgba(122,31,36,0.1)" />
 
         {/* Code symbol inside lens */}
-        <text x="30" y="33" textAnchor="middle" fontSize="8" fontWeight="bold" fill="#8F2428" fontFamily="monospace">&lt;/&gt;</text>
+        <text x="30" y="33" textAnchor="middle" fontSize="8" fontWeight="bold" fill="#8F2428" fontFamily="monospace" className="dark:fill-[#E45B57]">&lt;/&gt;</text>
       </svg>
     );
   }
@@ -105,6 +105,11 @@ export function BugWiserLogo({ variant = 'full', className = '' }: BugWiserLogoP
           <stop offset="0%" stopColor="#1A1614" />
           <stop offset="70%" stopColor="#3D2E28" />
           <stop offset="100%" stopColor="#8F2428" />
+        </linearGradient>
+        <linearGradient id="wordmarkGradDark" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#F5F5F4" />
+          <stop offset="70%" stopColor="#D4D4D4" />
+          <stop offset="100%" stopColor="#E45B57" />
         </linearGradient>
         <filter id="glow">
           <feGaussianBlur stdDeviation="1.5" result="blur" />
@@ -153,7 +158,7 @@ export function BugWiserLogo({ variant = 'full', className = '' }: BugWiserLogoP
         <circle cx="31" cy="31" r="6.5" fill="rgba(122,31,36,0.08)" />
 
         {/* Code symbol inside lens */}
-        <text x="31" y="34" textAnchor="middle" fontSize="9" fontWeight="bold" fill="#8F2428" fontFamily="monospace">&lt;/&gt;</text>
+        <text x="31" y="34" textAnchor="middle" fontSize="9" fontWeight="bold" fill="#8F2428" fontFamily="monospace" className="dark:fill-[#E45B57]">&lt;/&gt;</text>
       </g>
 
       {/* === WORDMARK === */}
@@ -165,6 +170,7 @@ export function BugWiserLogo({ variant = 'full', className = '' }: BugWiserLogoP
         fontFamily="Inter, system-ui, -apple-system, sans-serif"
         fill="url(#wordmarkGrad)"
         letterSpacing="-0.5"
+        className="dark:[fill:url(#wordmarkGradDark)]"
       >
         BugWiser
       </text>
@@ -178,6 +184,7 @@ export function BugWiserLogo({ variant = 'full', className = '' }: BugWiserLogoP
         fontFamily="JetBrains Mono, monospace"
         fill="#9C8E86"
         letterSpacing="2.5"
+        className="dark:fill-[#747B84]"
       >
         DEBUG SMARTER &bull; SHIP FASTER
       </text>

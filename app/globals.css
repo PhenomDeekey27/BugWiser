@@ -170,75 +170,75 @@
 }
 
 /* ========================================
-   DARK THEME — Deep charcoal surfaces
+   DARK THEME — Premium developer tool palette
    ======================================== */
 .dark {
-  --background: #191713;
-  --foreground: #EDE8E3;
-  --card: #211E1A;
-  --card-foreground: #EDE8E3;
-  --popover: #211E1A;
-  --popover-foreground: #EDE8E3;
-  --primary: #D96A63;
-  --primary-foreground: #2A0706;
-  --secondary: #2C2824;
-  --secondary-foreground: #EDE8E3;
-  --muted: #2A2621;
-  --muted-foreground: #A79C93;
-  --accent: #2C2824;
-  --accent-foreground: #EDE8E3;
-  --destructive: #F0837B;
-  --destructive-foreground: #2A0706;
-  --border: rgba(255, 235, 220, 0.10);
-  --input: rgba(255, 235, 220, 0.10);
-  --ring: #D96A63;
-  --chart-1: #E85030;
-  --chart-2: #D96A63;
-  --chart-3: #A79C93;
-  --chart-4: #B85C4A;
-  --chart-5: #3A2B27;
-  --sidebar: #1C1A17;
-  --sidebar-foreground: #EDE8E3;
-  --sidebar-primary: #D96A63;
-  --sidebar-primary-foreground: #2A0706;
-  --sidebar-accent: #2A2621;
-  --sidebar-accent-foreground: #EDE8E3;
-  --sidebar-border: rgba(255, 235, 220, 0.10);
-  --sidebar-ring: #D96A63;
+  --background: #0B0D0F;
+  --foreground: #F5F5F4;
+  --card: #111416;
+  --card-foreground: #F5F5F4;
+  --popover: #15191C;
+  --popover-foreground: #F5F5F4;
+  --primary: #E45B57;
+  --primary-foreground: #FFFFFF;
+  --secondary: #181C20;
+  --secondary-foreground: #F5F5F4;
+  --muted: #15191C;
+  --muted-foreground: #A7ADB4;
+  --accent: #181C20;
+  --accent-foreground: #F5F5F4;
+  --destructive: #E45B57;
+  --destructive-foreground: #FFFFFF;
+  --border: rgba(41, 46, 51, 0.6);
+  --input: rgba(41, 46, 51, 0.6);
+  --ring: #E45B57;
+  --chart-1: #E45B57;
+  --chart-2: #F06A63;
+  --chart-3: #A7ADB4;
+  --chart-4: #C87A66;
+  --chart-5: #1D2226;
+  --sidebar: #0F1113;
+  --sidebar-foreground: #F5F5F4;
+  --sidebar-primary: #E45B57;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #15191C;
+  --sidebar-accent-foreground: #F5F5F4;
+  --sidebar-border: rgba(41, 46, 51, 0.5);
+  --sidebar-ring: #E45B57;
 
-  /* Brand color variables (dark) — deep charcoal surfaces */
-  --bw-burgundy: #D96A63;
-  --bw-burgundy-dark: #B94A46;
-  --bw-wine: #DB7E78;
-  --bw-terracotta: #C87A66;
-  --bw-dusty-rose: #A79C93;
-  --bw-peach: #A79C93;
-  --bw-peach-light: #EDE8E3;
-  --bw-cream: #191713;
-  --bw-page: #191713;
-  --bw-surface: #211E1A;
-  --bw-surface-dim: #2A2621;
-  --bw-surface-bright: #191713;
-  --bw-surface-container-lowest: #1C1A17;
-  --bw-surface-container-low: #191713;
-  --bw-surface-container: #211E1A;
-  --bw-surface-container-high: #2A2621;
-  --bw-surface-container-highest: #332E29;
-  --bw-on-surface: #EDE8E3;
-  --bw-on-surface-variant: #A79C93;
-  --bw-on-surface-muted: #A79C93;
-  --bw-outline: #4A423B;
-  --bw-outline-variant: #37312C;
-  --bw-primary-default: #D96A63;
-  --bw-on-primary: #2A0706;
-  --bw-primary-container: #A63A3E;
+  /* Brand color variables (dark) — premium dark surfaces */
+  --bw-burgundy: #E45B57;
+  --bw-burgundy-dark: #C84A46;
+  --bw-wine: #F06A63;
+  --bw-terracotta: #D08070;
+  --bw-dusty-rose: #A7ADB4;
+  --bw-peach: #747B84;
+  --bw-peach-light: #F5F5F4;
+  --bw-cream: #0B0D0F;
+  --bw-page: #0B0D0F;
+  --bw-surface: #111416;
+  --bw-surface-dim: #15191C;
+  --bw-surface-bright: #0B0D0F;
+  --bw-surface-container-lowest: #0F1113;
+  --bw-surface-container-low: #0B0D0F;
+  --bw-surface-container: #111416;
+  --bw-surface-container-high: #181C20;
+  --bw-surface-container-highest: #1D2226;
+  --bw-on-surface: #F5F5F4;
+  --bw-on-surface-variant: #A7ADB4;
+  --bw-on-surface-muted: #747B84;
+  --bw-outline: #292E33;
+  --bw-outline-variant: #1D2226;
+  --bw-primary-default: #E45B57;
+  --bw-on-primary: #FFFFFF;
+  --bw-primary-container: #C84A46;
   --bw-on-primary-container: #FFF0EC;
-  --bw-secondary-default: #A79C93;
-  --bw-secondary-container: #332E29;
-  --bw-tertiary: #A79C93;
-  --bw-tertiary-container: #37312C;
-  --bw-error-default: #F0837B;
-  --bw-error-container: #3A2020;
+  --bw-secondary-default: #A7ADB4;
+  --bw-secondary-container: #1D2226;
+  --bw-tertiary: #A7ADB4;
+  --bw-tertiary-container: #1D2226;
+  --bw-error-default: #E45B57;
+  --bw-error-container: #2A1215;
 }
 
 @layer base {
@@ -657,59 +657,300 @@
    DARK MODE — Glass surfaces + buttons
    ======================================== */
 .dark .glass-card {
-  background: rgba(33, 30, 26, 0.72);
-  border: 1px solid rgba(255, 235, 220, 0.12);
+  background: rgba(17, 20, 22, 0.82);
+  border: 1px solid rgba(41, 46, 51, 0.5);
   box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .dark .glass-card-inner {
-  background: rgba(42, 38, 33, 0.72);
-  border: 1px solid rgba(255, 235, 220, 0.08);
+  background: rgba(21, 25, 28, 0.82);
+  border: 1px solid rgba(41, 46, 51, 0.4);
 }
 
 .dark .glass-workspace {
-  background: rgba(33, 30, 26, 0.8);
-  border: 1px solid rgba(255, 235, 220, 0.14);
+  background: rgba(17, 20, 22, 0.88);
+  border: 1px solid rgba(41, 46, 51, 0.5);
   box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.4),
-    0 4px 16px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .dark .glass-step {
-  background: rgba(42, 38, 33, 0.85);
-  border: 1px solid rgba(255, 235, 220, 0.1);
+  background: rgba(21, 25, 28, 0.9);
+  border: 1px solid rgba(41, 46, 51, 0.4);
   box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .dark .glass-step:hover {
-  background: rgba(51, 46, 41, 0.9);
-  border-color: rgba(217, 106, 99, 0.35);
+  background: rgba(24, 28, 32, 0.95);
+  border-color: rgba(228, 91, 87, 0.35);
 }
 
 .dark .scrollbar-thin {
-  scrollbar-color: #4A423B transparent;
+  scrollbar-color: #292E33 transparent;
 }
 .dark .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: #4A423B;
+  background-color: #292E33;
 }
 .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: #A79C93;
+  background-color: #747B84;
 }
 
 .dark .card-depth {
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .dark .card-depth-lg {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .dark .card-depth-hover:hover {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ========================================
+   DARK MODE — Inline style overrides
+   ======================================== */
+/* HomepageHeader avatar button — inline background: #F0EBE6 is invisible in dark mode */
+.dark header button[style*="F0EBE6"],
+.dark header button[style*="f0ebe6"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* HomepageHeader dropdown — hardcoded borders in light colors */
+.dark header .absolute.right-0 {
+  background: rgba(14, 17, 20, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ========================================
+   DARK MODE — Logo SVG overrides
+   ======================================== */
+.dark svg[aria-label="BugWiser"] text[fill="#1A1614"],
+.dark svg[aria-label="BugWiser"] text[fill="#3D2E28"] {
+  fill: #F5F5F4;
+}
+.dark svg[aria-label="BugWiser"] text[fill="#9C8E86"] {
+  fill: #747B84;
+}
+.dark svg[aria-label="BugWiser"] text[fill="#8F2428"] {
+  fill: #E45B57;
+}
+
+/* ========================================
+   DARK MODE — Toast overrides
+   ======================================== */
+.dark [data-sonner-toaster] li {
+  background: rgba(21, 25, 28, 0.95) !important;
+  border-color: rgba(41, 46, 51, 0.5) !important;
+  color: #F5F5F4 !important;
+}
+
+/* ========================================
+   DARK MODE — Button refinements
+   ======================================== */
+.dark .btn-bw-primary {
+  background: #E45B57;
+  color: #FFFFFF;
+  border-color: rgba(228, 91, 87, 0.25);
+  box-shadow: 0 1px 3px rgba(228, 91, 87, 0.15), 0 2px 8px rgba(228, 91, 87, 0.1);
+}
+.dark .btn-bw-primary:hover:not(:disabled) {
+  background: #F06A63;
+  box-shadow: 0 4px 12px rgba(228, 91, 87, 0.2), 0 2px 4px rgba(228, 91, 87, 0.12);
+}
+
+/* ========================================
+   DARK MODE — Surface code refinements
+   ======================================== */
+.dark .surface-code {
+  background: #0D0F11;
+  border-color: #1D2226;
+}
+
+/* ========================================
+   DARK MODE — Analysis stepper refinements
+   ======================================== */
+.dark .animate-ping {
+  background-color: rgba(228, 91, 87, 0.3);
+}
+
+/* ========================================
+   DARK MODE — Active nav item refinement
+   ======================================== */
+.dark nav a[class*="bg-primary"] {
+  background: rgba(228, 91, 87, 0.1) !important;
+}
+
+/* ========================================
+   DARK MODE — Landing page overlays
+   ======================================== */
+/* Dot pattern — make subtle on dark background */
+.dark .dot-pattern-container {
+  color: rgba(160, 170, 180, 0.06) !important;
+}
+
+/* Hero paragraph — inline color: #625D58 is invisible in dark mode */
+.dark section p[style*="625D58"],
+.dark section p[style*="625d58"] {
+  color: #AAB2B8 !important;
+}
+
+/* HomepageHeader — dark background + border */
+.dark header.bg-bw-surface\/60 {
+  background: rgba(11, 13, 15, 0.88) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* HomepageHeader avatar button — inline background: #F0EBE6 is invisible in dark mode */
+.dark header button[style*="F0EBE6"],
+.dark header button[style*="f0ebe6"] {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* HomepageHeader username — increase contrast */
+.dark header .text-bw-dusty-rose {
+  color: #D6DADF !important;
+}
+
+/* HomepageHeader dropdown */
+.dark header .absolute.right-0 {
+  background: rgba(14, 17, 20, 0.95) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* ========================================
+   DARK MODE — Surface glass refinements
+   ======================================== */
+.dark .surface-glass {
+  background: rgba(17, 20, 22, 0.78);
+  border-color: rgba(41, 46, 51, 0.4);
+}
+.dark .surface-glass-strong {
+  background: rgba(21, 25, 28, 0.88);
+  border-color: rgba(41, 46, 51, 0.5);
+}
+.dark .surface-glass-sidebar {
+  background: rgba(15, 17, 19, 0.92);
+  border-color: rgba(41, 46, 51, 0.4);
+}
+
+/* ========================================
+   DARK MODE — Glow utility refinements
+   ======================================== */
+.dark .glow-primary {
+  box-shadow: 0 0 0 2px rgba(228, 91, 87, 0.2);
+}
+.dark .glow-primary-sm {
+  box-shadow: 0 0 0 1.5px rgba(228, 91, 87, 0.15);
+}
+.dark .glow-peach {
+  box-shadow: 0 0 0 2px rgba(228, 91, 87, 0.15);
+}
+.dark .glow-peach-sm {
+  box-shadow: 0 0 0 1.5px rgba(228, 91, 87, 0.12);
+}
+.dark .glow-burgundy {
+  box-shadow: 0 0 0 2px rgba(228, 91, 87, 0.12);
+}
+.dark .border-glow {
+  border-color: rgba(228, 91, 87, 0.35);
+}
+
+/* ========================================
+   DARK MODE — Gradient refinements
+   ======================================== */
+.dark .gradient-primary {
+  background: linear-gradient(135deg, #C84A46, #E45B57);
+}
+.dark .gradient-primary-hover {
+  background: linear-gradient(135deg, #E45B57, #F06A63);
+}
+
+/* ========================================
+   DARK MODE — Border refinements
+   ======================================== */
+.dark .border-border {
+  border-color: rgba(41, 46, 51, 0.5);
+}
+
+/* ========================================
+   DARK MODE — Status indicators
+   ======================================== */
+.dark .bg-green-500 {
+  background-color: #22C55E;
+}
+.dark .bg-green-500\/20 {
+  background-color: rgba(34, 197, 94, 0.2);
+}
+.dark .bg-yellow-500\/5 {
+  background-color: rgba(234, 179, 8, 0.05);
+}
+.dark .bg-yellow-500\/20 {
+  background-color: rgba(234, 179, 8, 0.2);
+}
+.dark .bg-red-500\/5 {
+  background-color: rgba(239, 68, 68, 0.05);
+}
+.dark .bg-red-500\/10 {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+.dark .bg-green-500\/5 {
+  background-color: rgba(34, 197, 94, 0.05);
+}
+.dark .bg-green-500\/10 {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+/* ========================================
+   DARK MODE — Diff viewer refinements
+   ======================================== */
+.dark .bg-surface-code {
+  background: #0D0F11;
+}
+.dark .text-bw-dusty-rose\/70 {
+  color: rgba(116, 123, 132, 0.7);
+}
+
+/* ========================================
+   DARK MODE — Progress overlay refinements
+   ======================================== */
+.dark .bg-bw-surface {
+  background-color: #111416;
+}
+.dark .bg-surface-dim {
+  background-color: #15191C;
+}
+.dark .bg-surface-bright {
+  background-color: #0B0D0F;
+}
+
+/* ========================================
+   DARK MODE — Shadcn component refinements
+   ======================================== */
+.dark [data-slot="button"][class*="bg-primary"] {
+  background-color: #E45B57;
+}
+.dark [data-slot="button"][class*="bg-secondary"] {
+  background-color: #181C20;
+}
+.dark [data-slot="button"][class*="hover\\:bg-muted"] {
+  background-color: rgba(41, 46, 51, 0.3);
+}
+.dark [data-slot="badge"][class*="border-border"] {
+  border-color: rgba(41, 46, 51, 0.5);
+}
+
+/* ========================================
+   DARK MODE — Separator refinements
+   ======================================== */
+.dark hr,
+.dark [class*="separator"] {
+  background-color: rgba(41, 46, 51, 0.4);
 }
 
 /* ========================================
@@ -741,4 +982,14 @@
 .dot-pattern-container svg {
   width: 100%;
   height: 100%;
+}
+
+/* ========================================
+   LANDING PAGE — Radial gradient overlay
+   ======================================== */
+.landing-radial-fade {
+  background: radial-gradient(ellipse at center, rgba(250,248,245,0) 0%, rgba(250,248,245,0.6) 70%);
+}
+.dark .landing-radial-fade {
+  background: radial-gradient(ellipse at center, rgba(11,13,15,0) 0%, rgba(11,13,15,0.5) 70%);
 }

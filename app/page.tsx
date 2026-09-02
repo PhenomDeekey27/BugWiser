@@ -29,7 +29,7 @@ export default async function Home() {
           />
         </div>
         {/* Radial fade for subtle emphasis around hero */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_rgba(250,248,245,0)_0%,_rgba(250,248,245,0.6)_70%)]" />
+        <div className="absolute inset-0 landing-radial-fade" />
       </div>
 
       <HomepageHeader user={githubUser} />

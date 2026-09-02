@@ -50,8 +50,8 @@ export function FeatureSteps() {
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 md:gap-6 relative">
           {/* Connecting lines for desktop */}
-          <div className="hidden lg:block absolute top-16 left-12 right-12 h-px bg-gradient-to-r from-transparent via-[rgba(143,36,40,0.08)] to-transparent" />
-          <div className="hidden lg:block absolute top-16 left-32 right-32 h-px bg-gradient-to-r from-transparent via-[rgba(143,36,40,0.04)] to-transparent" />
+          <div className="hidden lg:block absolute top-16 left-12 right-12 h-px bg-gradient-to-r from-transparent via-primary-default/8 to-transparent" />
+          <div className="hidden lg:block absolute top-16 left-32 right-32 h-px bg-gradient-to-r from-transparent via-primary-default/4 to-transparent" />
           
           {steps.map((step, index) => {
             const Icon = step.icon;
@@ -60,9 +60,9 @@ export function FeatureSteps() {
                 {/* Step connector dots */}
                 {index < steps.length - 1 && (
                   <div className="hidden lg:block absolute top-16 -right-4 w-8 h-8">
-                    <div className="absolute top-1/2 left-0 w-4 h-px bg-gradient-to-r from-[rgba(143,36,40,0.1)] to-transparent" />
-                    <div className="absolute top-1/2 right-0 w-4 h-px bg-gradient-to-l from-[rgba(143,36,40,0.1)] to-transparent" />
-                    <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full bg-[rgba(143,36,40,0.15)] transform -translate-x-1/2 -translate-y-1/2" />
+                    <div className="absolute top-1/2 left-0 w-4 h-px bg-gradient-to-r from-primary-default/10 to-transparent" />
+                    <div className="absolute top-1/2 right-0 w-4 h-px bg-gradient-to-l from-primary-default/10 to-transparent" />
+                    <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full bg-primary-default/15 transform -translate-x-1/2 -translate-y-1/2" />
                   </div>
                 )}
                 

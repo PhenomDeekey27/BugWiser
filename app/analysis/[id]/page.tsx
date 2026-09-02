@@ -539,7 +539,7 @@ export default function InvestigationPage() {
   return (
     <AppShell user={user}>
       <div className="flex h-[calc(100vh-48px)]">
-        <div className="w-48 border-r border-border bg-surface-glass-sidebar p-3 hidden md:block">
+        <div className="w-48 border-r border-border bg-surface-glass-sidebar p-3 hidden md:block overflow-y-auto scrollbar-thin">
           <AnalysisStepper stages={analysis.stages} onStageClick={handleStageClick} />
         </div>
 

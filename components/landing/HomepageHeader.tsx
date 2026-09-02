@@ -39,7 +39,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
   };
 
   return (
-    <header className="flex items-center justify-between px-5 md:px-8 py-3.5 bg-bw-surface/60 backdrop-blur-lg border-b border-[rgba(70,50,40,0.08)] relative z-20">
+    <header className="flex items-center justify-between px-5 md:px-8 py-3.5 bg-bw-surface/60 backdrop-blur-lg border-b border-border relative z-20">
       <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
         <BugWiserLogo className="h-8 w-auto" />
       </Link>
@@ -73,9 +73,9 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
 
               {dropdownOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-lg z-50 overflow-hidden bg-bw-surface/90 backdrop-blur-xl border border-[rgba(70,50,40,0.10)]"
+                  className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-lg z-50 overflow-hidden bg-bw-surface/90 backdrop-blur-xl border border-border"
                 >
-                  <div className="px-4 py-3 border-b border-[rgba(70,50,40,0.08)]">
+                  <div className="px-4 py-3 border-b border-border">
                     <p className="text-sm font-medium text-bw-peach-light">{user.name || user.login}</p>
                     <p className="text-xs font-mono text-bw-dusty-rose">@{user.login}</p>
                   </div>
@@ -92,7 +92,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
                     >
                       New Analysis
                     </button>
-                    <div className="border-t border-[rgba(70,50,40,0.08)] my-1" />
+                    <div className="border-t border-border my-1" />
                     <button
                       onClick={handleSignOut}
                       className="w-full text-left px-4 py-2 text-sm text-error-default hover:bg-error-container/10 transition-colors cursor-pointer"

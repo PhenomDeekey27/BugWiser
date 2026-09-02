@@ -6,6 +6,7 @@ import { TopBar } from './TopBar';
 import { Button } from '@/components/ui/button';
 import { GitHubUser } from '@/types';
 import { Toaster } from 'sonner';
+import { useTheme } from '@/components/theme/ThemeProvider';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -15,6 +16,8 @@ interface AppShellProps {
 
 export function AppShell({ children, user, gradient = 'dashboard' }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === 'dark';
 
   return (
     <div
@@ -24,7 +27,12 @@ export function AppShell({ children, user, gradient = 'dashboard' }: AppShellPro
       <Toaster
         position="top-right"
         toastOptions={{
-          style: {
+          style: isDark ? {
+            background: 'rgba(21, 25, 28, 0.95)',
+            backdropFilter: 'blur(12px)',
+            border: '1px solid rgba(41, 46, 51, 0.5)',
+            color: '#F5F5F4',
+          } : {
             background: '#FFFFFF',
             backdropFilter: 'blur(12px)',
             border: '1px solid #E8E0DA',
