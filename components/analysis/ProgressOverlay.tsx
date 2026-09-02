@@ -54,6 +54,15 @@ const STAGE_ORDER = [
   'completed',
 ];
 
+// Maps current_stage -> model_selection.stages key for active-model display.
+const AI_STAGE_KEYS: Record<string, string> = {
+  relevant_files_discovery: 'relevant_file_discovery',
+  root_cause_analysis: 'root_cause_analysis',
+  evidence_extraction: 'evidence_extraction',
+  solution_generation: 'solution_generation',
+  patch_generation: 'patch_generation',
+};
+
 export function ProgressOverlay({ record }: ProgressOverlayProps) {
   const currentLabel = STAGE_LABELS[record.current_stage] || record.current_stage;
   const subLabels = STAGE_SUB_LABELS[record.current_stage] || [];
@@ -62,6 +71,17 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
 
   const isActive = ['queued', 'initializing', 'indexing', 'relevant_file_discovery', 'relevant_files_fetch', 'analyzing', 'relevant_files_discovery'].includes(record.status);
   const isFailed = record.status === 'failed';
+
+  // Derive the active model for the current AI stage.
+  const aiStageLabel = AI_STAGE_KEYS[record.current_stage];
+  const stageAssignment = aiStageLabel ? record.model_selection?.stages?.[aiStageLabel] : null;
+  const activeModel = stageAssignment && stageAssignment.model
+    ? `${record.model_selection?.mode === 'manual' ? '' : ''}${stageAssignment.provider} · ${stageAssignment.model}`
+    : record.ai_model
+      ? `${record.ai_provider || ''} · ${record.ai_model}`
+      : null;
+  const selectionMode = record.model_selection?.mode || null;
+  const manualFallback = record.model_selection?.manualFallbackOccurred || false;
 
   const statusMessages: Record<string, string> = {
     queued: 'Queued — waiting to start',
@@ -80,7 +100,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
 
   return (
     <div className="flex flex-col items-center justify-center py-16">
-      <div className="w-full max-w-md bg-surface-container/95 rounded-xl border border-bw-burgundy/40 p-8 card-depth-lg">
+      <div className="w-full max-w-md bg-bw-surface rounded-xl border border-border p-8 card-depth-lg">
         <div className="flex items-center gap-3 mb-6">
           {isActive && (
             <div className="w-5 h-5 border-2 border-primary-container/30 border-t-primary-container rounded-full animate-spin" />
@@ -107,7 +127,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
                 <span>{currentLabel}</span>
                 <span>{progress}%</span>
               </div>
-              <div className="w-full h-2 bg-surface-container-high rounded-full overflow-hidden">
+              <div className="w-full h-2 bg-surface-dim rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-bw-wine to-bw-terracotta rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${progress}%` }}
@@ -116,7 +136,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
             </div>
 
             {subLabels.length > 0 && (
-              <div className="mb-4 p-3 rounded-lg bg-surface-container/50 border border-bw-burgundy/20">
+              <div className="mb-4 p-3 rounded-lg bg-bw-surface border border-border">
                 <div className="space-y-1">
                   {subLabels.map((label, idx) => (
                     <div key={idx} className="flex items-center gap-2 text-[11px] font-mono text-bw-peach/70">
@@ -124,6 +144,21 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
                       <span>{label}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {aiStageLabel && (
+              <div className="mb-4 p-3 rounded-lg border border-primary-container/30 bg-primary-container/5">
+                <div className="flex items-center gap-2 text-xs font-mono text-bw-peach-light">
+                  <span>Using: {activeModel || 'selecting model…'}</span>
+                </div>
+                <div className="mt-1 text-[11px] font-mono text-bw-peach">
+                  {selectionMode === 'manual' ? (
+                    manualFallback ? 'Manual mode — fell back after a recoverable failure.' : 'Manual mode — your selected model is running.'
+                  ) : (
+                    'Auto mode — BugWiser picked the best model for this stage.'
+                  )}
                 </div>
               </div>
             )}

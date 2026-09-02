@@ -173,7 +173,7 @@ export function ModelTierPipeline({
                 isCurrent && 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_12px_rgba(34,197,94,0.15)]',
                 isUsed && !isCurrent && 'bg-green-500/5 border-green-500/20 text-green-400/50',
                 isFailed && 'bg-red-500/5 border-red-500/20 text-red-400/50 line-through',
-                !isCurrent && !isUsed && !isFailed && 'bg-surface-container border-bw-burgundy/20 text-bw-peach/60'
+                !isCurrent && !isUsed && !isFailed && 'bg-bw-surface border-border text-bw-peach/60'
               )}
             >
               <span className={cn(

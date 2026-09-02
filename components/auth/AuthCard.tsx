@@ -35,9 +35,7 @@ export function AuthCard() {
 
   return (
     <div className="w-full max-w-md mx-auto relative z-10">
-      <div className="rounded-xl bg-surface-container/95 border border-bw-burgundy/40 p-8 relative overflow-hidden card-depth-lg">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-48 rounded-full bg-[radial-gradient(circle,rgba(212,167,145,0.1)_0%,transparent_70%)] pointer-events-none" />
-
+      <div className="glass-card p-8 relative overflow-hidden">
         <div className="relative z-10">
           <div className="flex flex-col items-center mb-8">
             <BugWiserLogo variant="icon" className="h-16 w-16" />
@@ -57,14 +55,16 @@ export function AuthCard() {
             BugWiser needs GitHub access to inspect repositories and issues. We only request read permissions.
           </p>
 
-          <div className="mb-6 p-4 rounded-lg border border-bw-burgundy/40 bg-surface-container-low/60">
+          <div className="mb-6 p-4 rounded-xl bg-bw-surface/50 border border-[rgba(70,50,40,0.08)]">
             <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
               Requested Permissions
             </p>
             <ul className="space-y-2">
               {permissions.map((permission) => (
                 <li key={permission} className="flex items-center gap-2 text-sm text-bw-peach-light">
-                  <span className="text-green-500">✓</span>
+                  <span className="w-4 h-4 rounded-full bg-green-500/15 flex items-center justify-center flex-shrink-0">
+                    <span className="text-green-600 text-[10px]">✓</span>
+                  </span>
                   <span>{permission}</span>
                 </li>
               ))}
@@ -72,20 +72,20 @@ export function AuthCard() {
           </div>
 
           <Button
-            className="w-full btn-bw-primary h-11 font-medium"
+            className="w-full btn-bw-primary h-11 font-medium cursor-pointer rounded-lg"
             onClick={handleGitHubLogin}
             disabled={loading}
           >
             {loading ? 'Connecting to GitHub...' : 'Continue with GitHub'}
           </Button>
 
-          <p className="text-xs text-bw-peach/60 text-center mt-4">
+          <p className="text-xs text-bw-dusty-rose text-center mt-4">
             By continuing, you agree to our{' '}
-            <a href="#" className="text-primary-default hover:underline">
+            <a href="#" className="text-primary-default hover:underline cursor-pointer">
               Terms of Service
             </a>{' '}
             and{' '}
-            <a href="#" className="text-primary-default hover:underline">
+            <a href="#" className="text-primary-default hover:underline cursor-pointer">
               Privacy Policy
             </a>
           </p>

@@ -21,8 +21,8 @@ export function CodeViewer({ filePath, lines, language }: CodeViewerProps) {
   };
 
   return (
-    <div className="rounded-lg border border-bw-burgundy/30 bg-[#18090B] overflow-hidden card-depth">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-bw-burgundy/20 bg-surface-container/60">
+    <div className="rounded-lg border border-border bg-surface-code overflow-hidden card-depth">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-bw-surface">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-bw-peach">
             {filePath}

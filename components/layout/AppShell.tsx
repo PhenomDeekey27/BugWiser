@@ -13,28 +13,22 @@ interface AppShellProps {
   gradient?: 'dashboard' | 'workspace' | 'new-analysis';
 }
 
-const gradientClasses = {
-  dashboard: 'bg-page-dashboard',
-  workspace: 'bg-page-workspace',
-  'new-analysis': 'bg-page-new-analysis',
-};
-
 export function AppShell({ children, user, gradient = 'dashboard' }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
     <div
-      className={`flex h-screen ${gradientClasses[gradient]} overflow-hidden`}
+      className={`flex h-screen bg-page-${gradient} overflow-hidden`}
       data-page={gradient}
     >
       <Toaster
         position="top-right"
         toastOptions={{
           style: {
-            background: 'rgba(36, 20, 22, 0.95)',
+            background: '#FFFFFF',
             backdropFilter: 'blur(12px)',
-            border: '1px solid rgba(89, 23, 27, 0.5)',
-            color: '#FED7B8',
+            border: '1px solid #E8E0DA',
+            color: '#1A1614',
           },
         }}
       />
@@ -42,7 +36,7 @@ export function AppShell({ children, user, gradient = 'dashboard' }: AppShellPro
       <Button
         variant="ghost"
         size="icon"
-        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 bg-surface-container/90 border border-bw-burgundy/50 text-bw-peach-light"
+        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 bg-bw-surface border border-border text-bw-peach-light cursor-pointer"
         onClick={() => setSidebarOpen(!sidebarOpen)}
         aria-label="Toggle sidebar"
       >
@@ -61,7 +55,7 @@ export function AppShell({ children, user, gradient = 'dashboard' }: AppShellPro
 
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          className="fixed inset-0 z-30 bg-black/20 md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}

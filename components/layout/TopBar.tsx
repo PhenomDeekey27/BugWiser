@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { GitHubUser } from '@/types';
 import { toast } from 'sonner';
+import { ThemeToggle } from '@/components/theme/ThemeToggle';
 
 interface TopBarProps {
   className?: string;
@@ -39,11 +40,13 @@ export function TopBar({ className, user }: TopBarProps) {
 
   return (
     <header
-      className={`flex items-center justify-between h-12 px-4 bg-surface-glass border-b border-bw-burgundy/50 ${className}`}
+      className={`flex items-center justify-between h-12 px-4 bg-bw-surface border-b border-border ${className}`}
     >
       <div className="flex-1" />
 
       <div className="flex items-center gap-3">
+        <ThemeToggle />
+
         {user && (
           <span className="text-xs font-mono text-bw-peach hidden sm:block">
             @{user.login}
@@ -53,7 +56,7 @@ export function TopBar({ className, user }: TopBarProps) {
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="flex items-center justify-center w-8 h-8 rounded-full bg-surface-container-high overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-container/40 transition-all"
+            className="flex items-center justify-center w-8 h-8 rounded-full bg-surface-dim overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary/20 transition-all"
           >
             {user?.avatarUrl ? (
               <img
@@ -71,9 +74,9 @@ export function TopBar({ className, user }: TopBarProps) {
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 top-full mt-2 w-56 surface-elevated rounded-lg shadow-xl z-50 overflow-hidden">
+            <div className="absolute right-0 top-full mt-2 w-56 bg-bw-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden">
               {user && (
-                <div className="px-4 py-3 border-b border-bw-burgundy/30">
+                <div className="px-4 py-3 border-b border-border">
                   <p className="text-sm font-medium text-bw-peach-light">{user.name || user.login}</p>
                   <p className="text-xs font-mono text-bw-peach">@{user.login}</p>
                 </div>
@@ -81,20 +84,26 @@ export function TopBar({ className, user }: TopBarProps) {
               <div className="py-1">
                 <button
                   onClick={() => { setDropdownOpen(false); router.push('/dashboard'); }}
-                  className="w-full text-left px-4 py-2 text-sm text-bw-peach-light hover:bg-bw-burgundy/20 transition-colors cursor-pointer"
+                  className="w-full text-left px-4 py-2 text-sm text-bw-peach-light hover:bg-surface-dim transition-colors cursor-pointer"
                 >
                   Dashboard
                 </button>
                 <button
                   onClick={() => { setDropdownOpen(false); router.push('/analysis/new'); }}
-                  className="w-full text-left px-4 py-2 text-sm text-bw-peach-light hover:bg-bw-burgundy/20 transition-colors cursor-pointer"
+                  className="w-full text-left px-4 py-2 text-sm text-bw-peach-light hover:bg-surface-dim transition-colors cursor-pointer"
                 >
                   New Analysis
                 </button>
-                <div className="border-t border-bw-burgundy/30 my-1" />
+                <button
+                  onClick={() => { setDropdownOpen(false); router.push('/models'); }}
+                  className="w-full text-left px-4 py-2 text-sm text-bw-peach-light hover:bg-surface-dim transition-colors cursor-pointer"
+                >
+                  AI Models
+                </button>
+                <div className="border-t border-border my-1" />
                 <button
                   onClick={handleSignOut}
-                  className="w-full text-left px-4 py-2 text-sm text-error-default hover:bg-error-container/20 transition-colors cursor-pointer"
+                  className="w-full text-left px-4 py-2 text-sm text-error-default hover:bg-error-container/10 transition-colors cursor-pointer"
                 >
                   Sign Out
                 </button>

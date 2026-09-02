@@ -2,6 +2,7 @@ import { Hero } from '@/components/landing/Hero';
 import { ProductPreview } from '@/components/landing/ProductPreview';
 import { FeatureSteps } from '@/components/landing/FeatureSteps';
 import { HomepageHeader } from '@/components/landing/HomepageHeader';
+import { DotPattern } from '@/components/ui/dot-pattern';
 import { createClient } from '@/lib/supabase/server';
 
 export default async function Home() {
@@ -18,9 +19,17 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-page-landing relative">
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[10%] left-[20%] w-[500px] h-[500px] rounded-full bg-[radial-gradient(circle,rgba(212,167,145,0.12)_0%,transparent_70%)]" />
-        <div className="absolute bottom-[10%] right-[15%] w-[400px] h-[400px] rounded-full bg-[radial-gradient(circle,rgba(89,23,27,0.2)_0%,transparent_70%)]" />
+      <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+        <div className="dot-pattern-container absolute inset-0" style={{ color: 'rgba(110, 100, 95, 0.12)' }}>
+          <DotPattern
+            width={22}
+            height={22}
+            cr={0.6}
+            className="opacity-70"
+          />
+        </div>
+        {/* Radial fade for subtle emphasis around hero */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_rgba(250,248,245,0)_0%,_rgba(250,248,245,0.6)_70%)]" />
       </div>
 
       <HomepageHeader user={githubUser} />

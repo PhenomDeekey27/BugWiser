@@ -92,8 +92,8 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
   const addedCode = getAddedCode(file);
 
   return (
-    <div className="rounded-lg border border-bw-burgundy/30 bg-[#18090B] overflow-hidden card-depth">
-      <div className="px-3 py-2 border-b border-bw-burgundy/20 bg-surface-container/60">
+    <div className="rounded-lg border border-border bg-surface-code overflow-hidden card-depth">
+      <div className="px-3 py-2 border-b border-border bg-bw-surface">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-bw-peach-light">{file.path}</span>
@@ -121,14 +121,14 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
         </div>
       </div>
 
-      <div className="px-3 py-2 border-b border-bw-burgundy/20">
+      <div className="px-3 py-2 border-b border-border">
         <p className="text-xs text-bw-peach">{reason}</p>
       </div>
 
       <DiffViewer hunks={file.hunks} />
 
       {(removedCode || addedCode) && (
-        <div className="px-3 py-2 border-t border-bw-burgundy/20">
+        <div className="px-3 py-2 border-t border-border">
           <div className="grid grid-cols-2 gap-2">
             {removedCode && (
               <div>
@@ -212,7 +212,7 @@ export function PatchViewer({
           <Button
             variant="outline"
             size="sm"
-            className="border-bw-burgundy/40 text-bw-peach hover:text-bw-peach-light"
+            className="border-border text-bw-peach hover:text-bw-peach-light"
             onClick={handleCopy}
           >
             Copy Patch
@@ -235,7 +235,7 @@ export function PatchViewer({
         </div>
       </div>
 
-      <div className="p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 mb-4 card-depth">
+      <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4 card-depth">
         <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-1">
           Summary
         </p>

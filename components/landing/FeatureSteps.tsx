@@ -1,63 +1,81 @@
+'use client';
+
+import { GitBranch, Search, FileSearch, Target, Wrench, GitPullRequest } from 'lucide-react';
+
+const steps = [
+  {
+    icon: GitBranch,
+    title: 'Connect Repository',
+    description: 'Select a GitHub repository to analyze',
+  },
+  {
+    icon: Search,
+    title: 'Select Issue',
+    description: 'Choose an issue to investigate',
+  },
+  {
+    icon: FileSearch,
+    title: 'Trace Code',
+    description: 'BugWiser identifies relevant files',
+  },
+  {
+    icon: Target,
+    title: 'Find Root Cause',
+    description: 'AI-powered root cause analysis',
+  },
+  {
+    icon: Wrench,
+    title: 'Generate Patch',
+    description: 'Get an actionable code fix',
+  },
+  {
+    icon: GitPullRequest,
+    title: 'Create Branch & PR',
+    description: 'Auto-create fix branch and pull request',
+  },
+];
+
 export function FeatureSteps() {
-  const steps = [
-    {
-      icon: '◈',
-      title: 'Connect Repository',
-      description: 'Select a GitHub repository to analyze',
-    },
-    {
-      icon: '◎',
-      title: 'Select Issue',
-      description: 'Choose an issue to investigate',
-    },
-    {
-      icon: '⊕',
-      title: 'Trace Code',
-      description: 'BugWiser identifies relevant files',
-    },
-    {
-      icon: '⊙',
-      title: 'Find Root Cause',
-      description: 'AI-powered root cause analysis',
-    },
-    {
-      icon: '→',
-      title: 'Generate Patch',
-      description: 'Get an actionable code fix',
-    },
-    {
-      icon: '⊞',
-      title: 'Create Branch & PR',
-      description: 'Auto-create fix branch and pull request',
-    },
-  ];
-
   return (
-    <section id="how-it-works" className="px-4 py-16 md:py-20 max-w-5xl mx-auto">
-      <div className="surface-primary rounded-2xl p-8 md:p-10">
-        <h2 className="text-2xl font-semibold text-bw-peach-light text-center mb-10">
-          How it works
-        </h2>
+    <section id="how-it-works" className="px-4 py-16 md:py-24 max-w-6xl mx-auto">
+      <div className="glass-card p-10 md:p-14">
+        <div className="text-center mb-14">
+          <h2 className="font-sans text-[2rem] md:text-[2.5rem] font-bold text-bw-peach-light mb-4 tracking-tight">
+            How it works
+          </h2>
+          <p className="text-bw-peach text-lg max-w-2xl mx-auto">
+            A streamlined workflow for AI-powered issue investigation
+          </p>
+        </div>
 
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6 md:gap-4">
-          {steps.map((step, index) => (
-            <div key={step.title} className="flex items-center gap-4 md:gap-6">
-              <div className="flex flex-col items-center text-center">
-                <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-bw-burgundy/40 border border-bw-wine/60 mb-3 hover:border-bw-terracotta/80 transition-colors">
-                  <span className="text-lg text-bw-peach">{step.icon}</span>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 md:gap-6 relative">
+          {/* Connecting lines for desktop */}
+          <div className="hidden lg:block absolute top-16 left-12 right-12 h-px bg-gradient-to-r from-transparent via-[rgba(143,36,40,0.08)] to-transparent" />
+          <div className="hidden lg:block absolute top-16 left-32 right-32 h-px bg-gradient-to-r from-transparent via-[rgba(143,36,40,0.04)] to-transparent" />
+          
+          {steps.map((step, index) => {
+            const Icon = step.icon;
+            return (
+              <div key={step.title} className="flex flex-col items-center text-center group relative">
+                {/* Step connector dots */}
+                {index < steps.length - 1 && (
+                  <div className="hidden lg:block absolute top-16 -right-4 w-8 h-8">
+                    <div className="absolute top-1/2 left-0 w-4 h-px bg-gradient-to-r from-[rgba(143,36,40,0.1)] to-transparent" />
+                    <div className="absolute top-1/2 right-0 w-4 h-px bg-gradient-to-l from-[rgba(143,36,40,0.1)] to-transparent" />
+                    <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full bg-[rgba(143,36,40,0.15)] transform -translate-x-1/2 -translate-y-1/2" />
+                  </div>
+                )}
+                
+                <div className="glass-step flex items-center justify-center w-16 h-16 mb-5 group-hover:scale-105 transition-all duration-300">
+                  <Icon className="w-6 h-6 text-primary-default" strokeWidth={1.8} />
                 </div>
-                <h3 className="text-sm font-medium text-bw-peach-light mb-1">{step.title}</h3>
-                <p className="text-xs text-bw-peach/80 max-w-35">
+                <h3 className="text-base font-semibold text-bw-peach-light mb-2">{step.title}</h3>
+                <p className="text-sm text-bw-peach leading-relaxed">
                   {step.description}
                 </p>
               </div>
-              {index < steps.length - 1 && (
-                <div className="hidden md:block text-bw-dusty-rose">
-                  →
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </section>

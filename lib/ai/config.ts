@@ -32,6 +32,8 @@ const TASK_TYPE_MAP: Record<AnalysisTask, TaskType> = {
   patch_generation: 'code_generation',
 };
 
+export { TASK_TYPE_MAP };
+
 interface TaskWeights {
   coding: number;
   reasoning: number;
@@ -48,6 +50,9 @@ const TASK_WEIGHTS: Record<TaskType, TaskWeights> = {
   general: { coding: 1, reasoning: 2, speed: 2, longContext: 1 },
 };
 
+export type { TaskWeights };
+export { TASK_WEIGHTS };
+
 function scoreModel(model: ModelEntry, weights: TaskWeights, requiredContext: number): number {
   if (model.contextWindow < requiredContext) return -1;
 
@@ -63,19 +68,26 @@ function scoreModel(model: ModelEntry, weights: TaskWeights, requiredContext: nu
   );
 }
 
-function getAvailableModels(requiredContext: number): ModelEntry[] {
-  return MODEL_REGISTRY.filter(
-    (m) => isProviderConfigured(m.provider) && m.contextWindow >= requiredContext
-  );
+function getAvailableModels(
+  requiredContext: number,
+  availableProviders?: Set<ProviderName>
+): ModelEntry[] {
+  return MODEL_REGISTRY.filter((m) => {
+    const providerReady = availableProviders
+      ? availableProviders.has(m.provider)
+      : isProviderConfigured(m.provider);
+    return providerReady && m.contextWindow >= requiredContext;
+  });
 }
 
 function rankModels(
   taskType: TaskType,
   requiredContext: number,
-  excludeModels: Set<string> = new Set()
+  excludeModels: Set<string> = new Set(),
+  availableProviders?: Set<ProviderName>
 ): Array<{ entry: ModelEntry; score: number }> {
   const weights = TASK_WEIGHTS[taskType];
-  const available = getAvailableModels(requiredContext);
+  const available = getAvailableModels(requiredContext, availableProviders);
 
   const scored = available
     .filter((m) => !excludeModels.has(m.id))
@@ -160,7 +172,8 @@ const BENCHMARK_MODELS: Record<string, TaskModelEntry[]> = {
 export function selectModelsForTask(
   task: string,
   estimatedTokens: number = 0,
-  excludeModels: Set<string> = new Set()
+  excludeModels: Set<string> = new Set(),
+  availableProviders?: Set<ProviderName>
 ): TaskModelEntry[] {
   // BENCHMARK MODE: Use DeepSeek models if BENCHMARK_DEEPSEEK=true
   if (process.env.BENCHMARK_DEEPSEEK === 'true') {
@@ -176,7 +189,10 @@ export function selectModelsForTask(
   }
 
   // CHUTES MODE: Use Chutes models first if CHUTES_API_KEY is configured
-  if (process.env.CHUTES_API_KEY) {
+  const chutesConfigured = availableProviders
+    ? availableProviders.has('chutes')
+    : !!process.env.CHUTES_API_KEY;
+  if (chutesConfigured) {
     const chutesPreferred = getChutesPreferred(task).filter(
       (m) => !excludeModels.has(`${m.provider}/${m.model}`)
     );
@@ -185,7 +201,7 @@ export function selectModelsForTask(
       const primaryModel = chutesPreferred[0]?.model || 'unknown';
       const taskType = TASK_TYPE_MAP[task as AnalysisTask] || 'general';
       const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-      const ranked = rankModels(taskType, requiredContext, excludeModels);
+      const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders);
       const remaining = ranked.filter(
         (r) => !chutesPreferred.some(
           (p) => p.provider === r.entry.provider && p.model === r.entry.model
@@ -203,11 +219,16 @@ export function selectModelsForTask(
   // Default: use ranked models
   const taskType = TASK_TYPE_MAP[task as AnalysisTask] || 'general';
   const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-  const ranked = rankModels(taskType, requiredContext, excludeModels);
+  const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders);
 
   if (ranked.length === 0) {
     console.warn(`[config] No models available for task ${task} (context: ${requiredContext}), falling back to all configured models`);
-    const allAvailable = MODEL_REGISTRY.filter((m) => isProviderConfigured(m.provider) && !excludeModels.has(m.id));
+    const allAvailable = MODEL_REGISTRY.filter((m) => {
+      const providerReady = availableProviders
+        ? availableProviders.has(m.provider)
+        : isProviderConfigured(m.provider);
+      return providerReady && !excludeModels.has(m.id);
+    });
     return allAvailable.map((m) => ({ provider: m.provider, model: m.model }));
   }
 

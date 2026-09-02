@@ -111,7 +111,7 @@ function TreeNodeItem({
       <>
         <button
           onClick={() => toggleDir(node.path)}
-          className="w-full flex items-center gap-2 py-1 px-2 hover:bg-surface-container-high/50 rounded transition-colors text-left cursor-pointer"
+          className="w-full flex items-center gap-2 py-1 px-2 hover:bg-surface-dim rounded transition-colors text-left cursor-pointer"
           style={{ paddingLeft: `${indent + 8}px` }}
         >
           <span className="text-xs text-bw-peach w-3">
@@ -147,7 +147,7 @@ function TreeNodeItem({
         'flex items-center gap-2 py-1 px-2 rounded transition-colors',
         node.isRelevant
           ? 'bg-yellow-400/5 border-l-2 border-yellow-400'
-          : 'hover:bg-surface-container-high/50'
+          : 'hover:bg-surface-dim'
       )}
       style={{ paddingLeft: `${indent + 28}px` }}
     >
@@ -263,8 +263,8 @@ export function RepositoryFileTree({
   const relevantCount = relevantFiles.length;
 
   return (
-    <div className={cn('rounded-lg bg-surface-container/80 border border-bw-burgundy/30 overflow-hidden card-depth', className)}>
-      <div className="p-3 border-b border-bw-burgundy/20">
+    <div className={cn('rounded-lg bg-bw-surface border border-border overflow-hidden card-depth', className)}>
+      <div className="p-3 border-b border-border">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach">
             Repository Files
@@ -282,7 +282,7 @@ export function RepositoryFileTree({
           placeholder="Search files..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="h-7 text-xs bg-surface-container-low border-bw-burgundy/30"
+          className="h-7 text-xs bg-surface-dim border-border"
         />
       </div>
 

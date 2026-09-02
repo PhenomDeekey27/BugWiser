@@ -24,7 +24,7 @@ export function AnalysisOverview({
 }: AnalysisOverviewProps) {
   return (
     <div className={`space-y-6 ${className || ''}`}>
-      <div className="rounded-lg bg-surface-container/80 border border-bw-burgundy/30 p-4 card-depth">
+      <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
         <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
           Issue Summary
         </h3>
@@ -50,7 +50,7 @@ export function AnalysisOverview({
             </div>
           )}
           {issue.body && (
-            <div className="mt-3 p-3 rounded bg-surface-container-low/50 text-xs text-bw-peach line-clamp-4">
+            <div className="mt-3 p-3 rounded bg-surface-dim text-xs text-bw-peach line-clamp-4">
               {issue.body.slice(0, 500)}
               {issue.body.length > 500 && '...'}
             </div>
@@ -59,7 +59,7 @@ export function AnalysisOverview({
       </div>
 
       {fingerprint && (
-        <div className="rounded-lg bg-surface-container/80 border border-bw-burgundy/30 p-4 card-depth">
+        <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
             Repository Fingerprint
           </h3>
@@ -118,7 +118,7 @@ export function AnalysisOverview({
         </div>
       )}
 
-      <div className="rounded-lg bg-surface-container/80 border border-bw-burgundy/30 p-4 card-depth">
+      <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
         <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
           Repository
         </h3>

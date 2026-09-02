@@ -1,6 +1,6 @@
 import { AIProvider, AICompletionRequest, AICompletionResponse } from '../providers/base';
 import {
-  createProviderInstance,
+  createProviderInstanceWithApiKey,
   ProviderName,
   isProviderConfigured,
 } from '../providers/registry';
@@ -12,6 +12,17 @@ export interface RunRequest {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: AICompletionRequest['responseFormat'];
+  /**
+   * Explicitly resolved provider credentials (e.g. user-connected keys).
+   * Env-configured providers are always included.
+   */
+  providerTokens?: Partial<Record<ProviderName, string>>;
+  /**
+   * Manual mode: the exact model the user selected. Used FIRST for every AI
+   * stage of the analysis. Fallback still applies on recoverable failures,
+   * but this model is never silently swapped for a higher-scoring one.
+   */
+  manualModel?: { provider: ProviderName; model: string } | null;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -139,28 +150,78 @@ export function logAttempt(
 
 const providerInstances = new Map<string, AIProvider>();
 
-function getOrCreateProvider(entry: TaskModelEntry): AIProvider {
-  const key = `${entry.provider}:${entry.model}`;
+function instanceKey(provider: ProviderName, model: string, apiKey: string | undefined): string {
+  const keySuffix = apiKey ? apiKey.slice(-8) : 'env';
+  return `${provider}:${model}:${keySuffix}`;
+}
+
+function getOrCreateProvider(
+  entry: TaskModelEntry,
+  apiKey: string | undefined
+): AIProvider {
+  const key = instanceKey(entry.provider, entry.model, apiKey);
   if (!providerInstances.has(key)) {
-    providerInstances.set(key, createProviderInstance(entry.provider));
+    providerInstances.set(key, createProviderInstanceWithApiKey(entry.provider, apiKey));
   }
   return providerInstances.get(key)!;
 }
 
+function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
+  const available = new Set<ProviderName>();
+  const providers: ProviderName[] = [
+    'gemini', 'deepseek', 'zai', 'opencode', 'openrouter', 'chutes', 'openai',
+  ];
+  for (const p of providers) {
+    if (isProviderConfigured(p)) available.add(p);
+    const token = request.providerTokens?.[p];
+    if (token && token.length > 0) available.add(p);
+  }
+  return available;
+}
+
 export async function runWithFallback(request: RunRequest): Promise<RunResponse> {
   const estimatedTokens = estimateTokensFromMessages(request.messages);
-  const chain = selectModelsForTask(request.task, estimatedTokens);
+  const availableProviders = buildAvailableProviders(request);
+  const chain: TaskModelEntry[] = [];
+
+  const autoChain = selectModelsForTask(
+    request.task,
+    estimatedTokens,
+    new Set(),
+    availableProviders
+  );
+
+  // Manual mode: the user's selected model is always tried first.
+  const manual = request.manualModel;
+  const manualEntry = manual
+    ? { provider: manual.provider, model: manual.model }
+    : null;
+
+  if (manualEntry) {
+    chain.push(manualEntry);
+    // Then the remaining task-ranked chain (as fallback candidates), without
+    // duplicating the manual model.
+    for (const candidate of autoChain) {
+      if (candidate.provider === manualEntry.provider && candidate.model === manualEntry.model) {
+        continue;
+      }
+      chain.push(candidate);
+    }
+  } else {
+    chain.push(...autoChain);
+  }
+
   const attempted: RunResponse['attemptedProviders'] = [];
   const failedModels = new Set<string>();
   let fallbackCount = 0;
   let lastError = new Error('All providers in fallback chain failed');
 
   console.log(
-    `[model-router] Task: ${request.task} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
+    `[model-router] Task: ${request.task} | mode: ${manualEntry ? 'manual' : 'auto'} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
   );
 
   for (const entry of chain) {
-    if (!isProviderConfigured(entry.provider)) {
+    if (!availableProviders.has(entry.provider)) {
       continue;
     }
 
@@ -169,12 +230,13 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
       continue;
     }
 
-    const provider = getOrCreateProvider(entry);
+    const apiKey = request.providerTokens?.[entry.provider];
+    const provider = getOrCreateProvider(entry, apiKey);
     const startTime = Date.now();
 
     try {
       console.log(
-        `[model-router] Attempt ${fallbackCount + 1}: ${modelId} for task: ${request.task}`
+        `[model-router] Attempt ${fallbackCount + 1}: ${modelId} for task: ${request.task}${manualEntry ? ` [manual primary]` : ''}`
       );
 
       const completion = await provider.generate({

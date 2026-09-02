@@ -6,7 +6,7 @@ interface DiffViewerProps {
 
 export function DiffViewer({ hunks }: DiffViewerProps) {
   return (
-    <div className="overflow-x-auto bg-[#18090B]">
+    <div className="overflow-x-auto bg-surface-code">
       <pre className="p-3 font-mono text-xs">
         {hunks.map((hunk, hunkIndex) => (
           <div key={hunkIndex}>

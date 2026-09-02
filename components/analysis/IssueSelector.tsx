@@ -30,10 +30,10 @@ export function IssueSelector({
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}
-              className="w-full p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 animate-pulse"
+              className="w-full p-4 rounded-lg bg-bw-surface border border-border animate-pulse"
             >
-              <div className="h-4 bg-surface-container-high rounded w-1/4 mb-2" />
-              <div className="h-3 bg-surface-container-high rounded w-2/3" />
+              <div className="h-4 bg-surface-dim rounded w-1/4 mb-2" />
+              <div className="h-3 bg-surface-dim rounded w-2/3" />
             </div>
           ))}
         </div>
@@ -46,7 +46,7 @@ export function IssueSelector({
       )}
 
       {!loading && !error && issues.length === 0 && (
-        <div className="p-8 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 text-center">
+        <div className="p-8 rounded-lg bg-bw-surface border border-border text-center">
           <p className="text-sm text-bw-peach">
             No open issues found in this repository.
           </p>
@@ -62,8 +62,8 @@ export function IssueSelector({
               className={cn(
                 'w-full p-4 rounded-lg border text-left transition-all cursor-pointer',
                 selectedIssue?.id === issue.id
-                  ? 'border-primary-container bg-primary-container/10 glow-primary-sm'
-                  : 'border-bw-burgundy/30 bg-surface-container/80 hover:border-bw-terracotta/50'
+                  ? 'border-primary bg-primary/5 glow-primary-sm'
+                  : 'border-border bg-bw-surface hover:border-primary/20'
               )}
             >
               <div className="flex items-center justify-between mb-1">

@@ -29,10 +29,10 @@ export function RepositorySelector({
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}
-              className="w-full p-4 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 animate-pulse"
+              className="w-full p-4 rounded-lg bg-bw-surface border border-border animate-pulse"
             >
-              <div className="h-4 bg-surface-container-high rounded w-1/3 mb-2" />
-              <div className="h-3 bg-surface-container-high rounded w-2/3" />
+              <div className="h-4 bg-surface-dim rounded w-1/3 mb-2" />
+              <div className="h-3 bg-surface-dim rounded w-2/3" />
             </div>
           ))}
         </div>
@@ -45,7 +45,7 @@ export function RepositorySelector({
       )}
 
       {!loading && !error && repositories.length === 0 && (
-        <div className="p-8 rounded-lg bg-surface-container/80 border border-bw-burgundy/30 text-center">
+        <div className="p-8 rounded-lg bg-bw-surface border border-border text-center">
           <p className="text-sm text-bw-peach">
             No repositories found. Make sure your GitHub account has access to repositories.
           </p>
@@ -61,22 +61,22 @@ export function RepositorySelector({
               className={cn(
                 'w-full p-4 rounded-lg border text-left transition-all cursor-pointer card-depth-hover',
                 selectedRepository?.id === repo.id
-                  ? 'border-primary-container bg-primary-container/10 glow-primary-sm cursor-pointer'
-                  : 'border-bw-burgundy/30 bg-surface-container/80 hover:border-bw-terracotta/50 cursor-pointer'
+                  ? 'border-primary bg-primary/5 glow-primary-sm'
+                  : 'border-border bg-bw-surface hover:border-primary/20'
               )}
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="text-sm font-mono text-primary-default truncate">
                   {repo.fullName}
                 </span>
-                <span className="text-xs font-mono text-bw-peach whitespace-nowrap shrink-0">
+                <span className="text-xs font-mono text-bw-dusty-rose whitespace-nowrap shrink-0">
                   {repo.language || 'N/A'}
                 </span>
               </div>
               <p className="text-sm text-bw-peach truncate mt-1">
                 {repo.description || 'No description'}
               </p>
-              <div className="flex items-center gap-4 mt-2 text-xs text-bw-peach/70">
+              <div className="flex items-center gap-4 mt-2 text-xs text-bw-dusty-rose">
                 {repo.stars > 0 && <span>★ {repo.stars}</span>}
                 {repo.forks > 0 && <span>⑂ {repo.forks}</span>}
                 {repo.private && (

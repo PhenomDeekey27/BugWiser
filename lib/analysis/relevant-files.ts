@@ -1,5 +1,5 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
-import { runWithFallback, getModels } from '@/lib/ai/model-router';
+import { generate } from '@/lib/ai/gateway';
 import { buildRelevantFileContext, RelevantFileContext } from '@/lib/ai/context';
 import { deterministicPreFilter } from '@/lib/ai/context/prefilter';
 import { validateRelevantFiles, parseAIResponse } from '@/lib/ai/validation';
@@ -165,11 +165,9 @@ export async function runRelevantFileDiscovery(analysisId: string, githubToken: 
     const builtContext = buildRelevantFileContext(relevantFileContext);
     console.log(`[relevant-files] Estimated tokens: ${builtContext.estimatedTokens}, context reduced: ${builtContext.contextReduced}`);
 
-    const models = getModels();
-    console.log(`[relevant-files] Trying models: ${models.join(' -> ')}`);
-
     const startTime = Date.now();
-    const response = await runWithFallback({
+    const response = await generate({
+      analysisId,
       task: 'relevant_file_discovery',
       messages: builtContext.messages,
       temperature: 0.3,
@@ -232,6 +230,11 @@ export async function runRelevantFileDiscovery(analysisId: string, githubToken: 
       duration,
       usage: response.usage,
       discoverySource,
+      selection: {
+        mode: response.selection?.mode || 'auto',
+        reason: response.selection?.reason || '',
+        manualFallbackOccurred: response.manualFallbackOccurred || false,
+      },
     } as unknown as Record<string, unknown>);
 
     await updateAnalysis(analysisId, {

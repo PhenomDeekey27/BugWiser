@@ -112,7 +112,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-16 rounded-lg bg-surface-container animate-pulse" />
+          <div key={i} className="h-16 rounded-lg bg-bw-surface animate-pulse" />
         ))}
       </div>
     );
@@ -133,7 +133,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
         return (
           <div
             key={tier}
-            className="p-3 rounded-lg bg-surface-container/80 border border-bw-burgundy/30"
+            className="p-3 rounded-lg bg-bw-surface border border-border"
           >
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
@@ -151,7 +151,7 @@ export function ModelSelector({ value, onChange }: ModelSelectorProps) {
             <select
               value={value[tier]}
               onChange={(e) => updateTier(tier, e.target.value)}
-              className="w-full bg-surface-container-high border border-bw-burgundy/30 rounded px-3 py-2 text-sm font-mono text-bw-peach-light focus:outline-none focus:border-primary-container/50 focus:shadow-[0_0_12px_rgba(255,86,37,0.1)] appearance-none cursor-pointer"
+              className="w-full bg-surface-dim border border-border rounded px-3 py-2 text-sm font-mono text-bw-peach-light focus:outline-none focus:border-primary-container/50 focus:shadow-[0_0_12px_rgba(255,86,37,0.1)] appearance-none cursor-pointer"
             >
               <option value="">Select model...</option>
               {models.map((model) => (

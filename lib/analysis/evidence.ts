@@ -1,5 +1,6 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback } from '@/lib/ai/model-router';
+import { generate } from '@/lib/ai/gateway';
 import { buildEvidenceContext, EvidenceContext } from '@/lib/ai/context/evidence';
 import { validateEvidence, parseEvidenceResponse } from '@/lib/ai/validation/evidence';
 import { buildCanonicalContext, estimateContextSize, selectSourceFilesForStage } from '@/lib/ai/context/canonical';
@@ -120,7 +121,8 @@ export async function runEvidenceExtraction(analysisId: string): Promise<void> {
     const startTime = Date.now();
     let response;
     try {
-      response = await runWithFallback({
+      response = await generate({
+        analysisId,
         task: 'evidence_extraction',
         messages: builtContext.messages,
         temperature: 0.3,
@@ -202,6 +204,11 @@ export async function runEvidenceExtraction(analysisId: string): Promise<void> {
       attemptNumber,
       sourceFileCount: selectedSourceFiles.length,
       sourceChars: sizeInfo.sourceFilesChars,
+      selection: {
+        mode: response.selection?.mode || 'auto',
+        reason: response.selection?.reason || '',
+        manualFallbackOccurred: response.manualFallbackOccurred || false,
+      },
     } as unknown as Record<string, unknown>);
 
     await updateAnalysis(analysisId, {

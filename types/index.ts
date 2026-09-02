@@ -240,6 +240,17 @@ export interface AnalysisContext {
 }
 
 // Database record types
+export interface AnalysisModelSelection {
+  mode: 'auto' | 'manual';
+  reason?: string;
+  manualFallbackOccurred?: boolean;
+  startedAt?: string;
+  stages?: Record<
+    string,
+    { provider: string; model: string; fit?: number | null }
+  >;
+}
+
 export interface AnalysisRecord {
   id: string;
   user_id: string;
@@ -294,6 +305,7 @@ export interface AnalysisRecord {
     balanced: string;
     deep: string;
   } | null;
+  model_selection: AnalysisModelSelection | null;
   patch_status: 'none' | 'pending' | 'applied' | 'failed' | null;
   created_branch: string | null;
   commit_sha: string | null;

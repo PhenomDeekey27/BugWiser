@@ -209,6 +209,7 @@ export default function InvestigationPage() {
         ai_tokens_output: null,
         ai_duration_ms: null,
         model_config: null,
+        model_selection: null,
         patch_status: null,
         created_branch: null,
         commit_sha: null,
@@ -538,7 +539,7 @@ export default function InvestigationPage() {
   return (
     <AppShell user={user}>
       <div className="flex h-[calc(100vh-48px)]">
-        <div className="w-48 border-r border-bw-burgundy/50 bg-surface-glass-sidebar p-3 hidden md:block">
+        <div className="w-48 border-r border-border bg-surface-glass-sidebar p-3 hidden md:block">
           <AnalysisStepper stages={analysis.stages} onStageClick={handleStageClick} />
         </div>
 
@@ -558,7 +559,7 @@ export default function InvestigationPage() {
                 <span className="text-error-default text-xl">✕</span>
               </div>
               <p className="text-sm text-bw-peach-light mb-4">{error}</p>
-              <Button variant="outline" size="sm" className="border-bw-burgundy/40 text-bw-peach" onClick={() => router.push('/analysis/new')}>
+              <Button variant="outline" size="sm" className="border-border text-bw-peach" onClick={() => router.push('/analysis/new')}>
                 Start New Analysis
               </Button>
             </div>
@@ -573,7 +574,7 @@ export default function InvestigationPage() {
               <AnalysisHeader analysis={analysis} />
 
               {(isComplete || record.status === 'ready_for_analysis' || record.status === 'relevant_files_ready' || isDiscoveryRunning) && (
-                <div className="mb-6 p-4 rounded-lg bg-surface-container/80 border border-green-500/30 bg-green-500/5">
+                <div className="mb-6 p-4 rounded-lg bg-bw-surface border border-green-500/30 bg-green-500/5">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-2 h-2 rounded-full bg-green-500" />
                     <span className="text-sm font-semibold text-bw-peach-light">
@@ -652,7 +653,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartRootCause(true)}
                         disabled={startingRootCause || anyStageRunning}
                         variant="outline"
-                        className="border-bw-burgundy/40 text-bw-peach"
+                        className="border-border text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -691,7 +692,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartEvidence(true)}
                         disabled={startingEvidence || anyStageRunning}
                         variant="outline"
-                        className="border-bw-burgundy/40 text-bw-peach"
+                        className="border-border text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -730,7 +731,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartSolution(true)}
                         disabled={startingSolution || anyStageRunning}
                         variant="outline"
-                        className="border-bw-burgundy/40 text-bw-peach"
+                        className="border-border text-bw-peach"
                       >
                         Re-run
                       </Button>
@@ -769,7 +770,7 @@ export default function InvestigationPage() {
                         onClick={() => handleStartPatch(true)}
                         disabled={startingPatch || anyStageRunning}
                         variant="outline"
-                        className="border-bw-burgundy/40 text-bw-peach"
+                        className="border-border text-bw-peach"
                       >
                         Re-run
                       </Button>

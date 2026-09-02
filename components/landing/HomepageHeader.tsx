@@ -39,7 +39,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
   };
 
   return (
-    <header className="flex items-center justify-between px-4 md:px-6 py-4 bg-bw-burgundy/40 backdrop-blur-md border-b border-bw-burgundy/50 relative z-20">
+    <header className="flex items-center justify-between px-5 md:px-8 py-3.5 bg-bw-surface/60 backdrop-blur-lg border-b border-[rgba(70,50,40,0.08)] relative z-20">
       <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
         <BugWiserLogo className="h-8 w-auto" />
       </Link>
@@ -47,14 +47,14 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
       <div className="flex items-center gap-4">
         {user ? (
           <div className="flex items-center gap-3">
-            <span className="text-xs font-mono hidden sm:block" style={{ color: '#D6AEA1' }}>
+            <span className="text-xs font-mono text-bw-dusty-rose hidden sm:block">
               @{user.login}
             </span>
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all"
-                style={{ background: '#6F1F24' }}
+                className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-primary/15"
+                style={{ background: '#F0EBE6' }}
               >
                 {user.avatarUrl ? (
                   <img
@@ -65,7 +65,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
                     height={32}
                   />
                 ) : (
-                  <span className="text-sm font-medium" style={{ color: '#FFE1C7' }}>
+                  <span className="text-sm font-medium text-bw-peach">
                     {user.login?.charAt(0).toUpperCase()}
                   </span>
                 )}
@@ -73,39 +73,29 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
 
               {dropdownOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-56 rounded-lg shadow-xl z-50 overflow-hidden"
-                  style={{ background: '#281416', border: '1px solid #542A2B' }}
+                  className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-lg z-50 overflow-hidden bg-bw-surface/90 backdrop-blur-xl border border-[rgba(70,50,40,0.10)]"
                 >
-                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #542A2B' }}>
-                    <p className="text-sm font-medium" style={{ color: '#F2D1BC' }}>{user.name || user.login}</p>
-                    <p className="text-xs font-mono" style={{ color: '#C99F94' }}>@{user.login}</p>
+                  <div className="px-4 py-3 border-b border-[rgba(70,50,40,0.08)]">
+                    <p className="text-sm font-medium text-bw-peach-light">{user.name || user.login}</p>
+                    <p className="text-xs font-mono text-bw-dusty-rose">@{user.login}</p>
                   </div>
                   <div className="py-1">
                     <button
                       onClick={() => { setDropdownOpen(false); router.push('/dashboard'); }}
-                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
-                      style={{ color: '#E2B9AA' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFE1C7'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#E2B9AA'; }}
+                      className="w-full text-left px-4 py-2 text-sm text-bw-peach hover:bg-surface-dim transition-colors cursor-pointer"
                     >
                       Dashboard
                     </button>
                     <button
                       onClick={() => { setDropdownOpen(false); router.push('/analysis/new'); }}
-                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
-                      style={{ color: '#E2B9AA' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFE1C7'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#E2B9AA'; }}
+                      className="w-full text-left px-4 py-2 text-sm text-bw-peach hover:bg-surface-dim transition-colors cursor-pointer"
                     >
                       New Analysis
                     </button>
-                    <div style={{ borderTop: '1px solid #542A2B', margin: '4px 0' }} />
+                    <div className="border-t border-[rgba(70,50,40,0.08)] my-1" />
                     <button
                       onClick={handleSignOut}
-                      className="w-full text-left px-4 py-2 text-sm transition-colors cursor-pointer"
-                      style={{ color: '#F0B8AE' }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#3A1A1D'; e.currentTarget.style.color = '#FFD0C7'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#F0B8AE'; }}
+                      className="w-full text-left px-4 py-2 text-sm text-error-default hover:bg-error-container/10 transition-colors cursor-pointer"
                     >
                       Sign Out
                     </button>
@@ -117,18 +107,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
         ) : (
           <Link href="/auth/github">
             <button
-              className="px-4 py-2 rounded text-sm font-medium cursor-pointer transition-colors"
-              style={{ background: '#6F1F24', color: '#FFE1C7', border: '1px solid #8C4547' }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#81282D';
-                e.currentTarget.style.color = '#FFE8D5';
-                e.currentTarget.style.borderColor = '#A65A59';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#6F1F24';
-                e.currentTarget.style.color = '#FFE1C7';
-                e.currentTarget.style.borderColor = '#8C4547';
-              }}
+              className="px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-all btn-bw-primary"
             >
               Continue with GitHub
             </button>

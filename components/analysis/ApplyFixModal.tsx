@@ -75,7 +75,7 @@ export function ApplyFixModal({
         onClick={!applying ? onClose : undefined}
       />
 
-      <div className="relative bg-surface-container/98 border border-bw-burgundy/40 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl card-depth-lg">
+      <div className="relative bg-bw-surface border border-border rounded-xl p-6 max-w-md w-full mx-4 shadow-xl card-depth-lg">
         <h2 className="text-lg font-semibold text-bw-peach-light mb-2">
           Create Fix Branch?
         </h2>
@@ -142,7 +142,7 @@ export function ApplyFixModal({
           <Button
             variant="outline"
             size="sm"
-            className="border-bw-burgundy/40 text-bw-peach"
+            className="border-border text-bw-peach"
             onClick={onClose}
             disabled={applying}
           >

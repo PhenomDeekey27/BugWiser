@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/layout/AppShell';
 import { RepositorySelector } from '@/components/analysis/RepositorySelector';
 import { IssueSelector } from '@/components/analysis/IssueSelector';
+import { SelectedModelSummary } from '@/components/models/SelectedModelSummary';
 import { Button } from '@/components/ui/button';
 import { Repository, Issue, GitHubUser } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import type { CatalogModel, CatalogProvider, Preference } from '@/app/models/page';
 
 export default function NewAnalysisPage() {
   const router = useRouter();
@@ -24,6 +26,13 @@ export default function NewAnalysisPage() {
   const [authExpired, setAuthExpired] = useState(false);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
 
+  const [providers, setProviders] = useState<CatalogProvider[]>([]);
+  const [models, setModels] = useState<CatalogModel[]>([]);
+  const [preference, setPreference] = useState<Preference | null>(null);
+  const [mode, setMode] = useState<'auto' | 'manual'>('auto');
+  const [selectedProvider, setSelectedProvider] = useState('');
+  const [selectedModel, setSelectedModel] = useState('');
+
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(({ data: { user: authUser } }) => {
@@ -36,6 +45,50 @@ export default function NewAnalysisPage() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/models');
+        if (!res.ok) return;
+        const data = await res.json();
+        setProviders(data.providers || []);
+        setModels(data.models || []);
+        if (data.preference) {
+          const p = data.preference as Preference;
+          setPreference(p);
+          setMode(p.selection_mode || 'auto');
+          setSelectedProvider(p.provider || '');
+          setSelectedModel(p.model || '');
+        }
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
+  const handleSaveModel = async () => {
+    try {
+      if (mode === 'manual' && (!selectedProvider || !selectedModel)) {
+        toast.error('Select a provider and model for manual mode.');
+        return false;
+      }
+      const res = await fetch('/api/models/preference', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selection_mode: mode,
+          provider: mode === 'manual' ? selectedProvider : null,
+          model: mode === 'manual' ? selectedModel : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save preference');
+      setPreference(data.preference);
+      return true;
+    } catch (e) {
+      toast.error((e as Error).message || 'Failed to save preference');
+      return false;
+    }
+  };
 
   useEffect(() => {
     async function fetchRepos() {
@@ -105,6 +158,10 @@ export default function NewAnalysisPage() {
 
   const handleStartAnalysis = async () => {
     if (!selectedRepository || !selectedIssue || startingAnalysis) return;
+
+    // Persist the user's model selection before starting.
+    const saved = await handleSaveModel();
+    if (!saved) return;
 
     setStartingAnalysis(true);
 
@@ -178,7 +235,7 @@ export default function NewAnalysisPage() {
         </h1>
 
         {authExpired ? (
-          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-surface-container/90 border border-bw-burgundy/40">
+          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-bw-surface border border-border">
             <p className="text-sm text-bw-peach mb-4 text-center">
               Your session has expired. Please sign in again to access your repositories.
             </p>
@@ -211,7 +268,7 @@ export default function NewAnalysisPage() {
                   error={issuesError}
                 />
               ) : (
-                <div className="flex items-center justify-center h-64 rounded-lg bg-surface-container/80 border border-bw-burgundy/30">
+                <div className="flex items-center justify-center h-64 rounded-lg bg-bw-surface border border-border">
                   <p className="text-sm text-bw-peach">
                     Select a repository first
                   </p>
@@ -222,21 +279,24 @@ export default function NewAnalysisPage() {
         )}
 
         {selectedRepository && selectedIssue && (
-          <div className="mt-6 flex justify-end">
-            <Button
-              className="btn-bw-primary font-medium"
-              onClick={handleStartAnalysis}
-              disabled={startingAnalysis}
-            >
-              {startingAnalysis ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
-                  Creating Analysis...
-                </span>
-              ) : (
-                'Start Analysis'
-              )}
-            </Button>
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <SelectedModelSummary
+                mode={mode}
+                onModeChange={setMode}
+                providers={providers}
+                models={models}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
+                preference={preference}
+                onSave={handleSaveModel as () => void}
+                onStart={handleStartAnalysis}
+                starting={startingAnalysis}
+                available={!!selectedRepository && !!selectedIssue}
+              />
+            </div>
           </div>
         )}
       </div>

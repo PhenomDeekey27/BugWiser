@@ -18,6 +18,7 @@ interface SidebarProps {
 const navigation = [
   { label: 'Dashboard', href: '/dashboard', icon: '◈' },
   { label: 'New Analysis', href: '/analysis/new', icon: '⊕' },
+  { label: 'AI Models', href: '/models', icon: '◪' },
 ];
 
 export function Sidebar({ className, user }: SidebarProps) {
@@ -37,7 +38,7 @@ export function Sidebar({ className, user }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'flex flex-col w-60 h-full bg-surface-glass-sidebar border-r border-bw-burgundy/50',
+        'flex flex-col w-60 h-full bg-bw-surface border-r border-border',
         className
       )}
     >
@@ -48,7 +49,7 @@ export function Sidebar({ className, user }: SidebarProps) {
       <div className="px-3 py-2">
         <Link href="/analysis/new" className="w-full cursor-pointer">
           <Button
-            className="w-full justify-start gap-2 btn-bw-primary font-medium"
+            className="w-full justify-start gap-2 btn-bw-primary font-medium cursor-pointer"
           >
             <span className="text-lg leading-none">+</span>
             <span>New Analysis</span>
@@ -56,7 +57,7 @@ export function Sidebar({ className, user }: SidebarProps) {
         </Link>
       </div>
 
-      <Separator className="my-2 bg-bw-burgundy/40" />
+      <Separator className="my-2 bg-border" />
 
       <nav className="flex-1 px-3 py-2 space-y-1">
         {navigation.map((item) => {
@@ -66,10 +67,10 @@ export function Sidebar({ className, user }: SidebarProps) {
               key={item.href}
               href={item.href}
               className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded text-sm transition-all cursor-pointer',
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all cursor-pointer',
                 isActive
-                  ? 'bg-bw-burgundy/30 text-bw-peach-light border-l-2 border-primary-container'
-                  : 'text-bw-peach hover:bg-bw-burgundy/20 hover:text-bw-peach-light'
+                  ? 'bg-primary/8 text-primary-default border-l-2 border-primary'
+                  : 'text-bw-peach hover:bg-surface-dim hover:text-bw-peach-light'
               )}
             >
               <span className="text-base">{item.icon}</span>
@@ -79,7 +80,7 @@ export function Sidebar({ className, user }: SidebarProps) {
         })}
       </nav>
 
-      <Separator className="my-2 bg-bw-burgundy/40" />
+      <Separator className="my-2 bg-border" />
 
       <div className="px-3 py-2 space-y-1">
         <div className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach cursor-default">
@@ -106,7 +107,7 @@ export function Sidebar({ className, user }: SidebarProps) {
 
         <button
           onClick={handleSignOut}
-          className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach hover:bg-bw-burgundy/20 hover:text-error-default cursor-pointer transition-colors w-full"
+          className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach hover:bg-surface-dim hover:text-error-default cursor-pointer transition-colors w-full"
         >
           <span className="text-base">↗</span>
           <span>Sign Out</span>
