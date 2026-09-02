@@ -31,7 +31,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
                 stage.status === 'no_evidence' && 'text-yellow-400'
               )}
             >
-              <span className="w-4 flex-shrink-0 text-center">
+              <span className="w-4 shrink-0 text-center">
                 {stage.status === 'completed' && (
                   <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-green-500/20">
                     <span className="text-green-400 text-xs">✓</span>
@@ -80,7 +80,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
             </button>
             {!isLast && (
               <div className={cn(
-                'absolute left-[21px] top-[30px] w-px h-1',
+                'absolute left-5.25 top-7.5 w-px h-1',
                 stage.status === 'completed' ? 'bg-green-500/30' : 'bg-bw-burgundy/20'
               )} />
             )}

@@ -7,6 +7,7 @@ import { WelcomeToast } from '@/components/dashboard/WelcomeToast';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
 import { Analysis, AnalysisRecord } from '@/types';
 
 function recordToAnalysis(record: AnalysisRecord): Analysis {
@@ -57,6 +58,10 @@ export default async function DashboardPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (!user) {
+    redirect('/');
+  }
+
   const githubUser = user?.user_metadata
     ? {
         login: user.user_metadata.user_name || user.user_metadata.login || 'user',
@@ -69,6 +74,7 @@ export default async function DashboardPage() {
   let issuesAnalyzed = 0;
   let patchesGenerated = 0;
   let recentAnalyses: Analysis[] = [];
+  let tokenExpired = false;
 
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -82,10 +88,18 @@ export default async function DashboardPage() {
       if (response.ok) {
         const githubUserData = await response.json();
         repoCount = githubUserData.public_repos ?? '—';
+      } else if (response.status === 401) {
+        tokenExpired = true;
       }
+    } else {
+      tokenExpired = true;
     }
   } catch {
     // Keep default
+  }
+
+  if (tokenExpired) {
+    redirect('/');
   }
 
   if (user) {

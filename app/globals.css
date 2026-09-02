@@ -206,6 +206,41 @@
   --sidebar-border: rgba(41, 46, 51, 0.5);
   --sidebar-ring: #E45B57;
 
+  /* Tailwind @theme inline overrides for dark mode — fixes hover variants */
+  --color-bw-burgundy: #E45B57;
+  --color-bw-burgundy-dark: #C84A46;
+  --color-bw-wine: #F06A63;
+  --color-bw-terracotta: #D08070;
+  --color-bw-dusty-rose: #A7ADB4;
+  --color-bw-peach: #747B84;
+  --color-bw-peach-light: #F5F5F4;
+  --color-bw-cream: #0B0D0F;
+  --color-surface: #111416;
+  --color-surface-dim: #15191C;
+  --color-surface-bright: #0B0D0F;
+  --color-surface-container-lowest: #0F1113;
+  --color-surface-container-low: #0B0D0F;
+  --color-surface-container: #111416;
+  --color-surface-container-high: #181C20;
+  --color-surface-container-highest: #1D2226;
+  --color-on-surface: #F5F5F4;
+  --color-on-surface-variant: #A7ADB4;
+  --color-on-surface-muted: #747B84;
+  --color-on-light: #0B0D0F;
+  --color-on-light-muted: #1D2226;
+  --color-outline: #292E33;
+  --color-outline-variant: #1D2226;
+  --color-primary-default: #E45B57;
+  --color-on-primary: #FFFFFF;
+  --color-primary-container: #C84A46;
+  --color-on-primary-container: #FFF0EC;
+  --color-secondary-default: #A7ADB4;
+  --color-secondary-container: #1D2226;
+  --color-tertiary: #A7ADB4;
+  --color-tertiary-container: #1D2226;
+  --color-error-default: #E45B57;
+  --color-error-container: #2A1215;
+
   /* Brand color variables (dark) — premium dark surfaces */
   --bw-burgundy: #E45B57;
   --bw-burgundy-dark: #C84A46;
@@ -715,17 +750,6 @@
 /* ========================================
    DARK MODE — Inline style overrides
    ======================================== */
-/* HomepageHeader avatar button — inline background: #F0EBE6 is invisible in dark mode */
-.dark header button[style*="F0EBE6"],
-.dark header button[style*="f0ebe6"] {
-  background: rgba(255, 255, 255, 0.08) !important;
-}
-
-/* HomepageHeader dropdown — hardcoded borders in light colors */
-.dark header .absolute.right-0 {
-  background: rgba(14, 17, 20, 0.95) !important;
-  border-color: rgba(255, 255, 255, 0.08) !important;
-}
 
 /* ========================================
    DARK MODE — Logo SVG overrides
@@ -789,21 +813,16 @@
 /* ========================================
    DARK MODE — Landing page overlays
    ======================================== */
-/* Dot pattern — make subtle on dark background */
-.dark .dot-pattern-container {
-  color: rgba(160, 170, 180, 0.06) !important;
-}
-
 /* Hero paragraph — inline color: #625D58 is invisible in dark mode */
 .dark section p[style*="625D58"],
 .dark section p[style*="625d58"] {
-  color: #AAB2B8 !important;
+  color: #A9AFAC !important;
 }
 
 /* HomepageHeader — dark background + border */
 .dark header.bg-bw-surface\/60 {
   background: rgba(11, 13, 15, 0.88) !important;
-  border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
 }
 
 /* HomepageHeader avatar button — inline background: #F0EBE6 is invisible in dark mode */
@@ -812,15 +831,58 @@
   background: rgba(255, 255, 255, 0.08) !important;
 }
 
-/* HomepageHeader username — increase contrast */
+/* HomepageHeader username — muted but readable */
 .dark header .text-bw-dusty-rose {
-  color: #D6DADF !important;
+  color: #D4D8D5 !important;
 }
 
 /* HomepageHeader dropdown */
 .dark header .absolute.right-0 {
   background: rgba(14, 17, 20, 0.95) !important;
   border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Hero secondary button — visible text in dark mode */
+.dark section button[class*="border-border"][class*="text-bw-peach"] {
+  color: #B0B5B2 !important;
+}
+.dark section button[class*="border-border"][class*="text-bw-peach"]:hover {
+  color: #F3F4F2 !important;
+}
+
+/* Landing page dark background for dot-field depth */
+.dark .bg-page-landing {
+  background: #111312 !important;
+}
+
+/* ========================================
+   DARK MODE — Analysis page hover fixes
+   ======================================== */
+/* File tree rows — visible hover background in dark mode */
+.dark .group:hover {
+  color: #F3F4F2;
+}
+
+/* Repository/Issue selector items — hover feedback (analysis page only) */
+.dark main .hover\:bg-surface-dim:hover {
+  background-color: #1D2226 !important;
+}
+
+/* EvidencePanel re-run buttons — hover background */
+.dark .hover\:border-primary\/20:hover {
+  border-color: rgba(228, 91, 87, 0.35) !important;
+  background-color: rgba(24, 28, 32, 0.6);
+}
+
+/* ========================================
+   DARK MODE — Sidebar hover fix
+   ======================================== */
+.dark nav a:hover,
+.dark aside a:hover {
+  color: #F3F4F2 !important;
+}
+.dark aside button:hover {
+  color: #F3F4F2 !important;
 }
 
 /* ========================================
@@ -969,27 +1031,11 @@
 }
 
 /* ========================================
-   DOT PATTERN — Subtle texture overlay
-   ======================================== */
-.dot-pattern-container {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.dot-pattern-container svg {
-  width: 100%;
-  height: 100%;
-}
-
-/* ========================================
    LANDING PAGE — Radial gradient overlay
    ======================================== */
 .landing-radial-fade {
   background: radial-gradient(ellipse at center, rgba(250,248,245,0) 0%, rgba(250,248,245,0.6) 70%);
 }
 .dark .landing-radial-fade {
-  background: radial-gradient(ellipse at center, rgba(11,13,15,0) 0%, rgba(11,13,15,0.5) 70%);
+  background: radial-gradient(ellipse at center, rgba(17,19,18,0) 0%, rgba(17,19,18,0.5) 70%);
 }

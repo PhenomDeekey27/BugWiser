@@ -80,7 +80,7 @@ export function ProviderCard({ provider, onConnect, onDisconnect }: ProviderCard
             size="sm"
             onClick={handleDisconnect}
             disabled={busyDisconnect}
-            className="border-border text-bw-peach"
+            className="border-border cursor-pointer bg-slate-300 text-black"
           >
             {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
           </Button>
@@ -88,7 +88,7 @@ export function ProviderCard({ provider, onConnect, onDisconnect }: ProviderCard
       ) : authType === 'api_key' ? (
         <div className="space-y-2">
           {!showKey ? (
-            <Button size="sm" className="w-full btn-bw-primary font-medium" onClick={() => setShowKey(true)}>
+            <Button size="sm" className="w-full btn-bw-primary font-medium cursor-pointer" onClick={() => setShowKey(true)}>
               Connect
             </Button>
           ) : (

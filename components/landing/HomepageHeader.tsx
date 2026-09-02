@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { GitHubUser } from '@/types';
 import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
+import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import { toast } from 'sonner';
 
 interface HomepageHeaderProps {
@@ -44,7 +45,8 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
         <BugWiserLogo className="h-8 w-auto" />
       </Link>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
+        <ThemeToggle />
         {user ? (
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-bw-dusty-rose hidden sm:block">

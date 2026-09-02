@@ -6,11 +6,22 @@ import { AppShell } from '@/components/layout/AppShell';
 import { RepositorySelector } from '@/components/analysis/RepositorySelector';
 import { IssueSelector } from '@/components/analysis/IssueSelector';
 import { SelectedModelSummary } from '@/components/models/SelectedModelSummary';
+import { ModelPreflight } from '@/components/analysis/ModelPreflight';
 import { Button } from '@/components/ui/button';
 import { Repository, Issue, GitHubUser } from '@/types';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
 import type { CatalogModel, CatalogProvider, Preference } from '@/app/models/page';
+
+interface PreflightStrategy {
+  tier: string;
+  provider: string;
+  model: string;
+  isFree: boolean;
+  costLevel: string;
+  speed: string;
+  reason: string;
+}
 
 export default function NewAnalysisPage() {
   const router = useRouter();
@@ -25,6 +36,8 @@ export default function NewAnalysisPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
+  const [showPreflight, setShowPreflight] = useState(false);
+  const [selectedStrategy, setSelectedStrategy] = useState<PreflightStrategy | null>(null);
 
   const [providers, setProviders] = useState<CatalogProvider[]>([]);
   const [models, setModels] = useState<CatalogModel[]>([]);
@@ -163,6 +176,19 @@ export default function NewAnalysisPage() {
     const saved = await handleSaveModel();
     if (!saved) return;
 
+    // Show preflight model selection
+    setShowPreflight(true);
+  };
+
+  const handlePreflightSelect = async (strategy: PreflightStrategy) => {
+    setSelectedStrategy(strategy);
+    setShowPreflight(false);
+    await startAnalysisWithStrategy(strategy);
+  };
+
+  const startAnalysisWithStrategy = async (strategy: PreflightStrategy | null) => {
+    if (!selectedRepository || !selectedIssue) return;
+
     setStartingAnalysis(true);
 
     try {
@@ -172,6 +198,11 @@ export default function NewAnalysisPage() {
         body: JSON.stringify({
           repository: selectedRepository,
           issue: selectedIssue,
+          model_strategy: strategy ? {
+            tier: strategy.tier,
+            provider: strategy.provider,
+            model: strategy.model,
+          } : null,
         }),
       });
 
@@ -295,6 +326,20 @@ export default function NewAnalysisPage() {
                 onStart={handleStartAnalysis}
                 starting={startingAnalysis}
                 available={!!selectedRepository && !!selectedIssue}
+              />
+            </div>
+          </div>
+        )}
+
+        {showPreflight && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="w-full max-w-lg mx-4 p-6 rounded-xl bg-bw-surface border border-border shadow-2xl">
+              <ModelPreflight
+                onSelect={handlePreflightSelect}
+                onCancel={() => {
+                  setShowPreflight(false);
+                  setStartingAnalysis(false);
+                }}
               />
             </div>
           </div>
