@@ -2,6 +2,7 @@ import { Hero } from '@/components/landing/Hero';
 import { ProductPreview } from '@/components/landing/ProductPreview';
 import { FeatureSteps } from '@/components/landing/FeatureSteps';
 import { HomepageHeader } from '@/components/landing/HomepageHeader';
+import { SessionExpiryCheck } from '@/components/landing/SessionExpiryCheck';
 import DotField from '@/components/landing/DotField';
 import { createClient } from '@/lib/supabase/server';
 
@@ -19,6 +20,7 @@ export default async function Home() {
 
   return (
     <div className="min-h-screen bg-page-landing relative">
+      <SessionExpiryCheck />
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <DotField />
         <div className="absolute inset-0 landing-radial-fade" />

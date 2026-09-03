@@ -880,9 +880,40 @@
 .dark nav a:hover,
 .dark aside a:hover {
   color: #F3F4F2 !important;
+  background-color: rgba(41, 46, 51, 0.5) !important;
 }
 .dark aside button:hover {
   color: #F3F4F2 !important;
+  background-color: rgba(41, 46, 51, 0.5) !important;
+}
+.dark aside .text-bw-peach {
+  color: #9CA3A0 !important;
+}
+.dark aside .text-bw-peach-light {
+  color: #F3F4F2 !important;
+}
+
+/* ========================================
+   DARK MODE — Header dropdown hover fix
+   ======================================== */
+.dark header .absolute button:hover {
+  color: #F3F4F2 !important;
+  background-color: rgba(41, 46, 51, 0.5) !important;
+}
+.dark header .absolute .text-bw-peach {
+  color: #B0B5B2 !important;
+}
+.dark header .absolute .text-bw-peach:hover {
+  color: #F3F4F2 !important;
+}
+
+/* ========================================
+   LIGHT MODE — Header dropdown solid background
+   ======================================== */
+header .absolute.bg-bw-surface {
+  background: #FFFFFF !important;
+  border: 1px solid #E8E3DE !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08) !important;
 }
 
 /* ========================================

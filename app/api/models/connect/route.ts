@@ -53,6 +53,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: result.error || 'Failed to save connection' }, { status: 500 });
     }
 
+    // Trigger model catalog refresh in background (fire-and-forget)
+    import('@/lib/ai/model-intelligence').then((m) =>
+      m.getOrBuildCatalog(user.id, true).catch((err) =>
+        console.warn('[connect] Catalog refresh failed:', err)
+      )
+    );
+
     return NextResponse.json({
       ok: true,
       provider,

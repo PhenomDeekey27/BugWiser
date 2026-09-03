@@ -45,9 +45,9 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     connectedAt: null,
     envVar: 'OPENCODE_ZEN_API_KEY',
     serverConfigured: false,
-    description: 'Free-tier model gateway for developer workflows.',
+    description: 'AI model gateway with free and paid tiers.',
     docsUrl: 'https://opencode.ai',
-    exposesCatalogApi: false,
+    exposesCatalogApi: true,
   },
   {
     providerId: 'openai',

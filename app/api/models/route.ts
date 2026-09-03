@@ -1,19 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getModelCatalog } from '@/lib/ai/catalog';
-import { fetchLiveModels } from '@/lib/ai/catalog/live';
-import { computeOverallFit, fitForStage } from '@/lib/ai/catalog/scoring';
-import { getProviderConnections, isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
+import { getOrBuildCatalog } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
-import type { AnalysisStageKey, ProviderName } from '@/lib/ai/catalog/types';
-
-const STAGE_LABELS: Array<{ key: AnalysisStageKey; label: string }> = [
-  { key: 'relevant_file_discovery', label: 'Relevant File Discovery' },
-  { key: 'root_cause_analysis', label: 'Root Cause Analysis' },
-  { key: 'evidence_extraction', label: 'Evidence Extraction' },
-  { key: 'solution_generation', label: 'Solution Generation' },
-  { key: 'patch_generation', label: 'Patch Generation' },
-];
+import { isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
+import type { ProviderName } from '@/lib/ai/model-catalog/types';
+import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
 
 export async function GET() {
   try {
@@ -23,43 +14,55 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const base = getModelCatalog();
-    const connected = await getProviderConnections(user.id);
+    // Read from stored model intelligence catalog
+    const catalog = await getOrBuildCatalog(user.id);
     const preference = await getModelPreference(user.id);
 
-    // Merge live catalogs (best-effort) for providers with configured keys.
-    const liveByProvider = await fetchLiveModels(user.id);
-    const mergedModels = [...base.models];
-    for (const group of liveByProvider) {
-      for (const live of group.models) {
-        const existingIdx = mergedModels.findIndex(
-          (m) => m.providerId === group.providerId && m.modelId === live.modelId
-        );
-        if (existingIdx >= 0) {
-          mergedModels[existingIdx] = live;
-        } else {
-          mergedModels.push(live);
-        }
-      }
-    }
-
-    // Augment providers with connection status. serverConfigured means the app
-    // has a key via env; otherwise it's a user-supplied BYOK connection.
-    const providers = base.providers.map((p) => ({
-      ...p,
-      status: connected[p.providerId as ProviderName] ? 'connected' : 'disconnected',
-      serverConfigured: isProviderConfiguredBysEnv(p.providerId as ProviderName),
+    // Build provider list from definitions + catalog connection state
+    const connectedProviders = new Set(catalog.models.map((m) => m.provider));
+    const providers = PROVIDER_DEFINITIONS.map((def) => ({
+      providerId: def.providerId,
+      displayName: def.displayName,
+      authType: def.authType,
+      status: connectedProviders.has(def.providerId as ProviderName) ? 'connected' : 'disconnected',
+      serverConfigured: isProviderConfiguredBysEnv(def.providerId as ProviderName),
+      connected: connectedProviders.has(def.providerId as ProviderName),
+      modelCount: catalog.models.filter((m) => m.provider === def.providerId).length,
+      hasFreeModels: catalog.models.some((m) => m.provider === def.providerId && m.isFree),
+      hasPaidModels: catalog.models.some((m) => m.provider === def.providerId && !m.isFree),
+      description: def.description,
+      docsUrl: def.docsUrl,
     }));
 
-    const models = mergedModels.map((m) => ({
-      ...m,
-      fit: computeOverallFit(m),
-      stageFit: STAGE_LABELS.reduce((acc, s) => {
-        acc[s.key] = fitForStage(m, s.key);
-        return acc;
-      }, {} as Record<string, number>),
-      // A model is selectable only when the provider has valid credentials.
-      available: !!connected[m.providerId as ProviderName],
+    // Models with availability flag (available if their provider has models in catalog)
+    const models = catalog.models.map((m) => ({
+      providerId: m.provider,
+      modelId: m.modelId,
+      displayName: m.displayName,
+      contextWindow: m.contextWindow,
+      maxOutputTokens: m.maxOutputTokens,
+      price: { input: m.inputPrice, output: m.outputPrice, isFree: m.isFree },
+      supportsReasoning: m.supportsReasoning,
+      supportsToolCalling: m.supportsToolCalling,
+      supportsStructuredOutput: m.supportsStructuredOutput,
+      capabilities: [
+        ...(m.supportsCoding ? ['coding'] : []),
+        ...(m.supportsReasoning ? ['reasoning'] : []),
+        ...(m.supportsVision ? ['vision'] : []),
+        ...(m.supportsToolCalling ? ['tool_calling'] : []),
+        ...(m.supportsStructuredOutput ? ['structured_output'] : []),
+      ],
+      availability: m.availability,
+      scores: {
+        coding: Math.round(m.codingScore / 20),
+        reasoning: Math.round(m.reasoningScore / 20),
+        speed: Math.round(m.speedScore / 20),
+        longContext: Math.round(m.longContextScore / 20),
+      },
+      tags: m.recommendedCategories,
+      fit: m.overallScore,
+      stageFit: {} as Record<string, number>,
+      available: true,
     }));
 
     return NextResponse.json({ providers, models, preference });

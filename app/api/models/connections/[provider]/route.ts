@@ -16,6 +16,14 @@ export async function DELETE(
     }
 
     await removeUserConnection(user.id, provider as ProviderName);
+
+    // Trigger model catalog refresh in background (fire-and-forget)
+    import('@/lib/ai/model-intelligence').then((m) =>
+      m.getOrBuildCatalog(user.id, true).catch((err) =>
+        console.warn('[disconnect] Catalog refresh failed:', err)
+      )
+    );
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     const err = error as Error;
