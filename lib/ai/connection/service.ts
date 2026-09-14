@@ -99,12 +99,22 @@ export async function getProviderConnections(userId: string): Promise<Record<Pro
 
 export async function resolveUserCredentials(userId: string): Promise<Partial<Record<ProviderName, string>>> {
   const cached = credentialCache.get(userId);
-  if (cached) return cached;
+  if (cached) {
+    console.log('[provider-conn] CACHE HIT for user:', userId);
+    return cached;
+  }
+  console.log('[provider-conn] CACHE MISS for user:', userId);
+  console.log('[provider-conn] Resolving credentials for user:', userId);
 
   const resolved: Partial<Record<ProviderName, string>> = {};
   for (const p of PROVIDER_NAMES) {
     const env = envKeyForProvider(p);
-    if (env) resolved[p] = env;
+    if (env) {
+      console.log('[provider-conn] ENV key found for', p, 'from', ENV_VAR_BY_PROVIDER[p], '=', env.length, 'chars');
+      resolved[p] = env;
+    } else {
+      console.log('[provider-conn] No ENV key for', p, 'from', ENV_VAR_BY_PROVIDER[p]);
+    }
   }
 
   try {
@@ -118,14 +128,22 @@ export async function resolveUserCredentials(userId: string): Promise<Partial<Re
       console.warn('[provider-conn] resolve creds error:', error.message);
     }
     for (const row of (data || []) as ConnectionRow[]) {
-      if (!row.encrypted_api_key) continue;
+      if (!row.encrypted_api_key) {
+        console.log('[provider-conn] DB row for', row.provider, 'has NULL encrypted_api_key');
+        continue;
+      }
       const provider = row.provider as ProviderName;
-      if (!resolved[provider]) {
-        try {
-          resolved[provider] = decryptSecret(row.encrypted_api_key);
-        } catch (e) {
-          console.warn(`[provider-conn] Failed to decrypt key for ${provider}:`, e);
-        }
+      if (resolved[provider]) {
+        console.log('[provider-conn] Skipping DB key for', provider, 'since ENV key already set');
+        continue;
+      }
+      console.log('[provider-conn] DB row for', provider, 'has encrypted_api_key present');
+      try {
+        const decrypted = decryptSecret(row.encrypted_api_key);
+        console.log('[provider-conn] Decrypted key for', provider, 'length:', decrypted.length);
+        resolved[provider] = decrypted;
+      } catch (e) {
+        console.warn(`[provider-conn] Failed to decrypt key for ${provider}:`, e);
       }
     }
   } catch (err) {
@@ -133,6 +151,7 @@ export async function resolveUserCredentials(userId: string): Promise<Partial<Re
   }
 
   credentialCache.set(userId, resolved);
+  console.log('[provider-conn] Resolved credentials for', userId, Object.keys(resolved).length, 'providers');
   return resolved;
 }
 

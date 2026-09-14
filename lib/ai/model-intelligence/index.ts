@@ -55,12 +55,14 @@ export function buildProviderFingerprint(connected: Record<ProviderName, boolean
 async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   const connected = await getProviderConnections(userId);
   const connectedIds = (Object.keys(connected) as ProviderName[]).filter((p) => connected[p]);
+  console.log('[model-intelligence] getProviderConnections returned:', connected);
   if (connectedIds.length === 0) {
     console.log('[model-intelligence] No connected providers');
     return [];
   }
   console.log('[model-intelligence] Connected providers:', connectedIds);
 
+  console.log('[model-intelligence] STATIC_MODEL_REGISTRY count:', STATIC_MODEL_REGISTRY.length);
   const staticModels: NormalizedModel[] = STATIC_MODEL_REGISTRY
     .filter((m) => connectedIds.includes(m.providerId as ProviderName))
     .map((m) => ({
@@ -81,13 +83,18 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
       source: 'registry' as const,
       registryScores: m.scores,
     }));
-
+  console.log('[model-intelligence] Static models after filtering:', staticModels.length);
   let liveModels: NormalizedModel[] = [];
   try {
     const liveByProvider = await fetchLiveModels(userId);
-    console.log('[model-intelligence] Live providers:', liveByProvider.map((g) => g.providerId + '(' + g.models.length + ')'));
+    console.log('[model-intelligence] Live providers response:', liveByProvider.map((g) => g.providerId + '(' + g.models.length + ')'));
+    console.log('[model-intelligence] Live models count:', liveModels.length);
     for (const group of liveByProvider) {
-      if (!connectedIds.includes(group.providerId)) continue;
+      if (!connectedIds.includes(group.providerId)) {
+        console.log('[model-intelligence] Skipping live group provider', group.providerId, 'not in connectedIds');
+        continue;
+      }
+      console.log('[model-intelligence] Processing live models for provider', group.providerId, 'count:', group.models.length);
       for (const m of group.models) {
         const staticEntry = STATIC_MODEL_REGISTRY.find((s) => s.providerId === group.providerId && s.modelId === m.modelId);
         liveModels.push({
@@ -114,6 +121,7 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
     console.warn('[model-intelligence] Live fetch failed:', err);
   }
 
+  console.log('[model-intelligence] Merging static (', staticModels.length, ') with live (', liveModels.length, ') models');
   const merged = new Map<string, NormalizedModel>();
   for (const m of staticModels) merged.set(m.provider + ':' + m.modelId, m);
   for (const m of liveModels) {

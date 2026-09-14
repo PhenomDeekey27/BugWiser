@@ -198,6 +198,7 @@ export default function InvestigationPage() {
         issue_title: storedContext?.issue?.title || '',
         status: 'queued',
         current_stage: 'issue_context',
+        model_strategy: 'auto',
         error_message: null,
         total_files: 0,
         filtered_files: 0,

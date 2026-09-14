@@ -9,6 +9,7 @@ interface ModelCardProps {
   providerName: string;
   isSelected: boolean;
   disabled?: boolean;
+  rank?: number;
   onSelect: () => void;
   compareChecked?: boolean;
   onToggleCompare?: () => void;
@@ -44,7 +45,7 @@ function badgeForTag(tag: string): { label: string; variant: 'default' | 'second
 }
 
 const CAPABILITY_ICONS: Record<string, string> = {
-  coding: 'Best coding',
+  coding: 'Coding',
   reasoning: 'Reasoning',
   fast: 'Fast',
   long_context: 'Long context',
@@ -52,11 +53,40 @@ const CAPABILITY_ICONS: Record<string, string> = {
   structured_output: 'Structured output',
 };
 
+function ValueIndicator({ model }: { model: CatalogModel }) {
+  if (model.price.isFree) {
+    return (
+      <div className="flex items-center gap-1 text-xs">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />
+        <span className="text-green-400 font-medium">Free</span>
+      </div>
+    );
+  }
+  if (model.price.input != null && model.price.input < 0.3) {
+    return (
+      <div className="flex items-center gap-1 text-xs">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-bw-terracotta" />
+        <span className="text-bw-terracotta font-medium">Low cost</span>
+      </div>
+    );
+  }
+  if (model.price.input != null && model.price.input < 1) {
+    return (
+      <div className="flex items-center gap-1 text-xs">
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-bw-peach" />
+        <span className="text-bw-peach font-medium">Moderate</span>
+      </div>
+    );
+  }
+  return null;
+}
+
 export function ModelCard({
   model,
   providerName,
   isSelected,
   disabled,
+  rank,
   onSelect,
   compareChecked,
   onToggleCompare,
@@ -71,7 +101,18 @@ export function ModelCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="font-medium text-bw-peach-light truncate">{model.displayName}</h3>
+          <div className="flex items-center gap-2">
+            {rank != null && rank <= 3 && (
+              <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold ${
+                rank === 1 ? 'bg-bw-burgundy text-white' :
+                rank === 2 ? 'bg-bw-terracotta text-white' :
+                'bg-outline text-bw-peach-light'
+              }`}>
+                {rank}
+              </span>
+            )}
+            <h3 className="font-medium text-bw-peach-light truncate">{model.displayName}</h3>
+          </div>
           <p className="text-xs text-bw-peach font-mono truncate">{model.modelId}</p>
           <p className="text-xs text-bw-peach mt-0.5">{providerName}</p>
         </div>
@@ -91,7 +132,7 @@ export function ModelCard({
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-bw-peach">
         <span className="font-mono">{formatContext(model.contextWindow)} context</span>
-        {(model.capabilities || []).slice(0, 4).map((c) => CAPABILITY_ICONS[c] || c).filter(Boolean).map((c) => (
+        {(model.capabilities || []).slice(0, 3).map((c) => CAPABILITY_ICONS[c] || c).filter(Boolean).map((c) => (
           <span key={c}>{c}</span>
         ))}
       </div>
@@ -103,6 +144,7 @@ export function ModelCard({
         <span>
           Output: <span className="font-mono text-bw-peach-light">{formatPrice(model.price.output)}/1M</span>
         </span>
+        <ValueIndicator model={model} />
       </div>
 
       <div className="flex-1" />

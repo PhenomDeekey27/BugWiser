@@ -5,6 +5,11 @@ import {
   isProviderConfigured,
 } from '../providers/registry';
 import { selectModelsForTask, getTestFailProvider, TaskModelEntry, getModelById } from '../config';
+import {
+  buildStageAssignments,
+  StrategyMode,
+  StageAssignment,
+} from '../strategy-selection';
 
 export interface RunRequest {
   task: string;
@@ -23,6 +28,23 @@ export interface RunRequest {
    * but this model is never silently swapped for a higher-scoring one.
    */
   manualModel?: { provider: ProviderName; model: string } | null;
+  /**
+   * Optional per-stage model override from user preferences.
+   * If present, this model is placed FIRST for this stage's fallback chain,
+   * then the auto-ranked models are used as fallback.
+   */
+  stageOverrides?: { provider: ProviderName; model: string } | null;
+  /**
+   * Strategy mode: 'auto', 'free', 'free_paid', 'fully_paid', or 'custom'.
+   * Controls the per-stage model selection policy.
+   *
+   * - auto: per-stage optimal selection (default, auto-resolves to 'custom' with stageOverrides)
+   * - free: every stage uses the best FREE model per-stage.
+   * - free_paid: file discovery & evidence → FREE, analysis & generation → PAID.
+   * - fully_paid: every stage uses the best PAID model per-stage.
+   * - custom: inherits auto strategy, with optional stage_overrides.
+   */
+  strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -182,7 +204,6 @@ function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
 export async function runWithFallback(request: RunRequest): Promise<RunResponse> {
   const estimatedTokens = estimateTokensFromMessages(request.messages);
   const availableProviders = buildAvailableProviders(request);
-  const chain: TaskModelEntry[] = [];
 
   const autoChain = selectModelsForTask(
     request.task,
@@ -191,16 +212,36 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
     availableProviders
   );
 
-  // Manual mode: the user's selected model is always tried first.
+  const stageOverride = request.stageOverrides;
   const manual = request.manualModel;
   const manualEntry = manual
     ? { provider: manual.provider, model: manual.model }
     : null;
+  const overrideEntry = stageOverride
+    ? { provider: stageOverride.provider, model: stageOverride.model }
+    : null;
 
-  if (manualEntry) {
+  const strategy = request.strategy;
+
+  // Strategy-based fallback chain
+  const stageAssignments = buildStageAssignments(
+    strategy || 'auto',
+    availableProviders
+  );
+
+  const chain: TaskModelEntry[] = [];
+
+  // Build chain: stage override > manual model > strategy-chain (deduplicated)
+  if (overrideEntry) {
+    chain.push(overrideEntry);
+    for (const candidate of autoChain) {
+      if (candidate.provider === overrideEntry.provider && candidate.model === overrideEntry.model) {
+        continue;
+      }
+      chain.push(candidate);
+    }
+  } else if (manualEntry) {
     chain.push(manualEntry);
-    // Then the remaining task-ranked chain (as fallback candidates), without
-    // duplicating the manual model.
     for (const candidate of autoChain) {
       if (candidate.provider === manualEntry.provider && candidate.model === manualEntry.model) {
         continue;
@@ -208,7 +249,34 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
       chain.push(candidate);
     }
   } else {
-    chain.push(...autoChain);
+    // Strategy-based fallback chain
+    const stageMap = new Map<string, { provider: ProviderName; model: string }>();
+    for (const assignment of stageAssignments) {
+      stageMap.set(assignment.task, {
+        provider: assignment.provider,
+        model: assignment.model,
+      });
+    }
+
+    for (const assignment of stageAssignments) {
+      if (assignment.task === request.task) {
+        chain.push({
+          provider: assignment.provider,
+          model: assignment.model,
+        });
+      }
+    }
+
+    // Then the remaining auto-chain (as fallback candidates), without
+    // duplicating any models already in the chain.
+    const chainModels = new Set(chain.map(c => `${c.provider}/${c.model}`));
+    for (const candidate of autoChain) {
+      const key = `${candidate.provider}/${candidate.model}`;
+      if (!chainModels.has(key)) {
+        chain.push(candidate);
+        chainModels.add(key);
+      }
+    }
   }
 
   const attempted: RunResponse['attemptedProviders'] = [];
@@ -217,7 +285,7 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
   let lastError = new Error('All providers in fallback chain failed');
 
   console.log(
-    `[model-router] Task: ${request.task} | mode: ${manualEntry ? 'manual' : 'auto'} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
+    `[model-router] Task: ${request.task} | strategy: ${strategy || 'auto'} | manual: ${manualEntry ? 'yes' : 'no'} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
   );
 
   for (const entry of chain) {
@@ -236,7 +304,7 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
 
     try {
       console.log(
-        `[model-router] Attempt ${fallbackCount + 1}: ${modelId} for task: ${request.task}${manualEntry ? ` [manual primary]` : ''}`
+        `[model-router] Attempt ${fallbackCount + 1}: ${modelId} for task: ${request.task}${manualEntry ? ' [manual primary]' : ''}`
       );
 
       const completion = await provider.generate({

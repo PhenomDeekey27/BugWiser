@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getOrBuildCatalog } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
-import { isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
+import { getProviderConnections, isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
 import type { ProviderName } from '@/lib/ai/model-catalog/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
 
@@ -14,27 +14,54 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    // Read from stored model intelligence catalog
-    const catalog = await getOrBuildCatalog(user.id);
-    const preference = await getModelPreference(user.id);
+    const [catalog, preference, connections] = await Promise.all([
+      getOrBuildCatalog(user.id),
+      getModelPreference(user.id),
+      getProviderConnections(user.id),
+    ]);
 
-    // Build provider list from definitions + catalog connection state
-    const connectedProviders = new Set(catalog.models.map((m) => m.provider));
-    const providers = PROVIDER_DEFINITIONS.map((def) => ({
-      providerId: def.providerId,
-      displayName: def.displayName,
-      authType: def.authType,
-      status: connectedProviders.has(def.providerId as ProviderName) ? 'connected' : 'disconnected',
-      serverConfigured: isProviderConfiguredBysEnv(def.providerId as ProviderName),
-      connected: connectedProviders.has(def.providerId as ProviderName),
-      modelCount: catalog.models.filter((m) => m.provider === def.providerId).length,
-      hasFreeModels: catalog.models.some((m) => m.provider === def.providerId && m.isFree),
-      hasPaidModels: catalog.models.some((m) => m.provider === def.providerId && !m.isFree),
-      description: def.description,
-      docsUrl: def.docsUrl,
-    }));
+    const connectedIds = new Set(
+      (Object.keys(connections) as ProviderName[]).filter((p) => connections[p])
+    );
 
-    // Models with availability flag (available if their provider has models in catalog)
+    const providers = PROVIDER_DEFINITIONS
+      .filter((def) => connectedIds.has(def.providerId as ProviderName))
+      .map((def) => {
+        const pid = def.providerId as ProviderName;
+        const providerModels = catalog.models.filter((m) => m.provider === pid);
+        return {
+          providerId: pid,
+          displayName: def.displayName,
+          authType: def.authType,
+          status: 'connected' as const,
+          serverConfigured: isProviderConfiguredBysEnv(pid),
+          connected: true,
+          modelCount: providerModels.length,
+          hasFreeModels: providerModels.some((m) => m.isFree),
+          hasPaidModels: providerModels.some((m) => !m.isFree),
+          description: def.description,
+          docsUrl: def.docsUrl,
+        };
+      });
+
+    const disconnectedProviders = PROVIDER_DEFINITIONS
+      .filter((def) => !connectedIds.has(def.providerId as ProviderName))
+      .map((def) => ({
+        providerId: def.providerId,
+        displayName: def.displayName,
+        authType: def.authType,
+        status: 'disconnected' as const,
+        serverConfigured: isProviderConfiguredBysEnv(def.providerId as ProviderName),
+        connected: false,
+        modelCount: 0,
+        hasFreeModels: false,
+        hasPaidModels: false,
+        description: def.description,
+        docsUrl: def.docsUrl,
+      }));
+
+    const allProviders = [...providers, ...disconnectedProviders];
+
     const models = catalog.models.map((m) => ({
       providerId: m.provider,
       modelId: m.modelId,
@@ -54,18 +81,26 @@ export async function GET() {
       ],
       availability: m.availability,
       scores: {
-        coding: Math.round(m.codingScore / 20),
-        reasoning: Math.round(m.reasoningScore / 20),
-        speed: Math.round(m.speedScore / 20),
-        longContext: Math.round(m.longContextScore / 20),
+        coding: m.codingScore,
+        reasoning: m.reasoningScore,
+        speed: m.speedScore,
+        longContext: m.longContextScore,
       },
+      valueScore: m.valueScore,
       tags: m.recommendedCategories,
       fit: m.overallScore,
       stageFit: {} as Record<string, number>,
       available: true,
     }));
 
-    return NextResponse.json({ providers, models, preference });
+    return NextResponse.json({
+      providers: allProviders,
+      models,
+      preference,
+      classifiedByAi: catalog.classifiedByAi,
+      classificationModel: catalog.classificationModel,
+      analyzedAt: catalog.analyzedAt,
+    });
   } catch (error) {
     const err = error as Error;
     console.error('[api/models] Error:', err.message);

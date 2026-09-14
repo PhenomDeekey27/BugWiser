@@ -32,14 +32,18 @@ export async function resolveAnalysisRouting(userId: string): Promise<ResolvedRo
     Object.entries(credentials).filter(([, v]) => !!v)
   ) as Partial<Record<ProviderName, string>>;
 
+  // Build stage overrides from user preferences
+  const modeKey = preference.selection_mode === 'manual' ? 'manual' : 'auto';
+  const stageOverrides: { provider: ProviderName | null; model: string | null } | null | undefined = (preference.stage_overrides as Record<string, { provider: ProviderName | null; model: string | null }>)[modeKey] ?? null;
+
   if (preference.selection_mode === 'manual' && preference.provider && preference.model) {
     if (!credentials[preference.provider]) {
       return {
         runArgs: { providerTokens },
         selection: {
           mode: 'manual',
-          provider: preference.provider,
-          model: preference.model,
+          provider: null as ProviderName | null,
+          model: null as string | null,
           reason: `Model selected but provider "${preference.provider}" is not connected. No fallback to a different model.`,
         },
       };
@@ -47,11 +51,11 @@ export async function resolveAnalysisRouting(userId: string): Promise<ResolvedRo
     return {
       runArgs: {
         providerTokens,
-        manualModel: { provider: preference.provider, model: preference.model },
+        manualModel: { provider: preference.provider as ProviderName, model: preference.model },
       },
       selection: {
         mode: 'manual',
-        provider: preference.provider,
+        provider: preference.provider as ProviderName,
         model: preference.model,
         reason: 'Manual mode: user-selected model used for all AI stages.',
       },

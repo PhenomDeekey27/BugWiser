@@ -251,6 +251,13 @@ export interface AnalysisModelSelection {
   >;
 }
 
+export type AnalysisModelStrategy =
+  | 'auto'
+  | 'free'
+  | 'free_paid'
+  | 'fully_paid'
+  | 'custom';
+
 export interface AnalysisRecord {
   id: string;
   user_id: string;
@@ -290,6 +297,8 @@ export interface AnalysisRecord {
     | 'solution_generation'
     | 'patch_generation'
     | 'completed';
+  model_strategy: AnalysisModelStrategy | null;
+
   error_message: string | null;
   total_files: number;
   filtered_files: number;

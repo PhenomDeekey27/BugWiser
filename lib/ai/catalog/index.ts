@@ -1,9 +1,5 @@
-import { ModelCatalog, ModelDefinition, ProviderName, ModelAvailability } from './types';
+import { ModelDefinition, ModelCatalog, ProviderName, ModelAvailability } from './types';
 import { PROVIDER_DEFINITIONS, STATIC_MODEL_REGISTRY, findStaticModel } from './registry';
-
-// Aggregates the model catalog from the static registry plus any live catalog
-// sources (OpenRouter, Chutes /models). The UI never sees provider-specific
-// response shapes.
 
 function toNumber(v: unknown, fallback: number | null): number | null {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : Number(v);
@@ -22,30 +18,6 @@ function availabilityOf(model: ModelDefinition): ModelAvailability {
   return model.availability;
 }
 
-function mergeLiveIntoStatic(
-  staticModel: ModelDefinition | undefined,
-  live: Record<string, unknown>
-): ModelDefinition | undefined {
-  if (!staticModel) return undefined;
-  const rawContext = live.context_length;
-  const contextLength = typeof rawContext === 'number' && Number.isFinite(rawContext)
-    ? rawContext
-    : staticModel.contextWindow;
-  const maxOutput = toNumber(
-    live.maxOutputTokens ?? (live.top_provider as Record<string, unknown> | undefined)?.max_completion_tokens,
-    staticModel.maxOutputTokens
-  );
-  return {
-    ...staticModel,
-    contextWindow: contextLength,
-    maxOutputTokens: maxOutput,
-    availability: 'available',
-    source: 'live',
-    tags: staticModel.tags ? [...new Set([...staticModel.tags, 'live'])] : ['live'],
-    price: staticModel.price,
-  };
-}
-
 export function getModelCatalog(): ModelCatalog {
   // For now the catalog is entirely registry-based (server authoritative).
   // Live OpenRouter/Chutes enrichment is applied server-side in the API layer.
@@ -59,6 +31,8 @@ export function getModelCatalog(): ModelCatalog {
     models,
   };
 }
+
+export const MODEL_REGISTRY: ModelDefinition[] = STATIC_MODEL_REGISTRY;
 
 export { PROVIDER_DEFINITIONS, STATIC_MODEL_REGISTRY, findStaticModel };
 export type { ProviderName, ModelAvailability };
@@ -78,4 +52,4 @@ export function findModel(catalog: ModelCatalog, providerId: string, modelId: st
   );
 }
 
-export { mergeLiveIntoStatic };
+export type { ModelDefinition, ModelCatalog };

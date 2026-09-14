@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { createBackgroundClient } from '@/lib/supabase/background';
 import { Repository, Issue } from '@/types';
 
 export async function POST(request: Request) {
@@ -42,7 +43,17 @@ export async function POST(request: Request) {
 
     const [owner, repo] = repository.fullName.split('/');
 
-    const { data: analysis, error: insertError } = await supabase
+    // Get user's preferred strategy from model preferences
+    const { data: preference, error: prefError } = await createBackgroundClient()
+      .from('user_model_preferences')
+      .select('selected_strategy')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const modelStrategy = preference?.selected_strategy || 'auto';
+
+    // Insert the analysis record
+    const insertResult = await createBackgroundClient()
       .from('analyses')
       .insert({
         user_id: user.id,
@@ -54,14 +65,30 @@ export async function POST(request: Request) {
         issue_title: issue.title,
         status: 'queued',
         current_stage: 'issue_context',
-      })
-      .select('id')
+        model_strategy: modelStrategy,
+      });
+
+    if ((insertResult as any)?.error) {
+      console.error('[api/analyses] Insert error:', (insertResult as any).error.message);
+      return NextResponse.json(
+        { error: 'Failed to create analysis: ' + ((insertResult as any).error?.message || 'Unknown error') },
+        { status: 500 }
+      );
+    }
+
+    const insertedId = insertResult as any;
+    
+    // Get the full record from the inserted ID
+    const { data: analysis, error: fetchError } = await createBackgroundClient()
+      .from('analyses')
+      .select('*')
+      .eq('id', insertedId[0].id)
       .single();
 
-    if (insertError) {
-      console.error('[api/analyses] Insert error:', insertError.message);
+    if (fetchError) {
+      console.error('[api/analyses] Fetch analysis error:', fetchError.message);
       return NextResponse.json(
-        { error: 'Failed to create analysis: ' + insertError.message },
+        { error: 'Failed to fetch analysis after creation: ' + fetchError.message },
         { status: 500 }
       );
     }

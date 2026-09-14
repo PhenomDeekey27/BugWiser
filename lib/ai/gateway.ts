@@ -49,6 +49,15 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
   const userId = params.userId || (await getAnalysisUserId(params.analysisId));
   const routing = await resolveAnalysisRouting(userId);
 
+  // Get the model strategy from the analysis row
+  const analysisId = params.analysisId;
+  const { data: analysis } = await createBackgroundClient()
+    .from('analyses')
+    .select('model_strategy')
+    .eq('id', analysisId)
+    .single();
+  const strategyMode = (analysis?.model_strategy || 'auto') as 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'auto';
+
   const routed: RunResponse = await runWithFallback({
     task: params.task,
     messages: params.messages,
@@ -57,6 +66,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     responseFormat: params.responseFormat,
     providerTokens: routing.runArgs.providerTokens,
     manualModel: routing.runArgs.manualModel,
+    strategy: strategyMode,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on
