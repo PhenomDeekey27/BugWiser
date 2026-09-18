@@ -52,8 +52,10 @@ export async function GET() {
   const selectionMode = preference.selection_mode || 'auto';
   // Handle 'manual' mode by converting to 'auto' for strategy selection
   const strategyMode = selectionMode === 'manual' ? 'auto' : selectionMode;
+  // For preset mode, use auto as fallback for API (presets are client-side)
+  const apiStrategyMode = selectionMode === 'preset' ? 'auto' : strategyMode;
   // Build stage assignments - filter out undefined/null overrides
-  const stageAssignments = buildStageAssignments(strategyMode, availableProviders, preference.stage_overrides as any);
+  const stageAssignments = buildStageAssignments(apiStrategyMode, availableProviders, preference.stage_overrides as any);
 
   // Transform stage assignments to strategy page format
   const stages = AI_STAGES.map((task) => {

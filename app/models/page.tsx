@@ -6,8 +6,10 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { RefreshCwIcon, ShieldCheckIcon } from 'lucide-react';
+import { RefreshCwIcon, ShieldCheckIcon, Settings2Icon } from 'lucide-react';
 import type { GitHubUser } from '@/types';
+import { ALL_PRESETS, type PresetDefinition } from '@/lib/ai/presets';
+import type { AnalysisTask } from '@/lib/ai/config';
 
 const STRATEGY_TITLES = {
   free: { title: '🆓 Fully Free', subtitle: 'Zero model cost', color: 'bg-green-500', border: 'border-green-500' },
@@ -46,8 +48,10 @@ export default function ModelsPage() {
   const [selectedStageModel, setSelectedStageModel] = useState<string>('');
   const [selectedStageReason, setSelectedStageReason] = useState<string>('');
   const [selectedStageCost, setSelectedStageCost] = useState<string>('');
+  const [selectedStagePriceInput, setSelectedStagePriceInput] = useState<number | null>(null);
   const [selectedStageIsOverride, setSelectedStageIsOverride] = useState<boolean>(false);
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [filter, setFilter] = useState<'free' | 'paid' | 'all' | undefined>();
   const [providerFilter, setProviderFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
@@ -79,7 +83,28 @@ export default function ModelsPage() {
       setPreference(pref);
       const strategy = pref.selected_strategy || 'free' as keyof typeof STRATEGY_TITLES;
       setSelectedStrategy(strategy as keyof typeof STRATEGY_TITLES);
-      loadStageModels(pref.stage_overrides || {});
+      const overrides = pref.stage_overrides || {};
+      // Check if a preset was selected (not auto/manual)
+      if ((pref.selection_mode as string) === 'preset' && pref.preset_id) {
+        const preset = ALL_PRESETS.find(p => p.id === pref.preset_id);
+        if (preset) {
+          const loaded: Partial<Record<AnalysisTask, StageModel>> = {};
+          STAGES.forEach((stage) => {
+            const presetAssignment = preset.assignments[stage.task];
+            loaded[stage.task] = {
+              stageId: stage.task,
+              label: stage.label,
+              selectedProvider: presetAssignment.provider || null,
+              selectedModel: presetAssignment.model || null,
+              isOverride: false,
+            };
+          });
+          setStageModels(loaded as Record<string, StageModel>);
+          setSelectedPreset(pref.preset_id);
+        }
+      } else {
+        loadStageModels(overrides);
+      }
     } else {
       setSelectedStrategy('free' as keyof typeof STRATEGY_TITLES);
       setStageModels({});
@@ -173,22 +198,19 @@ export default function ModelsPage() {
   const getStageCost = (stageModel: StageModel, model: CatalogModel): string => {
     if (!model) return 'Unknown';
     if (model.price.isFree) return 'Free';
-    const input = model.price.input ?? 0;
-    return `$${(input * 1000).toFixed(2)}`;
+    if (model.price.input === null || model.price.input === undefined) return 'Pricing unavailable';
+    return `$${model.price.input.toFixed(2)}`;
   };
 
-  const getStageCapability = (model: CatalogModel): string => {
-    if (!model) return 'Unknown';
-    const reasons: string[] = [];
-    if (model.supportsReasoning) reasons.push('reasoning');
-    if (model.supportsToolCalling) reasons.push('tools');
-    if (model.contextWindow >= 100000) reasons.push('large context');
-    if (model.scores.coding >= 3) reasons.push('strong coding');
-    if (model.scores.speed >= 3) reasons.push('fast');
-    return reasons.length > 0 ? reasons.join(', ') : 'general';
+  const isPresetModel = (stageId: string): boolean => {
+    if (!selectedPreset) return false;
+    const preset = ALL_PRESETS.find(p => p.id === selectedPreset);
+    if (!preset) return false;
+    const assignment = preset.assignments[stageId as AnalysisTask];
+    return !!assignment;
   };
 
-  const recommendedModels = useMemo(() => [...connectedModels].sort((a, b) => b.fit - a.fit).slice(0, 4), [connectedModels]);
+    const recommendedModels = useMemo(() => [...connectedModels].sort((a, b) => b.fit - a.fit).slice(0, 4), [connectedModels]);
   const freeModels = useMemo(() => [...connectedModels].filter((m) => m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedModels]);
   const paidModels = useMemo(() => [...connectedModels].filter((m) => !m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedModels]);
   const noProviders = connectedProviders.length === 0;
@@ -205,24 +227,33 @@ export default function ModelsPage() {
 
   const calculateTotalCost = (model: CatalogModel): number => {
     if (model.price.isFree) return 0;
-    return (model.price.input ?? 0) + (model.price.output ?? 0);
+    const input = model.price.input ?? 0;
+    const output = model.price.output ?? 0;
+    // If either input or output is unknown (null), we cannot calculate a meaningful cost
+    if (input === null || input === undefined || output === null || output === undefined) {
+      return -1; // Signal unknown cost
+    }
+    return input + output;
   };
 
   const estimateTotalCost = (): number => {
     let total = 0;
+    let hasUnknown = false;
     STAGES.forEach((stage) => {
       const sm = stageModels[stage.id];
       const model = getBestModelForStage(sm);
       if (model && !model.price.isFree) {
-        total += (model.price.input ?? 0) + (model.price.output ?? 0);
+        const input = model.price.input ?? 0;
+        const output = model.price.output ?? 0;
+        // Check if pricing is unknown
+        if (input === null || input === undefined || output === null || output === undefined) {
+          hasUnknown = true;
+        } else {
+          total += input + output;
+        }
       }
     });
-    return total;
-  };
-
-  const formatCost = (cost: number): string => {
-    if (cost === 0) return 'Free';
-    return `$${cost.toFixed(2)}`;
+    return hasUnknown ? -1 : total;
   };
 
   const handleApplyStageChange = (stageId: string, provider: string, model: string, reason: string, cost: string, isOverride: boolean) => {
@@ -235,9 +266,31 @@ export default function ModelsPage() {
       setSelectedStageModel(model || '');
       setSelectedStageReason(reason);
       setSelectedStageCost(cost);
+      setSelectedStagePriceInput(null);
       setSelectedStageIsOverride(isOverride);
     }
     setShowStageModal(null);
+  };
+
+  const applyPreset = (preset: PresetDefinition) => {
+    const loaded: Partial<Record<AnalysisTask, StageModel>> = {};
+    STAGES.forEach((stage) => {
+      const presetAssignment = preset.assignments[stage.task];
+      loaded[stage.task] = {
+        stageId: stage.task,
+        label: stage.label,
+        selectedProvider: presetAssignment.provider || null,
+        selectedModel: presetAssignment.model || null,
+        isOverride: false,
+      };
+    });
+    setStageModels(loaded as Record<string, StageModel>);
+    setSelectedPreset(preset.id);
+    // If a strategy is associated with the preset, update it
+    if (preset.id === 'efficient') setSelectedStrategy('free');
+    else if (preset.id === 'balanced') setSelectedStrategy('free-paid');
+    else if (preset.id === 'fast') setSelectedStrategy('free');
+    else if (preset.id === 'quality') setSelectedStrategy('fully_paid');
   };
 
   return (
@@ -285,13 +338,203 @@ export default function ModelsPage() {
             </section>
 
             <section>
+              <h2 className="text-2xl font-semibold text-bw-peach-light mb-6">BugWiser Recommended</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {ALL_PRESETS.map((preset) => {
+                  const isSelected = selectedPreset === preset.id;
+                  const strategy = selectedStrategy as keyof typeof STRATEGY_TITLES;
+                  const strategyTitle = STRATEGY_TITLES[strategy]?.title || 'Custom';
+                  return (
+                    <Card
+                      key={preset.id}
+                      className={`p-6 cursor-pointer transition-all duration-200 hover:scale-[1.02] border-2 ${isSelected ? `border-${STRATEGY_TITLES[strategy].border} bg-white/15` : 'border-bw-surface border-bw-surface/50 bg-bw-surface/50'}`}
+                      onClick={() => applyPreset(preset)}
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${preset.id === 'efficient' ? 'bg-green-500/20' : preset.id === 'balanced' ? 'bg-orange-500/20' : preset.id === 'fast' ? 'bg-blue-500/20' : 'bg-purple-500/20'}`}>
+                          <span className="text-xl font-bold">{preset.name[0]}</span>
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="text-lg font-semibold text-bw-peach-light">{preset.name}</h3>
+                          <p className="text-sm text-bw-peach mt-1">{preset.description}</p>
+                          <Separator className="my-4" />
+                          <div className="text-xs text-bw-peach">
+                            <span className="text-bw-peach-light">Strategy:</span>
+                            <span className="ml-2 font-medium">{strategyTitle}</span>
+                          </div>
+                          <div className="text-xs text-bw-peach/70 mt-2">
+                            <span className="text-bw-peach-light">Stages:</span>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {STAGES.slice(0, 2).map((stage) => (
+                                <span key={stage.id} className="text-xs bg-bw-surface/50 px-2 py-0.5 rounded">{stage.label}</span>
+                              ))}
+                              <span className="text-xs bg-bw-surface/30 px-2 py-0.5 rounded">...</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-semibold text-bw-peach-light">Model Configuration</h2>
+                <Badge variant="outline" className="text-xs text-bw-peach">Compact View</Badge>
+              </div>
+
+              <div className="overflow-x-auto">
+                <div className="bg-bw-surface/50 border border-bw-surface rounded-xl">
+                  <div className="grid grid-cols-12 gap-4 p-4 text-xs font-semibold text-bw-peach-light border-b border-bw-surface">
+                    <div className="col-span-4">Stage</div>
+                    <div className="col-span-4">Current Model</div>
+                    <div className="col-span-3">Provider</div>
+                    <div className="col-span-1 text-center">Status</div>
+                    <div className="col-span-2 text-center">Action</div>
+                  </div>
+                  <div className="divide-y divide-bw-surface">
+                    {STAGES.map((stage) => {
+                      const sm = stageModels[stage.id];
+                      const selectedProvider = sm.selectedProvider || '';
+                      const providerModels = getSelectedProviderModels(selectedProvider);
+                      const isCustom = selectedStrategy === 'custom';
+                      let selectedModelInfo: CatalogModel | null = null;
+                      if (sm.selectedModel && sm.selectedProvider) {
+                        const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
+                        selectedModelInfo = matchingModel || null;
+                      }
+                      const bestModel = selectedModelInfo || (providerModels.length > 0 ? providerModels[0] : null);
+                      const stageCost = bestModel ? getStageCost(sm, bestModel) : 'Unknown';
+                      const capability = bestModel ? getStageCapability(bestModel) : 'unknown';
+
+                      const getModelDisplay = () => {
+                        if (sm.selectedModel && sm.selectedProvider) {
+                          const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
+                          return matchingModel ? matchingModel.displayName : 'Not configured';
+                        }
+                        return bestModel ? bestModel.displayName : 'Not configured';
+                      };
+
+                      const getProviderDisplay = () => {
+                        if (sm.selectedProvider) {
+                          const provider = providers.find((p) => p.providerId === sm.selectedProvider);
+                          return provider ? provider.displayName : sm.selectedProvider;
+                        }
+                        return 'Not configured';
+                      };
+
+                      const getStatusDisplay = () => {
+                        if (!sm.selectedProvider && !sm.selectedModel) return {
+                          text: 'No config',
+                          variant: 'outline',
+                          className: 'text-xs text-bw-peach bg-bw-surface/50',
+                        };
+                        if (sm.isOverride) return {
+                          text: 'Custom',
+                          variant: 'outline',
+                          className: 'text-xs text-blue-500 bg-blue-500/10 border-blue-500',
+                        };
+                        return {
+                          text: 'Active',
+                          variant: 'default',
+                          className: 'text-xs text-green-500 bg-green-500/10 border-green-500',
+                        };
+                      };
+
+                      const status = getStatusDisplay();
+
+                      return (
+                        <div key={stage.id} className="p-4 hover:bg-bw-surface/80 transition-colors">
+                          <div className="grid grid-cols-12 gap-4 items-center">
+                            <div className="col-span-4 flex items-center gap-3">
+                              <span className="text-lg">{stage.label}</span>
+                              {isCustom && sm.isOverride && (
+                                <Badge variant="outline" className="text-xs text-blue-500 border-blue-500">
+                                  Custom Override
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="col-span-4">
+                              <div className="text-sm text-bw-peach-light truncate">
+                                {getModelDisplay()}
+                              </div>
+                              <div className="text-xs text-bw-peach/60 mt-0.5">
+                                {sm.selectedModel && sm.selectedProvider ? stageCost : 'N/A'}
+                              </div>
+                            </div>
+                            <div className="col-span-3 text-xs text-bw-peach">
+                              {getProviderDisplay()}
+                            </div>
+                            <div className="col-span-1">
+                              <Badge className={status.className}>{status.text}</Badge>
+                            </div>
+                            <div className="col-span-1 text-center">
+                              {selectedPreset && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedPreset(null);
+                                    setSelectedStrategy('free');
+                                    setStageModels({});
+                                    setSelectedStageProvider('');
+                                    setSelectedStageModel('');
+                                  }}
+                                  className="text-xs text-bw-peach/60 hover:text-bw-peach-light"
+                                  title="Clear preset selection"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                            <div className="col-span-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full h-8 text-xs border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80"
+                                onClick={() => {
+                                  const selectedModelForCost = sm.selectedModel && sm.selectedProvider ? providerModels.find((m) => m.modelId === sm.selectedModel) : null;
+                                  setShowStageModal(stage.id);
+                                  setSelectedStageProvider(selectedProvider);
+                                  setSelectedStageModel(sm.selectedModel || '');
+                                  setSelectedStageReason(capability || 'unknown');
+                                  setSelectedStageCost(stageCost);
+                                  setSelectedStagePriceInput(selectedModelForCost ? selectedModelForCost.price.input : null);
+                                  setSelectedStageIsOverride(sm.isOverride);
+                                }}
+                              >
+                                <Settings2Icon className="h-3 w-3 mr-1" />
+                                Configure
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 p-3 bg-bw-surface/30 border border-bw-surface rounded-lg">
+                <p className="text-xs text-bw-peach">
+                  <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Strategy" below.
+                </p>
+              </div>
+            </section>
+
+            <section>
               <h2 className="text-2xl font-semibold text-bw-peach-light mb-6">Your Bug-Fixing Pipeline</h2>
               <div className="space-y-4">
                 {STAGES.map((stage) => {
                   const sm = stageModels[stage.id];
                   const selectedProvider = sm.selectedProvider || '';
                   const providerModels = getSelectedProviderModels(selectedProvider);
-                  const bestModel = providerModels.length > 0 ? providerModels[0] : null;
+                  let selectedModelInfo: CatalogModel | null = null;
+                  if (sm.selectedModel && sm.selectedProvider) {
+                    const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
+                    selectedModelInfo = matchingModel || null;
+                  }
+                  const bestModel = selectedModelInfo || (providerModels.length > 0 ? providerModels[0] : null);
                   const stageCost = bestModel ? getStageCost(sm, bestModel) : 'Unknown';
                   const capability = bestModel ? getStageCapability(bestModel) : 'unknown';
                   const isCustom = selectedStrategy === 'custom';
@@ -302,13 +545,20 @@ export default function ModelsPage() {
                         <div className="flex items-center gap-3">
                           <span className="text-xl">{stage.label}</span>
                           {isCustom && sm.isOverride && <Badge variant="outline" className="text-blue-500 border-blue-500">Custom Override</Badge>}
+                          {selectedPreset && (
+                            <Badge variant="outline" className="text-xs text-orange-500 border-orange-500">
+                              Recommended
+                            </Badge>
+                          )}
                         </div>
                         <Button variant="ghost" size="sm" onClick={() => {
+                          const selectedModelForCost = sm.selectedModel && sm.selectedProvider ? providerModels.find((m) => m.modelId === sm.selectedModel) : null;
                           setShowStageModal(stage.id);
                           setSelectedStageProvider(selectedProvider);
                           setSelectedStageModel(sm.selectedModel || '');
                           setSelectedStageReason(bestModel ? getStageCapability(bestModel) : 'unknown');
                           setSelectedStageCost(stageCost);
+                          setSelectedStagePriceInput(selectedModelForCost ? selectedModelForCost.price.input : null);
                           setSelectedStageIsOverride(sm.isOverride);
                         }}>Change Model</Button>
                       </div>
@@ -354,118 +604,6 @@ export default function ModelsPage() {
   );
 }
 
-function StageChangeModal({ stageId, stage, providers, models, selectedProvider, selectedModel, selectedReason, selectedCost, isOverride, onApply, onCancel }: { stageId: string; stage: typeof STAGES[0]; providers: CatalogProvider[]; models: CatalogModel[]; selectedProvider: string; selectedModel: string; selectedReason: string; selectedCost: string; isOverride: boolean; onApply: (provider: string, model: string, reason: string, cost: string, isOverride: boolean) => void; onCancel: () => void; }) {
-  const [localProvider, setLocalProvider] = useState(selectedProvider);
-  const [localModel, setLocalModel] = useState(selectedModel);
-  const [localReason, setLocalReason] = useState(selectedReason);
-  const [localCost, setLocalCost] = useState(selectedCost);
-  const [localIsOverride, setLocalIsOverride] = useState(isOverride);
-
-  const connectedProviderModels = useMemo(() => {
-    return providers.filter((p) => p.status === 'connected').flatMap((p) => models.filter((m) => m.providerId === p.providerId && m.available));
-  }, [providers, models]);
-
-  const recommendedModels = useMemo(() => [...connectedProviderModels].sort((a, b) => b.valueScore - a.valueScore).slice(0, 4), [connectedProviderModels]);
-  const freeModels = useMemo(() => [...connectedProviderModels].filter((m) => m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedProviderModels]);
-  const paidModels = useMemo(() => [...connectedProviderModels].filter((m) => !m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedProviderModels]);
-
-  const handleApply = () => {
-    const reason = localReason || 'Recommended model';
-    const cost = localCost || 'N/A';
-    onApply(localProvider, localModel, reason, cost, localIsOverride);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-bw-surface border border-bw-surface rounded-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-semibold text-bw-peach-light">Change Model for {stage.label}</h3>
-          <button onClick={onCancel} className="text-bw-peach hover:text-bw-peach-light">✕</button>
-        </div>
-
-        <div className="space-y-6">
-          <div>
-            <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
-            <div className="space-y-2">
-              {recommendedModels.map((model) => {
-                const cost = calculateTotalCost(model);
-                const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
-                return (
-                  <button key={model.modelId} onClick={() => { setLocalProvider(model.providerId); setLocalModel(model.modelId); setLocalReason('Best value model'); setLocalCost(formatCost(cost)); }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-bw-peach-light font-medium">{model.displayName}</span>
-                      {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
-                    </div>
-                    <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCost(cost)} • {getStageCapability(model)}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <Separator />
-
-          <div>
-            <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
-            <div className="space-y-2">
-              {freeModels.map((model) => {
-                const cost = calculateTotalCost(model);
-                return (
-                  <button key={model.modelId} onClick={() => { setLocalProvider(model.providerId); setLocalModel(model.modelId); setLocalReason('Free model'); setLocalCost('Free'); }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-bw-peach-light">{model.displayName}</span>
-                      {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                    </div>
-                    <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCost(cost)} • {getStageCapability(model)}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <Separator />
-
-          <div>
-            <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
-            <div className="space-y-2">
-              {paidModels.map((model) => {
-                const cost = calculateTotalCost(model);
-                return (
-                  <button key={model.modelId} onClick={() => { setLocalProvider(model.providerId); setLocalModel(model.modelId); setLocalReason('Paid model'); setLocalCost(formatCost(cost)); }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-bw-peach-light">{model.displayName}</span>
-                      {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                    </div>
-                    <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCost(cost)} • {getStageCapability(model)}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between mt-6 pt-6 border-t border-bw-surface">
-          <div className="text-sm text-bw-peach">
-            <div className="flex items-center gap-2 mb-2">
-              <input type="checkbox" id={`override-${stageId}`} checked={localIsOverride} onChange={(e) => setLocalIsOverride(e.target.checked)} />
-              <label htmlFor={`override-${stageId}`}>Custom Override</label>
-            </div>
-            <p className="text-xs text-bw-peach/80">Enable to create a custom override for this stage.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button onClick={handleApply}>Apply Change</Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Card({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) {
-  return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
-}
-
 function getStageCapability(model: CatalogModel): string {
   if (!model) return 'Unknown';
   const reasons: string[] = [];
@@ -479,10 +617,294 @@ function getStageCapability(model: CatalogModel): string {
 
 function formatCost(cost: number): string {
   if (cost === 0) return 'Free';
+  if (cost === -1) return 'Pricing unavailable';
+  if (cost < 0) return 'Pricing unavailable';
   return `$${cost.toFixed(2)}`;
 }
 
 function calculateTotalCost(model: CatalogModel): number {
   if (model.price.isFree) return 0;
-  return (model.price.input ?? 0) + (model.price.output ?? 0);
+  const input = model.price.input ?? 0;
+  const output = model.price.output ?? 0;
+  // If either input or output is unknown (null), we cannot calculate a meaningful cost
+  if (input === null || input === undefined || output === null || output === undefined) {
+    return -1; // Signal unknown cost
+  }
+  return input + output;
+}
+
+function StageChangeModal({ stageId, stage, providers, models, selectedProvider, selectedModel, selectedReason, selectedCost, isOverride, onApply, onCancel, initialPriceInput }: { stageId: string; stage: typeof STAGES[0]; providers: CatalogProvider[]; models: CatalogModel[]; selectedProvider: string; selectedModel: string; selectedReason: string; selectedCost: string; isOverride: boolean; onApply: (provider: string, model: string, reason: string, cost: string, isOverride: boolean) => void; onCancel: () => void; initialPriceInput?: number | null; }) {
+  const [localProvider, setLocalProvider] = useState(selectedProvider);
+  const [localModel, setLocalModel] = useState(selectedModel);
+  const [localReason, setLocalReason] = useState(selectedReason);
+  const [localCost, setLocalCost] = useState(selectedCost);
+  const [localIsOverride, setLocalIsOverride] = useState(isOverride);
+  const [localPriceInput, setLocalPriceInput] = useState<number | null>(initialPriceInput || null);
+  const [modelSearch, setModelSearch] = useState('');
+
+  const connectedProviderModels = useMemo(() => {
+    return providers.filter((p) => p.status === 'connected').flatMap((p) => models.filter((m) => m.providerId === p.providerId && m.available));
+  }, [providers, models]);
+
+  const filteredModels = useMemo(() => {
+    const query = modelSearch.toLowerCase().trim();
+    if (!query) {
+      return connectedProviderModels;
+    }
+    return connectedProviderModels.filter((m) => 
+      m.displayName.toLowerCase().includes(query) ||
+      m.modelId.toLowerCase().includes(query) ||
+      m.providerId.toLowerCase().includes(query)
+    );
+  }, [connectedProviderModels, modelSearch]);
+
+  const recommendedModels = useMemo(() => {
+    return filteredModels.sort((a, b) => b.valueScore - a.valueScore).slice(0, 4);
+  }, [filteredModels]);
+
+  const freeModels = useMemo(() => {
+    return filteredModels.filter((m) => m.price.isFree).sort((a, b) => b.valueScore - a.valueScore);
+  }, [filteredModels]);
+
+  const paidModels = useMemo(() => {
+    return filteredModels.filter((m) => !m.price.isFree).sort((a, b) => b.valueScore - a.valueScore);
+  }, [filteredModels]);
+
+  const handleApply = () => {
+    const reason = localReason || 'Recommended model';
+    const cost = localCost || 'N/A';
+    onApply(localProvider, localModel, reason, cost, localIsOverride);
+    // Reset the price input so next time it reads from the selected model
+    setLocalPriceInput(null);
+  };
+
+  const hasModels = connectedProviderModels.length > 0;
+  const searchEmpty = modelSearch.trim() && filteredModels.length === 0;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-bw-surface border border-bw-surface rounded-xl p-6 w-full max-w-lg max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold text-bw-peach-light">Change Model for {stage.label}</h3>
+          <button onClick={onCancel} className="text-bw-peach hover:text-bw-peach-light">✕</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto pr-2 -mr-2">
+          {/* Search Input */}
+          <div className="pt-4 pb-4">
+            <input
+              type="text"
+              placeholder="Search models by name, ID, or provider..."
+              value={modelSearch}
+              onChange={(e) => setModelSearch(e.target.value)}
+              className="w-full px-4 py-2 rounded-lg border border-bw-surface bg-bw-surface/50 text-bw-peach-light placeholder-bw-peach/60 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+            />
+          </div>
+
+          {/* Recommended Models */}
+          {!modelSearch && (
+            <>
+              <div className="mb-4">
+                <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
+                <div className="space-y-2">
+                  {recommendedModels.map((model) => {
+                    const cost = calculateTotalCost(model);
+                    const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
+                    return (
+                      <button key={model.modelId} onClick={() => {
+                        setLocalProvider(model.providerId);
+                        setLocalModel(model.modelId);
+                        setLocalReason('Best value model');
+                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                        setLocalCost(displayCost);
+                      }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-bw-peach-light font-medium">{model.displayName}</span>
+                          {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
+                        </div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div>
+                <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
+                <div className="space-y-2">
+                  {freeModels.map((model) => {
+                    const cost = calculateTotalCost(model);
+                    return (
+                      <button key={model.modelId} onClick={() => {
+                        setLocalProvider(model.providerId);
+                        setLocalModel(model.modelId);
+                        setLocalReason('Free model');
+                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                        setLocalCost(displayCost);
+                      }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-bw-peach-light">{model.displayName}</span>
+                          {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                        </div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div>
+                <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
+                <div className="space-y-2">
+                  {paidModels.map((model) => {
+                    const cost = calculateTotalCost(model);
+                    return (
+                      <button key={model.modelId} onClick={() => {
+                        setLocalProvider(model.providerId);
+                        setLocalModel(model.modelId);
+                        setLocalReason('Paid model');
+                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                        setLocalCost(displayCost);
+                      }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-bw-peach-light">{model.displayName}</span>
+                          {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                        </div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Search Results */}
+          {modelSearch && (
+            <>
+              {searchEmpty && (
+                <div className="text-center py-8">
+                  <p className="text-bw-peach text-sm">No models found</p>
+                  <p className="text-bw-peach/60 text-xs mt-1">Try a different search term.</p>
+                </div>
+              )}
+              {!searchEmpty && filteredModels.length === 0 && (
+                <div className="text-center py-8">
+                  <p className="text-bw-peach text-sm">No models match your search</p>
+                  <p className="text-bw-peach/60 text-xs mt-1">Try searching by model name, ID, or provider.</p>
+                </div>
+              )}
+              {!searchEmpty && (
+                <>
+                  {hasModels && (
+                    <>
+                      <div className="mb-4">
+                        <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
+                        <div className="space-y-2">
+                          {recommendedModels.map((model) => {
+                            const cost = calculateTotalCost(model);
+                            const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
+                            return (
+                              <button key={model.modelId} onClick={() => {
+                                setLocalProvider(model.providerId);
+                                setLocalModel(model.modelId);
+                                setLocalReason('Best value model');
+                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                                setLocalCost(displayCost);
+                              }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-bw-peach-light font-medium">{model.displayName}</span>
+                                  {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
+                                </div>
+                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
+                        <div className="space-y-2">
+                          {freeModels.map((model) => {
+                            const cost = calculateTotalCost(model);
+                            return (
+                              <button key={model.modelId} onClick={() => {
+                                setLocalProvider(model.providerId);
+                                setLocalModel(model.modelId);
+                                setLocalReason('Free model');
+                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                                setLocalCost(displayCost);
+                              }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-bw-peach-light">{model.displayName}</span>
+                                  {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                                </div>
+                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
+                        <div className="space-y-2">
+                          {paidModels.map((model) => {
+                            const cost = calculateTotalCost(model);
+                            return (
+                              <button key={model.modelId} onClick={() => {
+                                setLocalProvider(model.providerId);
+                                setLocalModel(model.modelId);
+                                setLocalReason('Paid model');
+                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                                setLocalCost(displayCost);
+                              }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-bw-peach-light">{model.displayName}</span>
+                                  {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                                </div>
+                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Sticky Footer - Always Visible */}
+        <div className="pt-4 border-t border-bw-surface mt-auto">
+          <div className="text-sm text-bw-peach">
+            <div className="flex items-center gap-2 mb-2">
+              <input type="checkbox" id={`override-${stageId}`} checked={localIsOverride} onChange={(e) => setLocalIsOverride(e.target.checked)} />
+              <label htmlFor={`override-${stageId}`}>Custom Override</label>
+            </div>
+            <p className="text-xs text-bw-peach/80">Enable to create a custom override for this stage.</p>
+          </div>
+          <div className="flex items-center justify-between mt-4">
+            <Button variant="outline" onClick={onCancel}>Cancel</Button>
+            <Button onClick={handleApply}>Apply Change</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Card({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) {
+  return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
 }
