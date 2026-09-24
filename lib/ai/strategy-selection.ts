@@ -12,18 +12,7 @@
 import type { ProviderName } from './providers/registry';
 import { MODEL_REGISTRY } from './model-registry';
 import type { AnalysisTask, TaskType, TaskWeights } from './config';
-import { TASK_TYPE_MAP } from './config';
-
-// Use existing TASK_TYPE_MAP from config.ts
-// Inline task weights to avoid import issues with isolatedModules
-const TASK_WEIGHTS: Record<TaskType, TaskWeights> = {
-  simple_coding: { coding: 3, reasoning: 1, speed: 3, longContext: 1 },
-  complex_debugging: { coding: 2, reasoning: 3, speed: 1, longContext: 2 },
-  large_repository_analysis: { coding: 1, reasoning: 2, speed: 1, longContext: 3 },
-  code_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
-  evidence_extraction: { coding: 2, reasoning: 1, speed: 3, longContext: 1 },
-  general: { coding: 1, reasoning: 2, speed: 2, longContext: 1 },
-};
+import { TASK_TYPE_MAP, TASK_WEIGHTS } from './config';
 
 const AI_STAGES: AnalysisTask[] = [
   'relevant_file_discovery',

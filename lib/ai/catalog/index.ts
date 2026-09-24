@@ -7,7 +7,9 @@ function toNumber(v: unknown, fallback: number | null): number | null {
 }
 
 function normalizePriceValue(v: unknown): number | null {
-  // OpenRouter prices are strings like "0.11" or "2.5" (USD per 1M tokens).
+  // OpenRouter raw prices are strings like "0.000003" (USD PER TOKEN).
+  // Normalize to the catalog's internal unit (USD per 1M tokens) at the
+  // ingestion layer — see toPerMillion() in lib/ai/catalog/live.ts.
   if (typeof v !== 'string' && typeof v !== 'number') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;

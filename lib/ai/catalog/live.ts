@@ -16,6 +16,21 @@ interface LiveModelEntry {
   isFree: boolean;
 }
 
+// ── Pricing unit normalization ──
+// Internal normalized unit everywhere in the catalog is USD PER 1M TOKENS
+// (see lib/ai/catalog/types.ts ModelPrice). Providers differ:
+//   openrouter: USD PER TOKEN (e.g. "0.000003")  → multiply by 1_000_000
+//   chutes:     USD PER 1M tokens (native catalog) → no conversion
+//   opencode:   USD PER 1M tokens (per provider docs) → no conversion
+//   openai/gemini/deepseek/zai: no live pricing API; static registry values
+//               (already USD per 1M) are used, never converted.
+const PER_TOKEN_TO_PER_MILLION = 1_000_000;
+
+function toPerMillion(usdPerToken: number | null): number | null {
+  if (usdPerToken == null || !Number.isFinite(usdPerToken)) return null;
+  return usdPerToken * PER_TOKEN_TO_PER_MILLION;
+}
+
 // ── Provider-specific fetch functions ──
 
 async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
@@ -44,8 +59,9 @@ async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
         displayName: (m.name as string) || (m.id as string) || '',
         contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
         maxOutputTokens: typeof topProvider?.max_completion_tokens === 'number' ? topProvider.max_completion_tokens : null,
-        inputPrice: Number.isFinite(input) ? input : null,
-        outputPrice: Number.isFinite(output) ? output : null,
+        // OpenRouter prices are USD PER TOKEN (e.g. "0.000003"); normalize to USD per 1M tokens.
+        inputPrice: toPerMillion(Number.isFinite(input) ? input : null),
+        outputPrice: toPerMillion(Number.isFinite(output) ? output : null),
         isFree: pricing?.prompt === '0' && pricing?.completion === '0',
       };
     });
@@ -205,8 +221,9 @@ async function fetchDeepSeek(apiKey: string): Promise<LiveModelEntry[]> {
 }
 
 async function fetchZAI(apiKey: string): Promise<LiveModelEntry[]> {
-  // Z.AI uses OpenAI-compatible API
-  const res = await fetch('https://api.z.ai/v1/models', {
+  // Z.AI uses OpenAI-compatible API — same canonical base URL as provider validation (lib/ai/providers/registry.ts)
+  const baseUrl = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
+  const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     next: { revalidate: 3600 },
   });
@@ -292,6 +309,8 @@ function historyEntryToModel(e: LiveModelEntry): ModelDefinition {
     supportsStructuredOutput: staticModel?.supportsStructuredOutput ?? true,
     capabilities: staticModel?.capabilities ?? ['coding', 'tool_calling', 'structured_output'],
     availability: 'available',
+    // 0–5 fallback scores must match the 0–5 scale of the static registry scores
+    // (UI/selection normalize 0–5 → 0–100 elsewhere).
     scores: staticModel?.scores ?? { coding: 3, reasoning: 3, speed: 3, longContext: 3 },
     tags: staticModel?.tags ? [...new Set([...staticModel.tags, 'live'])] : ['live'],
     source: 'live',

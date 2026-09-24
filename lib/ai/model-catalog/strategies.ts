@@ -3,6 +3,7 @@
 
 import type { ProviderName, RankedModel, ModelStrategy, StrategyTier, ModelCatalog } from './types';
 import type { AnalysisTask } from '../config';
+import { STAGE_WEIGHTS } from '../catalog/stageSelection';
 
 const AI_STAGES: AnalysisTask[] = [
   'relevant_file_discovery',
@@ -20,13 +21,10 @@ const STAGE_LABELS: Record<AnalysisTask, string> = {
   patch_generation: 'Patch Generation',
 };
 
-const STAGE_WEIGHTS: Record<AnalysisTask, { coding: number; reasoning: number; speed: number; longContext: number }> = {
-  relevant_file_discovery: { coding: 3, reasoning: 1, speed: 3, longContext: 1 },
-  root_cause_analysis: { coding: 2, reasoning: 3, speed: 1, longContext: 2 },
-  evidence_extraction: { coding: 2, reasoning: 1, speed: 3, longContext: 1 },
-  solution_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
-  patch_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
-};
+// STAGE_WEIGHTS is the shared source of truth for automatic-setup selection
+// (lib/ai/catalog/stageSelection.ts) — imported here rather than redefined.
+// The shared export is Record<StageKey, {...>} and is keyed by the same 5 stage
+// keys used by AI_STAGES, so it is a safe structural replacement.
 
 function pickForStage(
   models: RankedModel[],

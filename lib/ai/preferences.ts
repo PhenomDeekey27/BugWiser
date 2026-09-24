@@ -7,7 +7,10 @@ import type { ProviderName } from '@/lib/ai/providers/registry';
 
 export type SelectionMode = 'auto' | 'manual' | 'preset';
 
-export type SelectedStrategy = 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
+/** Engine strategies plus the /models page UI setups (balanced/quality).
+ * The runtime engine (strategy-selection.ts) only consumes the engine set;
+ * UI setups carry their concrete picks in stage_overrides. */
+export type SelectedStrategy = 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality';
 
 export interface ModelPreference {
   user_id: string;
@@ -16,7 +19,6 @@ export interface ModelPreference {
   selection_mode: SelectionMode;
   selected_strategy: SelectedStrategy;
   stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
-  preset_id?: string | null; // For preset-based selections
 }
 
 export interface ModelPreferenceSave {
@@ -25,7 +27,6 @@ export interface ModelPreferenceSave {
   provider?: ProviderName | null;
   model?: string | null;
   stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
-  preset_id?: string;
 }
 
 export async function getModelPreference(userId: string): Promise<ModelPreference> {
@@ -73,7 +74,6 @@ export async function saveModelPreference(
     selection_mode,
     selected_strategy: save.selected_strategy || 'auto',
     stage_overrides: save.stage_overrides,
-    preset_id: save.preset_id || null,
     updated_at: new Date().toISOString(),
   };
 
@@ -96,7 +96,6 @@ export async function saveModelPreference(
       selection_mode,
       selected_strategy: row.selected_strategy || 'auto',
       stage_overrides: row.stage_overrides,
-      preset_id: row.preset_id,
     },
   };
 }

@@ -32,6 +32,8 @@ export async function PUT(request: Request) {
       selection_mode?: 'auto' | 'manual';
       provider?: ProviderName | null;
       model?: string | null;
+      selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
+      stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
     };
     try {
       body = await request.json();
@@ -47,6 +49,8 @@ export async function PUT(request: Request) {
       selection_mode: body.selection_mode,
       provider: body.provider || null,
       model: body.model || null,
+      selected_strategy: body.selected_strategy || 'auto',
+      stage_overrides: body.stage_overrides,
     });
 
     if (!result.ok) {

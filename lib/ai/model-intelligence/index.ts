@@ -287,7 +287,7 @@ function getBaseUrl(provider: ProviderName): string {
     openai: 'https://api.openai.com/v1',
     gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
     deepseek: 'https://api.deepseek.com/v1',
-    zai: 'https://api.z.ai/v1',
+    zai: 'https://api.z.ai/api/paas/v4',
   };
   return urls[provider] || 'https://api.openai.com/v1';
 }

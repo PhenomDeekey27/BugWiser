@@ -4,6 +4,7 @@ import { getOrBuildCatalog } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
 import { getProviderConnections } from '@/lib/ai/connection/service';
 import { buildStageAssignments } from '@/lib/ai/strategy-selection';
+import { STAGE_WEIGHTS } from '@/lib/ai/catalog/stageSelection';
 import type { ProviderName } from '@/lib/ai/model-catalog/types';
 
 const AI_STAGES = [
@@ -20,14 +21,6 @@ const STAGE_LABELS: Record<string, string> = {
   evidence_extraction: 'Evidence Extraction',
   solution_generation: 'Solution Generation',
   patch_generation: 'Patch Generation',
-};
-
-const STAGE_WEIGHTS: Record<string, { coding: number; reasoning: number; speed: number; longContext: number }> = {
-  relevant_file_discovery: { coding: 3, reasoning: 1, speed: 3, longContext: 1 },
-  root_cause_analysis: { coding: 2, reasoning: 3, speed: 1, longContext: 2 },
-  evidence_extraction: { coding: 2, reasoning: 1, speed: 3, longContext: 1 },
-  solution_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
-  patch_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
 };
 
 export async function GET() {
@@ -75,11 +68,13 @@ export async function GET() {
     let fit = 0;
     let reason = `Best fit for ${assignment.task}`;
     if (model && model.registryScores) {
-      const weights = STAGE_WEIGHTS[task] as any;
-      const norm = weights.coding + weights.reasoning + weights.speed + weights.longContext;
-      const score = (model.registryScores.coding * weights.coding + model.registryScores.reasoning * weights.reasoning + model.registryScores.speed * weights.speed + model.registryScores.longContext * weights.longContext) / norm;
-      fit = Math.round(score * 10);
-      reason = `Score: ${fit}/100 for ${assignment.task}`;
+      const weights = STAGE_WEIGHTS[task as keyof typeof STAGE_WEIGHTS];
+      if (weights) {
+        const norm = weights.coding + weights.reasoning + weights.speed + weights.longContext;
+        const score = (model.registryScores.coding * weights.coding + model.registryScores.reasoning * weights.reasoning + model.registryScores.speed * weights.speed + model.registryScores.longContext * weights.longContext) / norm;
+        fit = Math.round(score * 10);
+        reason = `Score: ${fit}/100 for ${assignment.task}`;
+      }
     }
 
     return {

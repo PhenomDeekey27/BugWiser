@@ -6,17 +6,40 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { PlusIcon, RefreshCwIcon, ShieldCheckIcon, Settings2Icon } from 'lucide-react';
+import {
+  PlusIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  Settings2Icon,
+  SearchIcon,
+  XIcon,
+  FileSearchIcon,
+  BrainIcon,
+  ClipboardListIcon,
+  LightbulbIcon,
+  WrenchIcon,
+} from 'lucide-react';
 import type { GitHubUser } from '@/types';
 import { ProviderCard } from '@/components/models/ProviderCard';
+import { StageConfigPanel } from '@/components/models/StageConfigPanel';
+import { selectStageModels, type SetupChoice, type StageKey } from '@/lib/ai/catalog/stageSelection';
 
 const STAGES = [
-  { id: 'relevant_file_discovery', label: '🔍 File Discovery', task: 'relevant_file_discovery', provider: 'simple_coding' },
-  { id: 'root_cause_analysis', label: '🧠 Root Cause Analysis', task: 'root_cause_analysis', provider: 'complex_debugging' },
-  { id: 'evidence_extraction', label: '📋 Evidence Extraction', task: 'evidence_extraction', provider: 'evidence_extraction' },
-  { id: 'solution_generation', label: '💡 Solution Generation', task: 'solution_generation', provider: 'code_generation' },
-  { id: 'patch_generation', label: '🔧 Patch Generation', task: 'patch_generation', provider: 'code_generation' },
+  { id: 'relevant_file_discovery', label: 'File Discovery', icon: FileSearchIcon, task: 'relevant_file_discovery', provider: 'simple_coding' },
+  { id: 'root_cause_analysis', label: 'Root Cause Analysis', icon: BrainIcon, task: 'root_cause_analysis', provider: 'complex_debugging' },
+  { id: 'evidence_extraction', label: 'Evidence Extraction', icon: ClipboardListIcon, task: 'evidence_extraction', provider: 'evidence_extraction' },
+  { id: 'solution_generation', label: 'Solution Generation', icon: LightbulbIcon, task: 'solution_generation', provider: 'code_generation' },
+  { id: 'patch_generation', label: 'Patch Generation', icon: WrenchIcon, task: 'patch_generation', provider: 'code_generation' },
 ];
+
+// Rough per-stage token assumptions used ONLY for the "~cost / analysis"
+// display. The pipeline does not track real per-stage token usage yet, so
+// these are UX-level estimates, not measured values.
+const STAGE_ESTIMATE_TOKENS = { input: 12_000, output: 2_000 } as const;
+
+// Catalog prices are normalized to USD per 1M tokens (see lib/ai/catalog/types.ts
+// ModelPrice), so estimated token counts must be scaled by 1M to yield USD.
+const TOKENS_PER_MILLION = 1_000_000;
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; };
 
@@ -40,19 +63,11 @@ const CAPABILITY_LABELS: Record<string, string> = {
   structured_output: 'Structured Output',
 };
 
-type SetupChoice = 'free' | 'balanced' | 'quality';
-
-const MODEL_SETUPS: { id: SetupChoice; title: string; description: string }[] = [
-  { id: 'free', title: 'Free', description: 'Use free models across the pipeline to minimize cost.' },
-  { id: 'balanced', title: 'Balanced', description: 'Balance cost and model quality across the pipeline.' },
-  { id: 'quality', title: 'Quality', description: 'Prioritize higher-quality models when available.' },
-];
-
 export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
 
-export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
+export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
 
 export default function ModelsPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
@@ -71,6 +86,7 @@ export default function ModelsPage() {
   const [selectedStageIsOverride, setSelectedStageIsOverride] = useState<boolean>(false);
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
   const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
+  const [applyingSetup, setApplyingSetup] = useState<SetupChoice | null>(null);
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [search, setSearch] = useState('');
 
@@ -103,10 +119,11 @@ export default function ModelsPage() {
     if (data.preference) {
       const pref = data.preference;
       setPreference(pref);
-      const overrides = pref.stage_overrides || {};
-      loadStageModels(overrides);
+      loadStageModels(pref.stage_overrides || {});
+      setSetupChoice(toSetupChoice(pref.selected_strategy));
     } else {
       setStageModels({});
+      setSetupChoice(null);
     }
   }, []);
 
@@ -132,20 +149,79 @@ export default function ModelsPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleSavePreference = async () => {
-    setSaving(true);
+  /** Syncs the setup selector + stage rows from a saved preference payload. */
+  const applySavedPreference = useCallback((pref: Preference) => {
+    setPreference(pref);
+    loadStageModels(pref.stage_overrides || {});
+    setSetupChoice(toSetupChoice(pref.selected_strategy));
+  }, [loadStageModels]);
+
+  /** Applies a setup: picks a suitable model for every stage from the user's
+   * connected-provider catalog, updates the existing Model Configuration, and
+   * persists via the existing preference API (selected_strategy + stage_overrides). */
+  const handleSetupSelect = useCallback(async (setup: SetupChoice) => {
+    if (libraryBaseModels.length === 0) {
+      toast.error('Connect a provider with available models first.');
+      return;
+    }
+    setApplyingSetup(setup);
     try {
+      const picks = selectStageModels(setup, libraryBaseModels);
+      const nextStageModels: Record<string, StageModel> = {};
+      STAGES.forEach((stage) => {
+        const pick = picks[stage.id as StageKey];
+        nextStageModels[stage.id] = {
+          stageId: stage.id,
+          label: stage.label,
+          selectedProvider: pick?.provider || null,
+          selectedModel: pick?.model || null,
+          isOverride: true,
+        };
+      });
+      setStageModels(nextStageModels);
+      setSetupChoice(setup);
+
       const stageOverrides: Record<string, { provider: string | null; model: string | null }> = {};
       STAGES.forEach((stage) => {
-        const sm = stageModels[stage.id];
-        if (sm.isOverride && sm.selectedProvider && sm.selectedModel) {
+        const sm = nextStageModels[stage.id];
+        if (sm.selectedProvider && sm.selectedModel) {
           stageOverrides[stage.id] = { provider: sm.selectedProvider, model: sm.selectedModel };
         }
       });
       const res = await fetch('/api/models/preference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selection_mode: 'auto', stage_overrides: stageOverrides }),
+        body: JSON.stringify({ selection_mode: 'auto', selected_strategy: setup, stage_overrides: stageOverrides }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save setup');
+      applySavedPreference(data.preference as Preference);
+      toast.success('Setup applied to all five stages.');
+    } catch (e) {
+      toast.error((e as Error).message || 'Failed to apply setup');
+    } finally {
+      setApplyingSetup(null);
+    }
+  }, [libraryBaseModels, applySavedPreference]);
+
+  const handleSavePreference = async () => {
+    setSaving(true);
+    try {
+      const stageOverrides: Record<string, { provider: string | null; model: string | null }> = {};
+      STAGES.forEach((stage) => {
+        const sm = stageModels[stage.id];
+        if (sm.selectedProvider && sm.selectedModel) {
+          stageOverrides[stage.id] = { provider: sm.selectedProvider, model: sm.selectedModel };
+        }
+      });
+      const res = await fetch('/api/models/preference', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selection_mode: 'auto',
+          selected_strategy: setupChoice ?? (Object.keys(stageOverrides).length > 0 ? 'custom' : 'auto'),
+          stage_overrides: stageOverrides,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save preference');
@@ -208,6 +284,14 @@ export default function ModelsPage() {
     return `$${model.price.input.toFixed(2)}`;
   };
 
+  const getStageCostEstimate = (model: CatalogModel | null): string => {
+    if (!model) return 'Unknown';
+    if (model.price.isFree) return 'Free';
+    if (model.price.input == null || model.price.output == null) return 'Pricing unavailable';
+    // Prices are USD per 1M tokens: (price × tokens) / 1M = USD.
+    return `~${formatCost((model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION)}`;
+  };
+
   const getSelectedProviderModels = (providerId: string): CatalogModel[] => {
     return models.filter((m) => m.providerId === providerId && m.available);
   };
@@ -218,21 +302,30 @@ export default function ModelsPage() {
     return providerModels.length > 0 ? providerModels[0] : null;
   };
 
+  /** Resolves the CatalogModel actually configured for a stage (selected model,
+   * not just the provider's first entry). Returns null when unconfigured. */
+  const getConfiguredStageModel = (sm: StageModel | undefined): CatalogModel | null => {
+    if (!sm || !sm.selectedProvider || !sm.selectedModel) return null;
+    return models.find((m) => m.providerId === sm.selectedProvider && m.modelId === sm.selectedModel && m.available) || null;
+  };
+
+  /** Total estimated cost per analysis: sums the exact per-stage estimates so the
+   * total stays consistent with the individual stage rows. */
   const estimateTotalCost = (): number => {
     let total = 0;
     let hasUnknown = false;
     STAGES.forEach((stage) => {
-      const sm = stageModels[stage.id];
-      const model = getBestModelForStage(sm);
-      if (model && !model.price.isFree) {
-        const input = model.price.input ?? 0;
-        const output = model.price.output ?? 0;
-        if (input === null || input === undefined || output === null || output === undefined) {
-          hasUnknown = true;
-        } else {
-          total += input + output;
-        }
+      const model = getConfiguredStageModel(stageModels[stage.id]);
+      if (!model) {
+        hasUnknown = true;
+        return;
       }
+      if (model.price.isFree) return;
+      if (model.price.input == null || model.price.output == null) {
+        hasUnknown = true;
+        return;
+      }
+      total += (model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION;
     });
     return hasUnknown ? -1 : total;
   };
@@ -281,7 +374,12 @@ export default function ModelsPage() {
               onDisconnect={handleDisconnect}
             />
 
-            <ModelSetupSection selected={setupChoice} onSelect={setSetupChoice} />
+            <StageConfigPanel
+              selected={setupChoice}
+              pending={applyingSetup}
+              disabled={libraryBaseModels.length === 0}
+              onSelect={handleSetupSelect}
+            />
 
             <section>
               <div className="flex items-center justify-between mb-6">
@@ -301,16 +399,18 @@ export default function ModelsPage() {
                   <div className="divide-y divide-bw-surface">
                     {STAGES.map((stage) => {
                       const sm = stageModels[stage.id];
-                      const selectedProvider = sm.selectedProvider || '';
+                      const selectedProvider = sm?.selectedProvider || '';
                       const providerModels = getSelectedProviderModels(selectedProvider);
-                      const bestModel = getBestModelForStage(sm);
-                      const stageCost = bestModel ? getStageCost(sm, bestModel) : 'Unknown';
-                      const capability = bestModel ? getStageCapability(bestModel) : 'unknown';
-                      const modelSubline = sm.selectedModel && sm.selectedProvider
-                        ? (capability !== 'unknown' ? `${stageCost} · ${capability}` : stageCost)
-                        : 'N/A';
+                      const configuredModel = getConfiguredStageModel(sm);
+                      const bestModel = configuredModel || getBestModelForStage(sm);
+                      const stageCost = getStageCostEstimate(configuredModel);
+                      const capability = configuredModel ? getStageCapability(configuredModel) : 'unknown';
+                      const modelSubline = configuredModel
+                        ? `${stageCost} / analysis · ${capability}`
+                        : 'Not configured';
 
                       const getModelDisplay = () => {
+                        if (configuredModel) return configuredModel.displayName;
                         if (sm.selectedModel && sm.selectedProvider) {
                           const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
                           return matchingModel ? matchingModel.displayName : 'Not configured';
@@ -327,7 +427,7 @@ export default function ModelsPage() {
                       };
 
                       const getStatusDisplay = () => {
-                        if (!sm.selectedProvider && !sm.selectedModel) return {
+                        if (!sm || (!sm.selectedProvider && !sm.selectedModel)) return {
                           text: 'No config',
                           variant: 'outline',
                           className: 'text-xs text-bw-peach bg-bw-surface/50',
@@ -350,7 +450,8 @@ export default function ModelsPage() {
                         <div key={stage.id} className="p-4 hover:bg-bw-surface/80 transition-colors">
                           <div className="grid grid-cols-12 gap-4 items-center">
                             <div className="col-span-4 flex items-center gap-3">
-                              <span className="text-lg">{stage.label}</span>
+                              <stage.icon className="h-4 w-4 text-bw-peach/80" aria-hidden="true" />
+                              <span className="text-sm font-medium text-bw-peach-light">{stage.label}</span>
                               {sm.isOverride && (
                                 <Badge variant="outline" className="text-xs text-blue-500 border-blue-500">
                                   Custom Override
@@ -375,7 +476,7 @@ export default function ModelsPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="w-full h-8 text-xs border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80"
+                                className="w-full h-8 text-xs border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80 cursor-pointer"
                                 onClick={() => {
                                   const selectedModelForCost = sm.selectedModel && sm.selectedProvider ? providerModels.find((m) => m.modelId === sm.selectedModel) : null;
                                   setShowStageModal(stage.id);
@@ -425,7 +526,19 @@ export default function ModelsPage() {
             </section>
 
             {showStageModal && (
-              <StageChangeModal stageId={showStageModal} stage={STAGES.find((s) => s.id === showStageModal) as typeof STAGES[0]} providers={providers} models={models} selectedProvider={selectedStageProvider} selectedModel={selectedStageModel} selectedReason={selectedStageReason} selectedCost={selectedStageCost} isOverride={selectedStageIsOverride} onApply={(provider, model, reason, cost, isOverride) => handleApplyStageChange(showStageModal!, provider, model, reason, cost, isOverride)} onCancel={() => setShowStageModal(null)} />
+              <StageChangeModal
+                stageId={showStageModal}
+                stage={STAGES.find((s) => s.id === showStageModal) as typeof STAGES[0]}
+                providers={providers}
+                models={models}
+                selectedProvider={selectedStageProvider}
+                selectedModel={selectedStageModel}
+                selectedReason={selectedStageReason}
+                selectedCost={selectedStageCost}
+                isOverride={selectedStageIsOverride}
+                onApply={(provider, model, reason, cost, isOverride) => handleApplyStageChange(showStageModal!, provider, model, reason, cost, isOverride)}
+                onCancel={() => setShowStageModal(null)}
+              />
             )}
           </div>
         )}
@@ -442,7 +555,15 @@ function formatCost(cost: number): string {
   if (cost === 0) return 'Free';
   if (cost === -1) return 'Pricing unavailable';
   if (cost < 0) return 'Pricing unavailable';
+  // Keep micro-costs readable (e.g. $0.002 instead of $0.00).
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  if (cost < 1) return `$${cost.toFixed(3)}`;
   return `$${cost.toFixed(2)}`;
+}
+
+/** Maps the persisted strategy to the UI setup; legacy strategies → null. */
+function toSetupChoice(strategy: string | null | undefined): SetupChoice | null {
+  return strategy === 'free' || strategy === 'balanced' || strategy === 'quality' ? strategy : null;
 }
 
 function getStageCapability(model: CatalogModel): string {
@@ -458,12 +579,12 @@ function getStageCapability(model: CatalogModel): string {
 
 function calculateTotalCost(model: CatalogModel): number {
   if (model.price.isFree) return 0;
-  const input = model.price.input ?? 0;
-  const output = model.price.output ?? 0;
-  if (input === null || input === undefined || output === null || output === undefined) {
+  if (model.price.input == null || model.price.output == null) {
     return -1;
   }
-  return input + output;
+  // Prices are USD per 1M tokens: estimated USD cost for one stage
+  // (12k input + 2k output tokens), matching the per-stage estimate rows.
+  return (model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION;
 }
 
 function formatContext(tokens: number): string {
@@ -539,39 +660,6 @@ function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect 
   );
 }
 
-function ModelSetupSection({ selected, onSelect }: { selected: SetupChoice | null; onSelect: (setup: SetupChoice) => void; }) {
-  return (
-    <section>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-bw-peach-light">BugWiser Model Setup</h2>
-        {selected && (
-          <Badge variant="outline" className="text-xs text-bw-peach">
-            {MODEL_SETUPS.find((s) => s.id === selected)?.title} selected
-          </Badge>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {MODEL_SETUPS.map((setup) => {
-          const isSelected = selected === setup.id;
-          return (
-            <Card key={setup.id} className={`p-5 flex flex-col ${isSelected ? 'ring-1 ring-primary-container' : ''}`}>
-              <div className="flex items-center justify-between">
-                <h3 className="text-base font-semibold text-bw-peach-light">{setup.title}</h3>
-                {isSelected && <Badge className="text-xs text-green-500 bg-green-500/10 border-green-500">Selected</Badge>}
-              </div>
-              <p className="text-xs text-bw-peach mt-2 flex-1">{setup.description}</p>
-              <Button size="sm" variant={isSelected ? 'default' : 'outline'} className="mt-4" onClick={() => onSelect(setup.id)}>
-                {isSelected ? 'Selected' : `Select ${setup.title}`}
-              </Button>
-            </Card>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 function ModelLibrary({ models, providers, baseCount, filter, onFilterChange, search, onSearchChange }: { models: CatalogModel[]; providers: CatalogProvider[]; baseCount: number; filter: LibraryFilter; onFilterChange: (filter: LibraryFilter) => void; search: string; onSearchChange: (search: string) => void; }) {
   return (
     <section>
@@ -585,7 +673,7 @@ function ModelLibrary({ models, providers, baseCount, filter, onFilterChange, se
           <button
             key={f.id}
             onClick={() => onFilterChange(f.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
               filter === f.id
                 ? 'bg-primary-container text-on-primary-container border-primary-container'
                 : 'border-bw-surface bg-bw-surface/50 text-bw-peach hover:bg-bw-surface/80'
@@ -701,18 +789,39 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
       <div className="bg-bw-surface border border-bw-surface rounded-xl p-6 w-full max-w-lg max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-semibold text-bw-peach-light">Change Model for {stage.label}</h3>
-          <button onClick={onCancel} className="text-bw-peach hover:text-bw-peach-light">✕</button>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            className="rounded p-1 text-bw-peach outline-none transition-colors hover:bg-bw-surface/80 hover:text-bw-peach-light cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-          <div className="pt-4 pb-4">
-            <input
-              type="text"
-              placeholder="Search models by name, ID, or provider..."
-              value={modelSearch}
-              onChange={(e) => setModelSearch(e.target.value)}
-              className="w-full px-4 py-2 rounded-lg border border-bw-surface bg-bw-surface/50 text-bw-peach-light placeholder-bw-peach/60 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-            />
+          <div className="mb-4">
+            <div className="relative">
+              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-bw-peach/50" aria-hidden="true" />
+              <input
+                type="text"
+                placeholder="Search models…"
+                value={modelSearch}
+                onChange={(e) => setModelSearch(e.target.value)}
+                aria-label="Search models"
+                className="h-8 w-full cursor-text rounded-lg border border-bw-surface bg-bw-surface/50 pl-8 pr-8 text-sm text-bw-peach-light outline-none transition-colors placeholder:text-bw-peach/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              />
+              {modelSearch && (
+                <button
+                  type="button"
+                  onClick={() => setModelSearch('')}
+                  aria-label="Clear search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-bw-peach/60 outline-none transition-colors hover:text-bw-peach-light cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {!modelSearch && (
@@ -730,7 +839,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                         setLocalReason('Best value model');
                         const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
                         setLocalCost(displayCost);
-                      }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light font-medium">{model.displayName}</span>
                           {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
@@ -782,7 +891,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                         setLocalReason('Paid model');
                         const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
                         setLocalCost(displayCost);
-                      }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
+                      }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light">{model.displayName}</span>
                           {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
@@ -903,8 +1012,8 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
             <p className="text-xs text-bw-peach/80">Enable to create a custom override for this stage.</p>
           </div>
           <div className="flex items-center justify-between mt-4">
-            <Button variant="outline" onClick={onCancel}>Cancel</Button>
-            <Button onClick={handleApply}>Apply Change</Button>
+            <Button variant="outline" onClick={onCancel} className="cursor-pointer">Cancel</Button>
+            <Button onClick={handleApply} disabled={!localModel || !localProvider} className="cursor-pointer">Apply Change</Button>
           </div>
         </div>
       </div>

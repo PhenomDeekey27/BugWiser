@@ -1,0 +1,351 @@
+// Per-stage model selection for the /models page setups (Free / Balanced / Quality).
+//
+// Selection runs entirely on the user's ACTUAL catalog (models from connected
+// providers, already scored by the existing model-intelligence system). No
+// model names or providers are hardcoded — only stage-to-capability PREFERENCES.
+//
+// CatalogModel field scales (from /api/models + model-intelligence):
+//   scores.{coding,reasoning,speed,longContext}: 0–100
+//   price.{input,output}: USD per 1M tokens (null = unknown), price.isFree
+//   capabilities: 'coding' | 'reasoning' | 'vision' | 'tool_calling' | 'structured_output'
+//
+// Automatic selection uses a DERIVED pool: full catalog → family grouping →
+// context sufficiency gate → per-provider top-N. Manual Configure/Change Model
+// keeps using the FULL catalog (app/models/page.tsx) — nothing here mutates it.
+
+import type { CatalogModel } from '@/app/models/page';
+
+export type SetupChoice = 'free' | 'balanced' | 'quality';
+
+export const SETUP_TITLES: Record<SetupChoice, string> = {
+  free: 'Free',
+  balanced: 'Balanced',
+  quality: 'Quality',
+};
+
+export type StageKey =
+  | 'relevant_file_discovery'
+  | 'root_cause_analysis'
+  | 'evidence_extraction'
+  | 'solution_generation'
+  | 'patch_generation';
+
+// SINGLE SOURCE OF TRUTH for automatic-setup stage weights (stage-keyed).
+// app/api/ai/models/route.ts imports this export — do NOT define a second
+// copy there or elsewhere. (config.ts TASK_WEIGHTS is a different, TaskType-
+// keyed system used by runtime routing and is intentionally untouched.)
+// Evidence extraction is context/extraction-heavy (not discovery-like), hence
+// its reasoning/longContext weights differ from the older discovery profile.
+export const STAGE_WEIGHTS: Record<StageKey, { coding: number; reasoning: number; speed: number; longContext: number }> = {
+  relevant_file_discovery: { coding: 3, reasoning: 1, speed: 3, longContext: 1 },
+  root_cause_analysis: { coding: 2, reasoning: 3, speed: 1, longContext: 2 },
+  evidence_extraction: { coding: 2, reasoning: 2, speed: 3, longContext: 3 },
+  solution_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
+  patch_generation: { coding: 3, reasoning: 2, speed: 1, longContext: 2 },
+};
+
+// Context sufficiency minimums per stage (tokens). Context is a REQUIREMENT
+// for automatic selection, not a score: models below the stage minimum are
+// excluded from the automatic pool (they remain fully visible in the Model
+// Library and manual Configure/Change Model selector).
+export const STAGE_CONTEXT_MIN: Record<StageKey, number> = {
+  relevant_file_discovery: 32_000,
+  root_cause_analysis: 128_000,
+  evidence_extraction: 200_000,
+  solution_generation: 32_000,
+  patch_generation: 32_000,
+};
+
+// Provider flood protection: after family grouping, keep only the top-N
+// candidates per provider per stage (ranked by the existing StageScore).
+// This caps catalog-size advantage (a provider with 500 listings gets the
+// same 5 shots as one with 5) without forcing any diversity quota — a single
+// provider can still win every stage when its candidates genuinely rank best.
+export const MAX_CANDIDATES_PER_PROVIDER = 5;
+
+export interface StagePick {
+  stageId: StageKey;
+  provider: string;
+  model: string;
+  /** True when the chosen model has confirmed zero cost (price.isFree). */
+  isFree: boolean;
+  /** True when the pick fell back to a paid model because no free one was suitable. */
+  isPaidFallback: boolean;
+}
+
+function stageScore(model: CatalogModel, weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
+  const norm = weights.coding + weights.reasoning + weights.speed + weights.longContext;
+  return (
+    (model.scores.coding * weights.coding +
+      model.scores.reasoning * weights.reasoning +
+      model.scores.speed * weights.speed +
+      model.scores.longContext * weights.longContext) /
+    norm
+  );
+}
+
+/** Defined per-1M price, or null when the catalog has no reliable pricing. */
+function definedPrice(model: CatalogModel): { input: number; output: number } | null {
+  if (model.price.isFree) return { input: 0, output: 0 };
+  if (model.price.input == null || model.price.output == null) return null;
+  return { input: model.price.input, output: model.price.output };
+}
+
+// ── Automatic-selection pool: family grouping → context gate → provider top-N ──
+// All of the following apply ONLY to the derived pool used by Free/Balanced/
+// Quality setup selection. The full catalog always remains available to the
+// Model Library and the manual Configure/Change Model selector.
+
+/**
+ * Normalizes an access-tier suffix (case-insensitive). Used for tier detection
+ * AND stripped from the family key so that a free variant groups with its paid
+ * base model. Conservative: full-segment exact matches only.
+ */
+const ACCESS_TIERS = ['free', 'open', 'beta', 'preview', 'experimental', 'exp'] as const;
+
+/**
+ * Conservative near-duplicate family key derived ONLY from the model ID.
+ * Segments are split on non-alphanumeric separators; only obvious variant
+ * suffixes and access-tier markers are removed — meaningful identity is kept.
+ * Examples:
+ *   'deepseek-ai/DeepSeek-V4-Flash-0731-TEE'   → 'chutes|deepseek ai deepseek v4 flash'
+ *   'deepseek/deepseek-v4-flash:free'          → 'openrouter|deepseek deepseek v4 flash'
+ *   'deepseek/deepseek-v4-flash-0731'          → 'openrouter|deepseek deepseek v4 flash'
+ *   'meta-llama/llama-3.1-8b-instruct:free'    → 'openrouter|meta llama llama 3.1 8b'
+ * Distinct models stay distinct:
+ *   'deepseek/deepseek-v4-flash' vs 'deepseek/deepseek-v4-pro' → different keys
+ * Note the key is provider-scoped: the same base model on two providers stays
+ * two families (cross-provider grouping would be too aggressive here).
+ */
+export function modelFamilyKey(providerId: string, modelId: string): string {
+  const segs = modelId.toLowerCase().split(/[^a-z0-9.]+/).filter(Boolean);
+  if (segs.length === 0) return `${providerId}|${modelId.toLowerCase()}`;
+
+  const isQuant = (s: string) => /(^|\d)(q|q\d|iq\d|int\d|fp\d+|awq|gptq|gguf|ggml|exl2|dq|ud)$/.test(s);
+  const isMarker = (s: string) => s === 'tee' || s === 'instruct' || s === 'quantized' || s === 'quant' ||
+    s === 'bnb' || s === 'mlx' || s === 'int4' || s === 'int8' || s === 'fp8' ||
+    s === 'awq' || s === 'gptq' || s === 'gguf' || s === 'ggml' || s === 'exl2';
+  const isDateVersion = (s: string) =>
+    // 'v'-prefixed releases (v2, v0.3) and date-style snapshot integers
+    // (0731, 2507) are suffixes. Bare dotted numbers (glm-4.6, qwen3.5) are
+    // model-generation identity and MUST stay.
+    /^v\d+(\.\d+)?$/.test(s) || /^\d{4,}$/.test(s);
+
+  // Iteratively strip trailing tier/quant/marker and date/version segments
+  // until stable, so combined suffixes like '-instruct:free' or '-0731-tee'
+  // normalize to the same family as the plain variant. Always keep at least
+  // one segment so a family key never collapses to empty identity.
+  const kept = [...segs];
+  let changed = true;
+  while (changed && kept.length > 1) {
+    changed = false;
+    const last = kept[kept.length - 1];
+    if ((ACCESS_TIERS as readonly string[]).includes(last) || isQuant(last) || isMarker(last)) {
+      kept.pop();
+      changed = true;
+      continue;
+    }
+    if (kept.length >= 2 && isDateVersion(last)) {
+      kept.pop();
+      changed = true;
+    }
+  }
+
+  const remainder = kept.filter(Boolean).join(' ').trim();
+  if (!remainder) return `${providerId}|${modelId.toLowerCase()}`;
+  return `${providerId}|${remainder}`;
+}
+
+/**
+ * Picks ONE representative per family for the automatic pool. Deterministic.
+ * Priority (the spec's explicit ordering — NOT highest global score):
+ *   1. available model
+ *   2. better metadata confidence (static/registry entry or registry-backed
+ *      scores beat live entries with default/guessed metadata)
+ *   3. lower cost (blended USD/1M: 2×input + output, free = 0, unknown = +Inf)
+ *   4. longer context
+ *   5. stable provider/model ID tiebreak
+ */
+function betterFamilyRepresentative(a: CatalogModel, b: CatalogModel): CatalogModel {
+  if (a.available !== b.available) return a.available ? a : b;
+  // Metadata confidence: registry/curated entries have no 'live' tag; live-
+  // discovered entries (added by catalog/live.ts) may carry default/guessed
+  // metadata, so prefer the curated one when both exist in a family.
+  const aConf = a.tags.includes('live') ? 0 : 1;
+  const bConf = b.tags.includes('live') ? 0 : 1;
+  if (aConf !== bConf) return aConf > bConf ? a : b;
+  const pA = definedPrice(a);
+  const pB = definedPrice(b);
+  const cA = pA ? pA.input * 2 + pA.output : Number.POSITIVE_INFINITY;
+  const cB = pB ? pB.input * 2 + pB.output : Number.POSITIVE_INFINITY;
+  if (cA !== cB) return cA < cB ? a : b;
+  if (a.contextWindow !== b.contextWindow) return a.contextWindow > b.contextWindow ? a : b;
+  const idA = `${a.providerId}/${a.modelId}`;
+  const idB = `${b.providerId}/${b.modelId}`;
+  return idA.localeCompare(idB) <= 0 ? a : b;
+}
+
+/**
+ * Builds the derived automatic-selection pool from the FULL catalog:
+ *   1. family grouping (one representative per near-duplicate family)
+ *   2. per-stage context sufficiency gate (STAGE_CONTEXT_MIN)
+ *   3. per-provider top-N cap (MAX_CANDIDATES_PER_PROVIDER), ranked by the
+ *      existing StageScore so catalog size cannot buy extra lottery tickets
+ * The input array is never mutated; manual selection keeps the full catalog.
+ */
+function buildAutomaticPool(
+  availableModels: CatalogModel[],
+  stageId: StageKey,
+  weights: { coding: number; reasoning: number; speed: number; longContext: number }
+): CatalogModel[] {
+  // 1. Family grouping — keep one representative per near-duplicate family.
+  const families = new Map<string, CatalogModel>();
+  for (const m of availableModels) {
+    const key = modelFamilyKey(m.providerId, m.modelId);
+    const existing = families.get(key);
+    families.set(key, existing ? betterFamilyRepresentative(existing, m) : m);
+  }
+  let pool = Array.from(families.values());
+
+  // 2. Context sufficiency gate (CatalogModel.contextWindow is always a number:
+  //    live API → static registry → 128K default, applied at discovery time —
+  //    so there is no null case to reinterpret here).
+  const contextMin = STAGE_CONTEXT_MIN[stageId] ?? 0;
+  pool = pool.filter((m) => m.contextWindow >= contextMin);
+
+  // 3. Provider top-N cap. Rank each provider's candidates by StageScore with
+  //    the existing stable tiebreaks, keep the top N, merge across providers.
+  const byProvider = new Map<string, CatalogModel[]>();
+  for (const m of pool) {
+    const list = byProvider.get(m.providerId);
+    if (list) list.push(m);
+    else byProvider.set(m.providerId, [m]);
+  }
+  const capped: CatalogModel[] = [];
+  for (const list of byProvider.values()) {
+    list.sort((a, b) => {
+      const d = stageScore(b, weights) - stageScore(a, weights);
+      if (d !== 0) return d;
+      const dv = (b.valueScore || 0) - (a.valueScore || 0);
+      if (dv !== 0) return dv;
+      return `${a.providerId}/${a.modelId}`.localeCompare(`${b.providerId}/${b.modelId}`);
+    });
+    capped.push(...list.slice(0, MAX_CANDIDATES_PER_PROVIDER));
+  }
+  return capped;
+}
+
+/**
+ * BALANCED: cost/quality trade-off on the stage-weighted score (0–100) vs
+ * defined per-1M price. Free models rank by score; paid models need to earn
+ * their cost. Never simply the cheapest, priciest, or highest-quality model.
+ */
+function pickBalanced(models: CatalogModel[], weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
+  let bestIdx = 0;
+  let bestValue = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < models.length; i++) {
+    const m = models[i];
+    const p = definedPrice(m);
+    if (!p) continue;
+    const quality = stageScore(m, weights); // 0–100
+    // Cheap model: quality dominates. Expensive model: must be much better.
+    const costPenalty = Math.log10(1 + p.input * 2 + p.output); // diminishing cost penalty
+    const value = quality - costPenalty * 12;
+    if (value > bestValue) {
+      bestValue = value;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+/**
+ * QUALITY: strongest suitable model per stage by stage-weighted score.
+ * Deliberately ignores price — a free model wins when its metadata score is
+ * the highest (paid ≠ higher quality).
+ */
+function pickQuality(models: CatalogModel[], weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
+  let bestIdx = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < models.length; i++) {
+    const s = stageScore(models[i], weights);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+/**
+ * Select a model for every stage from the user's available (connected-provider)
+ * catalog. Deterministic: same catalog + setup → same picks. Stages are
+ * independent — different stages may resolve to different models.
+ */
+export function selectStageModels(setup: SetupChoice, availableModels: CatalogModel[]): Record<StageKey, StagePick | null> {
+  const result = {} as Record<StageKey, StagePick | null>;
+  type StageWeights = (typeof STAGE_WEIGHTS)[StageKey];
+  for (const [stageId, weights] of Object.entries(STAGE_WEIGHTS) as Array<[StageKey, StageWeights]>) {
+    result[stageId] = selectForStage(setup, stageId, availableModels, weights);
+  }
+  return result;
+}
+
+export function selectForStage(
+  setup: SetupChoice,
+  stageId: StageKey,
+  availableModels: CatalogModel[],
+  weights?: { coding: number; reasoning: number; speed: number; longContext: number }
+): StagePick | null {
+  if (availableModels.length === 0) return null;
+  const w = weights || STAGE_WEIGHTS[stageId];
+
+  // Derived automatic-selection pool (family grouping → context gate →
+  // provider top-N). `availableModels` (the full connected catalog) is NOT
+  // mutated — manual selection keeps seeing everything.
+  const autoPool = buildAutomaticPool(availableModels, stageId, w);
+  if (autoPool.length === 0) return null;
+
+  // Score-ordered pool (stable tiebreak on valueScore, then name, for determinism).
+  const pool = [...autoPool].sort((a, b) => {
+    const d = stageScore(b, w) - stageScore(a, w);
+    if (d !== 0) return d;
+    const dv = (b.valueScore || 0) - (a.valueScore || 0);
+    if (dv !== 0) return dv;
+    return `${a.providerId}/${a.modelId}`.localeCompare(`${b.providerId}/${b.modelId}`);
+  });
+
+  let chosen: CatalogModel | null = null;
+  let isPaidFallback = false;
+
+  if (setup === 'free') {
+    const freePool = pool.filter((m) => m.price.isFree);
+    if (freePool.length > 0) {
+      chosen = freePool[0];
+    } else {
+      // No free model: lowest-cost suitable available model (priced first).
+      const priced = pool.filter((m) => definedPrice(m) !== null);
+      const cheapest = (priced.length > 0 ? priced : pool).reduce((best, m) => {
+        const pA = definedPrice(m);
+        const pB = definedPrice(best);
+        const cA = pA ? pA.input * 2 + pA.output : Number.POSITIVE_INFINITY;
+        const cB = pB ? pB.input * 2 + pB.output : Number.POSITIVE_INFINITY;
+        return cA < cB ? m : best;
+      }, pool[0]);
+      chosen = cheapest;
+      isPaidFallback = true;
+    }
+  } else {
+    const idx = setup === 'balanced' ? pickBalanced(pool, w) : pickQuality(pool, w);
+    chosen = pool[idx] || null;
+  }
+
+  if (!chosen) return null;
+  return {
+    stageId,
+    provider: chosen.providerId,
+    model: chosen.modelId,
+    isFree: chosen.price.isFree,
+    isPaidFallback,
+  };
+}

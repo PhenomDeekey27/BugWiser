@@ -47,7 +47,9 @@ async function getAnalysisUserId(analysisId: string): Promise<string> {
 
 export async function generate(params: GenerateParams): Promise<GenerateResult> {
   const userId = params.userId || (await getAnalysisUserId(params.analysisId));
-  const routing = await resolveAnalysisRouting(userId);
+  // Resolve routing for THIS stage; auto mode picks up the user's saved
+  // stage_overrides entry for params.task (manual mode is task-independent).
+  const routing = await resolveAnalysisRouting(userId, params.task);
 
   // Get the model strategy from the analysis row
   const analysisId = params.analysisId;
@@ -66,6 +68,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     responseFormat: params.responseFormat,
     providerTokens: routing.runArgs.providerTokens,
     manualModel: routing.runArgs.manualModel,
+    stageOverrides: routing.runArgs.stageOverrides,
     strategy: strategyMode,
   });
 

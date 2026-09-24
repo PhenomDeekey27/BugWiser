@@ -50,7 +50,10 @@ export async function POST(request: Request) {
       .eq('user_id', user.id)
       .maybeSingle();
 
-    const modelStrategy = preference?.selected_strategy || 'auto';
+    // analyses.model_strategy only accepts engine strategies — map /models page
+    // UI setups to 'custom' (their concrete picks live in stage_overrides).
+    const rawStrategy = preference?.selected_strategy || 'auto';
+    const modelStrategy = rawStrategy === 'balanced' || rawStrategy === 'quality' ? 'custom' : rawStrategy;
 
     // Insert the analysis record
     const insertResult = await createBackgroundClient()
