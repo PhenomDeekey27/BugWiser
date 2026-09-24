@@ -6,17 +6,9 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { RefreshCwIcon, ShieldCheckIcon, Settings2Icon } from 'lucide-react';
+import { PlusIcon, RefreshCwIcon, ShieldCheckIcon, Settings2Icon } from 'lucide-react';
 import type { GitHubUser } from '@/types';
-import { ALL_PRESETS, type PresetDefinition } from '@/lib/ai/presets';
-import type { AnalysisTask } from '@/lib/ai/config';
-
-const STRATEGY_TITLES = {
-  free: { title: '🆓 Fully Free', subtitle: 'Zero model cost', color: 'bg-green-500', border: 'border-green-500' },
-  'free-paid': { title: '⚡ Free + Paid', subtitle: 'Free models for simple work', color: 'bg-orange-500', border: 'border-orange-500' },
-  fully_paid: { title: '💎 Fully Paid', subtitle: 'Best paid models throughout', color: 'bg-purple-500', border: 'border-purple-500' },
-  custom: { title: '⚙ Custom', subtitle: 'Control stages yourself', color: 'bg-blue-500', border: 'border-blue-500' },
-};
+import { ProviderCard } from '@/components/models/ProviderCard';
 
 const STAGES = [
   { id: 'relevant_file_discovery', label: '🔍 File Discovery', task: 'relevant_file_discovery', provider: 'simple_coding' },
@@ -28,11 +20,39 @@ const STAGES = [
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; };
 
+type LibraryFilter = 'all' | 'free' | 'paid' | 'coding' | 'reasoning' | 'long_context' | 'fast';
+
+const LIBRARY_FILTERS: { id: LibraryFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'free', label: 'Free' },
+  { id: 'paid', label: 'Paid' },
+  { id: 'coding', label: 'Coding' },
+  { id: 'reasoning', label: 'Reasoning' },
+  { id: 'long_context', label: 'Long Context' },
+  { id: 'fast', label: 'Fast' },
+];
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  coding: 'Coding',
+  reasoning: 'Reasoning',
+  vision: 'Vision',
+  tool_calling: 'Tool Calling',
+  structured_output: 'Structured Output',
+};
+
+type SetupChoice = 'free' | 'balanced' | 'quality';
+
+const MODEL_SETUPS: { id: SetupChoice; title: string; description: string }[] = [
+  { id: 'free', title: 'Free', description: 'Use free models across the pipeline to minimize cost.' },
+  { id: 'balanced', title: 'Balanced', description: 'Balance cost and model quality across the pipeline.' },
+  { id: 'quality', title: 'Quality', description: 'Prioritize higher-quality models when available.' },
+];
+
 export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
 
-export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
+export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
 
 export default function ModelsPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
@@ -42,7 +62,6 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [selectedStrategy, setSelectedStrategy] = useState<keyof typeof STRATEGY_TITLES>('free');
   const [showStageModal, setShowStageModal] = useState<string | null>(null);
   const [selectedStageProvider, setSelectedStageProvider] = useState<string>('');
   const [selectedStageModel, setSelectedStageModel] = useState<string>('');
@@ -51,13 +70,16 @@ export default function ModelsPage() {
   const [selectedStagePriceInput, setSelectedStagePriceInput] = useState<number | null>(null);
   const [selectedStageIsOverride, setSelectedStageIsOverride] = useState<boolean>(false);
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
-  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'free' | 'paid' | 'all' | undefined>();
-  const [providerFilter, setProviderFilter] = useState<string>('all');
+  const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
+  const [filter, setFilter] = useState<LibraryFilter>('all');
   const [search, setSearch] = useState('');
 
   const connectedProviders = useMemo(() => providers.filter((p) => p.status === 'connected'), [providers]);
-  const connectedModels = useMemo(() => models.filter((m) => m.available), [models]);
+  const connectedProviderIds = useMemo(() => new Set(connectedProviders.map((p) => p.providerId)), [connectedProviders]);
+  const libraryBaseModels = useMemo(
+    () => models.filter((m) => m.available && connectedProviderIds.has(m.providerId)),
+    [models, connectedProviderIds]
+  );
 
   const loadData = useCallback(async () => {
     const supabase = (await import('@/lib/supabase/client')).createClient();
@@ -81,32 +103,9 @@ export default function ModelsPage() {
     if (data.preference) {
       const pref = data.preference;
       setPreference(pref);
-      const strategy = pref.selected_strategy || 'free' as keyof typeof STRATEGY_TITLES;
-      setSelectedStrategy(strategy as keyof typeof STRATEGY_TITLES);
       const overrides = pref.stage_overrides || {};
-      // Check if a preset was selected (not auto/manual)
-      if ((pref.selection_mode as string) === 'preset' && pref.preset_id) {
-        const preset = ALL_PRESETS.find(p => p.id === pref.preset_id);
-        if (preset) {
-          const loaded: Partial<Record<AnalysisTask, StageModel>> = {};
-          STAGES.forEach((stage) => {
-            const presetAssignment = preset.assignments[stage.task];
-            loaded[stage.task] = {
-              stageId: stage.task,
-              label: stage.label,
-              selectedProvider: presetAssignment.provider || null,
-              selectedModel: presetAssignment.model || null,
-              isOverride: false,
-            };
-          });
-          setStageModels(loaded as Record<string, StageModel>);
-          setSelectedPreset(pref.preset_id);
-        }
-      } else {
-        loadStageModels(overrides);
-      }
+      loadStageModels(overrides);
     } else {
-      setSelectedStrategy('free' as keyof typeof STRATEGY_TITLES);
       setStageModels({});
     }
   }, []);
@@ -146,12 +145,12 @@ export default function ModelsPage() {
       const res = await fetch('/api/models/preference', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selection_mode: selectedStrategy === 'custom' ? 'manual' : 'auto', selected_strategy: selectedStrategy, provider: selectedStrategy === 'custom' ? null : null, model: selectedStrategy === 'custom' ? null : null, stage_overrides: stageOverrides }),
+        body: JSON.stringify({ selection_mode: 'auto', stage_overrides: stageOverrides }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save preference');
       setPreference(data.preference);
-      toast.success('Strategy saved successfully');
+      toast.success('Preference saved successfully');
     } catch (e) {
       toast.error((e as Error).message || 'Failed to save preference');
     } finally {
@@ -183,17 +182,24 @@ export default function ModelsPage() {
     }
   };
 
-  const filteredModels = useMemo(() => {
-    let list = connectedModels;
-    if (filter === 'free') list = list.filter((m) => m.price.isFree && m.available).sort((a, b) => b.valueScore - a.valueScore);
-    if (filter === 'paid') list = list.filter((m) => !m.price.isFree && m.available).sort((a, b) => b.valueScore - a.valueScore);
-    if (providerFilter !== 'all') list = list.filter((m) => m.providerId === providerFilter);
+  const libraryModels = useMemo(() => {
+    let list = libraryBaseModels;
+    if (filter === 'free') list = list.filter((m) => m.price.isFree);
+    else if (filter === 'paid') list = list.filter((m) => !m.price.isFree);
+    else if (filter === 'coding') list = list.filter((m) => m.capabilities.includes('coding'));
+    else if (filter === 'reasoning') list = list.filter((m) => m.capabilities.includes('reasoning'));
+    else if (filter === 'long_context') list = list.filter((m) => m.contextWindow >= 100000);
+    else if (filter === 'fast') list = list.filter((m) => m.scores.speed >= 60);
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter((m) => m.displayName.toLowerCase().includes(q) || m.modelId.toLowerCase().includes(q));
+      list = list.filter((m) =>
+        m.displayName.toLowerCase().includes(q) ||
+        m.modelId.toLowerCase().includes(q) ||
+        m.providerId.toLowerCase().includes(q)
+      );
     }
-    return list;
-  }, [connectedModels, filter, providerFilter, search]);
+    return [...list].sort((a, b) => b.valueScore - a.valueScore);
+  }, [libraryBaseModels, filter, search]);
 
   const getStageCost = (stageModel: StageModel, model: CatalogModel): string => {
     if (!model) return 'Unknown';
@@ -201,19 +207,6 @@ export default function ModelsPage() {
     if (model.price.input === null || model.price.input === undefined) return 'Pricing unavailable';
     return `$${model.price.input.toFixed(2)}`;
   };
-
-  const isPresetModel = (stageId: string): boolean => {
-    if (!selectedPreset) return false;
-    const preset = ALL_PRESETS.find(p => p.id === selectedPreset);
-    if (!preset) return false;
-    const assignment = preset.assignments[stageId as AnalysisTask];
-    return !!assignment;
-  };
-
-    const recommendedModels = useMemo(() => [...connectedModels].sort((a, b) => b.fit - a.fit).slice(0, 4), [connectedModels]);
-  const freeModels = useMemo(() => [...connectedModels].filter((m) => m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedModels]);
-  const paidModels = useMemo(() => [...connectedModels].filter((m) => !m.price.isFree).sort((a, b) => b.valueScore - a.valueScore), [connectedModels]);
-  const noProviders = connectedProviders.length === 0;
 
   const getSelectedProviderModels = (providerId: string): CatalogModel[] => {
     return models.filter((m) => m.providerId === providerId && m.available);
@@ -225,17 +218,6 @@ export default function ModelsPage() {
     return providerModels.length > 0 ? providerModels[0] : null;
   };
 
-  const calculateTotalCost = (model: CatalogModel): number => {
-    if (model.price.isFree) return 0;
-    const input = model.price.input ?? 0;
-    const output = model.price.output ?? 0;
-    // If either input or output is unknown (null), we cannot calculate a meaningful cost
-    if (input === null || input === undefined || output === null || output === undefined) {
-      return -1; // Signal unknown cost
-    }
-    return input + output;
-  };
-
   const estimateTotalCost = (): number => {
     let total = 0;
     let hasUnknown = false;
@@ -245,7 +227,6 @@ export default function ModelsPage() {
       if (model && !model.price.isFree) {
         const input = model.price.input ?? 0;
         const output = model.price.output ?? 0;
-        // Check if pricing is unknown
         if (input === null || input === undefined || output === null || output === undefined) {
           hasUnknown = true;
         } else {
@@ -272,33 +253,12 @@ export default function ModelsPage() {
     setShowStageModal(null);
   };
 
-  const applyPreset = (preset: PresetDefinition) => {
-    const loaded: Partial<Record<AnalysisTask, StageModel>> = {};
-    STAGES.forEach((stage) => {
-      const presetAssignment = preset.assignments[stage.task];
-      loaded[stage.task] = {
-        stageId: stage.task,
-        label: stage.label,
-        selectedProvider: presetAssignment.provider || null,
-        selectedModel: presetAssignment.model || null,
-        isOverride: false,
-      };
-    });
-    setStageModels(loaded as Record<string, StageModel>);
-    setSelectedPreset(preset.id);
-    // If a strategy is associated with the preset, update it
-    if (preset.id === 'efficient') setSelectedStrategy('free');
-    else if (preset.id === 'balanced') setSelectedStrategy('free-paid');
-    else if (preset.id === 'fast') setSelectedStrategy('free');
-    else if (preset.id === 'quality') setSelectedStrategy('fully_paid');
-  };
-
   return (
     <AppShell user={user} gradient="dashboard">
       <div className="p-6 lg:p-8 max-w-4xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-bw-peach-light mb-2">BugWiser AI</h1>
-          <p className="text-bw-peach">Configure how BugWiser handles your bug fixes. Choose a strategy and customize each stage.</p>
+          <h1 className="text-3xl font-bold text-bw-peach-light mb-2">AI Models</h1>
+          <p className="text-bw-peach">Connect providers, choose a model setup, and configure which model handles each bug-fixing stage.</p>
         </div>
 
         {error && (
@@ -308,76 +268,20 @@ export default function ModelsPage() {
         {loading && (
           <div className="flex items-center justify-center py-16 text-bw-peach">
             <span className="w-5 h-5 border-2 border-primary-container/30 border-t-primary-container rounded-full animate-spin" />
-            <span className="ml-3 text-sm">Loading strategy configuration...</span>
+            <span className="ml-3 text-sm">Loading AI models...</span>
           </div>
         )}
 
         {!loading && !error && (
           <div className="space-y-8">
-            <section>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(Object.keys(STRATEGY_TITLES) as (keyof typeof STRATEGY_TITLES)[]).map((key) => (
-                  <Card key={key} className={`p-6 cursor-pointer transition-all duration-200 hover:scale-[1.02] ${selectedStrategy === key ? `border-${STRATEGY_TITLES[key].border} bg-white/10` : 'border-bw-surface border-bw-surface/50 bg-bw-surface/50'}`} onClick={() => setSelectedStrategy(key)}>
-                    <div className="flex items-start gap-4">
-                      <div className={`w-12 h-12 rounded-lg ${STRATEGY_TITLES[key].color} bg-opacity-20 flex items-center justify-center`}>
-                        <span className="text-xl">{STRATEGY_TITLES[key].title.split('')[0]}</span>
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="text-lg font-semibold text-bw-peach-light">{STRATEGY_TITLES[key].title}</h3>
-                        <p className="text-sm text-bw-peach mt-1">{STRATEGY_TITLES[key].subtitle}</p>
-                        <Separator className="my-4" />
-                        <div className="flex items-center gap-2 text-xs text-bw-peach">
-                          <span className="text-bw-peach-light">Cost:</span>
-                          {key === 'free' ? <span className="text-green-500 font-semibold">$0.00</span> : key === 'free-paid' ? <span className="text-orange-500">Free + Paid</span> : key === 'fully_paid' ? <span className="text-purple-500">Paid</span> : <span className="text-blue-500">Custom</span>}
-                        </div>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </section>
+            <ConnectedProvidersSection
+              providers={providers}
+              models={models}
+              onConnect={handleConnect}
+              onDisconnect={handleDisconnect}
+            />
 
-            <section>
-              <h2 className="text-2xl font-semibold text-bw-peach-light mb-6">BugWiser Recommended</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {ALL_PRESETS.map((preset) => {
-                  const isSelected = selectedPreset === preset.id;
-                  const strategy = selectedStrategy as keyof typeof STRATEGY_TITLES;
-                  const strategyTitle = STRATEGY_TITLES[strategy]?.title || 'Custom';
-                  return (
-                    <Card
-                      key={preset.id}
-                      className={`p-6 cursor-pointer transition-all duration-200 hover:scale-[1.02] border-2 ${isSelected ? `border-${STRATEGY_TITLES[strategy].border} bg-white/15` : 'border-bw-surface border-bw-surface/50 bg-bw-surface/50'}`}
-                      onClick={() => applyPreset(preset)}
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${preset.id === 'efficient' ? 'bg-green-500/20' : preset.id === 'balanced' ? 'bg-orange-500/20' : preset.id === 'fast' ? 'bg-blue-500/20' : 'bg-purple-500/20'}`}>
-                          <span className="text-xl font-bold">{preset.name[0]}</span>
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="text-lg font-semibold text-bw-peach-light">{preset.name}</h3>
-                          <p className="text-sm text-bw-peach mt-1">{preset.description}</p>
-                          <Separator className="my-4" />
-                          <div className="text-xs text-bw-peach">
-                            <span className="text-bw-peach-light">Strategy:</span>
-                            <span className="ml-2 font-medium">{strategyTitle}</span>
-                          </div>
-                          <div className="text-xs text-bw-peach/70 mt-2">
-                            <span className="text-bw-peach-light">Stages:</span>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {STAGES.slice(0, 2).map((stage) => (
-                                <span key={stage.id} className="text-xs bg-bw-surface/50 px-2 py-0.5 rounded">{stage.label}</span>
-                              ))}
-                              <span className="text-xs bg-bw-surface/30 px-2 py-0.5 rounded">...</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </Card>
-                  );
-                })}
-              </div>
-            </section>
+            <ModelSetupSection selected={setupChoice} onSelect={setSetupChoice} />
 
             <section>
               <div className="flex items-center justify-between mb-6">
@@ -399,15 +303,12 @@ export default function ModelsPage() {
                       const sm = stageModels[stage.id];
                       const selectedProvider = sm.selectedProvider || '';
                       const providerModels = getSelectedProviderModels(selectedProvider);
-                      const isCustom = selectedStrategy === 'custom';
-                      let selectedModelInfo: CatalogModel | null = null;
-                      if (sm.selectedModel && sm.selectedProvider) {
-                        const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
-                        selectedModelInfo = matchingModel || null;
-                      }
-                      const bestModel = selectedModelInfo || (providerModels.length > 0 ? providerModels[0] : null);
+                      const bestModel = getBestModelForStage(sm);
                       const stageCost = bestModel ? getStageCost(sm, bestModel) : 'Unknown';
                       const capability = bestModel ? getStageCapability(bestModel) : 'unknown';
+                      const modelSubline = sm.selectedModel && sm.selectedProvider
+                        ? (capability !== 'unknown' ? `${stageCost} · ${capability}` : stageCost)
+                        : 'N/A';
 
                       const getModelDisplay = () => {
                         if (sm.selectedModel && sm.selectedProvider) {
@@ -450,7 +351,7 @@ export default function ModelsPage() {
                           <div className="grid grid-cols-12 gap-4 items-center">
                             <div className="col-span-4 flex items-center gap-3">
                               <span className="text-lg">{stage.label}</span>
-                              {isCustom && sm.isOverride && (
+                              {sm.isOverride && (
                                 <Badge variant="outline" className="text-xs text-blue-500 border-blue-500">
                                   Custom Override
                                 </Badge>
@@ -460,32 +361,15 @@ export default function ModelsPage() {
                               <div className="text-sm text-bw-peach-light truncate">
                                 {getModelDisplay()}
                               </div>
-                              <div className="text-xs text-bw-peach/60 mt-0.5">
-                                {sm.selectedModel && sm.selectedProvider ? stageCost : 'N/A'}
-                              </div>
+                               <div className="text-xs text-bw-peach/60 mt-0.5">
+                                 {modelSubline}
+                               </div>
                             </div>
                             <div className="col-span-3 text-xs text-bw-peach">
                               {getProviderDisplay()}
                             </div>
                             <div className="col-span-1">
                               <Badge className={status.className}>{status.text}</Badge>
-                            </div>
-                            <div className="col-span-1 text-center">
-                              {selectedPreset && (
-                                <button
-                                  onClick={() => {
-                                    setSelectedPreset(null);
-                                    setSelectedStrategy('free');
-                                    setStageModels({});
-                                    setSelectedStageProvider('');
-                                    setSelectedStageModel('');
-                                  }}
-                                  className="text-xs text-bw-peach/60 hover:text-bw-peach-light"
-                                  title="Clear preset selection"
-                                >
-                                  ✕
-                                </button>
-                              )}
                             </div>
                             <div className="col-span-2">
                               <Button
@@ -517,62 +401,8 @@ export default function ModelsPage() {
 
               <div className="mt-4 p-3 bg-bw-surface/30 border border-bw-surface rounded-lg">
                 <p className="text-xs text-bw-peach">
-                  <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Strategy" below.
+                  <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Preference" below.
                 </p>
-              </div>
-            </section>
-
-            <section>
-              <h2 className="text-2xl font-semibold text-bw-peach-light mb-6">Your Bug-Fixing Pipeline</h2>
-              <div className="space-y-4">
-                {STAGES.map((stage) => {
-                  const sm = stageModels[stage.id];
-                  const selectedProvider = sm.selectedProvider || '';
-                  const providerModels = getSelectedProviderModels(selectedProvider);
-                  let selectedModelInfo: CatalogModel | null = null;
-                  if (sm.selectedModel && sm.selectedProvider) {
-                    const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
-                    selectedModelInfo = matchingModel || null;
-                  }
-                  const bestModel = selectedModelInfo || (providerModels.length > 0 ? providerModels[0] : null);
-                  const stageCost = bestModel ? getStageCost(sm, bestModel) : 'Unknown';
-                  const capability = bestModel ? getStageCapability(bestModel) : 'unknown';
-                  const isCustom = selectedStrategy === 'custom';
-
-                  return (
-                    <Card key={stage.id} className="p-5">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xl">{stage.label}</span>
-                          {isCustom && sm.isOverride && <Badge variant="outline" className="text-blue-500 border-blue-500">Custom Override</Badge>}
-                          {selectedPreset && (
-                            <Badge variant="outline" className="text-xs text-orange-500 border-orange-500">
-                              Recommended
-                            </Badge>
-                          )}
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={() => {
-                          const selectedModelForCost = sm.selectedModel && sm.selectedProvider ? providerModels.find((m) => m.modelId === sm.selectedModel) : null;
-                          setShowStageModal(stage.id);
-                          setSelectedStageProvider(selectedProvider);
-                          setSelectedStageModel(sm.selectedModel || '');
-                          setSelectedStageReason(bestModel ? getStageCapability(bestModel) : 'unknown');
-                          setSelectedStageCost(stageCost);
-                          setSelectedStagePriceInput(selectedModelForCost ? selectedModelForCost.price.input : null);
-                          setSelectedStageIsOverride(sm.isOverride);
-                        }}>Change Model</Button>
-                      </div>
-                      <div className="text-sm text-bw-peach">
-                        <div className="flex items-center gap-4 text-xs text-bw-peach-light mb-2">
-                          <span>Model: {bestModel?.displayName || 'Not selected'}</span>
-                          <span>Provider: {bestModel?.providerId || 'N/A'}</span>
-                          <span>Cost: {stageCost}</span>
-                        </div>
-                        <p className="text-xs text-bw-peach/80">{capability}</p>
-                      </div>
-                    </Card>
-                  );
-                })}
               </div>
             </section>
 
@@ -590,7 +420,7 @@ export default function ModelsPage() {
 
             <section>
               <Button onClick={handleSavePreference} disabled={saving} className="w-full max-w-md">
-                {saving ? <><RefreshCwIcon className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : <><ShieldCheckIcon className="mr-2 h-4 w-4" /> Save Strategy</>}
+                {saving ? <><RefreshCwIcon className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : <><ShieldCheckIcon className="mr-2 h-4 w-4" /> Save Preference</>}
               </Button>
             </section>
 
@@ -604,6 +434,17 @@ export default function ModelsPage() {
   );
 }
 
+function Card({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) {
+  return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
+}
+
+function formatCost(cost: number): string {
+  if (cost === 0) return 'Free';
+  if (cost === -1) return 'Pricing unavailable';
+  if (cost < 0) return 'Pricing unavailable';
+  return `$${cost.toFixed(2)}`;
+}
+
 function getStageCapability(model: CatalogModel): string {
   if (!model) return 'Unknown';
   const reasons: string[] = [];
@@ -615,22 +456,197 @@ function getStageCapability(model: CatalogModel): string {
   return reasons.length > 0 ? reasons.join(', ') : 'general';
 }
 
-function formatCost(cost: number): string {
-  if (cost === 0) return 'Free';
-  if (cost === -1) return 'Pricing unavailable';
-  if (cost < 0) return 'Pricing unavailable';
-  return `$${cost.toFixed(2)}`;
-}
-
 function calculateTotalCost(model: CatalogModel): number {
   if (model.price.isFree) return 0;
   const input = model.price.input ?? 0;
   const output = model.price.output ?? 0;
-  // If either input or output is unknown (null), we cannot calculate a meaningful cost
   if (input === null || input === undefined || output === null || output === undefined) {
-    return -1; // Signal unknown cost
+    return -1;
   }
   return input + output;
+}
+
+function formatContext(tokens: number): string {
+  if (!tokens || tokens <= 0) return 'Unknown';
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`;
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
+  return `${tokens}`;
+}
+
+function getCostLabel(model: CatalogModel): string {
+  if (model.price.isFree) return 'Free';
+  if (model.price.input === null || model.price.input === undefined || model.price.output === null || model.price.output === undefined) {
+    return 'Pricing unavailable';
+  }
+  return `$${model.price.input.toFixed(2)} in · $${model.price.output.toFixed(2)} out per 1M`;
+}
+
+function getCapabilityLabel(model: CatalogModel): string {
+  const labels = model.capabilities.map((c) => CAPABILITY_LABELS[c] || c);
+  if (labels.length > 0) return labels.join(' · ');
+  if (model.tags.length > 0) return model.tags.map((t) => t.split('-').join(' ')).join(' · ');
+  return '';
+}
+
+function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect }: { providers: CatalogProvider[]; models: CatalogModel[]; onConnect: (providerId: string, apiKey: string) => Promise<void>; onDisconnect: (providerId: string) => Promise<void>; }) {
+  const [showConnectPanel, setShowConnectPanel] = useState(false);
+  const connected = providers.filter((p) => p.status === 'connected');
+  const available = providers.filter((p) => p.status !== 'connected');
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <h2 className="text-2xl font-semibold text-bw-peach-light">Connected Providers</h2>
+          <Badge variant="outline" className="text-xs text-bw-peach">{connected.length} connected</Badge>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setShowConnectPanel((v) => !v)} disabled={available.length === 0}>
+          <PlusIcon className="h-3 w-3 mr-1" />
+          Connect Provider
+        </Button>
+      </div>
+
+      {connected.length === 0 ? (
+        <Card className="p-8 text-center">
+          <p className="text-sm font-medium text-bw-peach-light">No providers connected</p>
+          <p className="text-xs text-bw-peach mt-1">Connect an AI provider to see its models and configure BugWiser stages.</p>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {connected.map((provider) => (
+            <ProviderCard
+              key={provider.providerId}
+              provider={provider}
+              modelCount={models.filter((m) => m.providerId === provider.providerId && m.available).length}
+              onConnect={onConnect}
+              onDisconnect={onDisconnect}
+            />
+          ))}
+        </div>
+      )}
+
+      {showConnectPanel && available.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-bw-peach-light mb-3">Add a provider</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {available.map((provider) => (
+              <ProviderCard key={provider.providerId} provider={provider} onConnect={onConnect} onDisconnect={onDisconnect} />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ModelSetupSection({ selected, onSelect }: { selected: SetupChoice | null; onSelect: (setup: SetupChoice) => void; }) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-semibold text-bw-peach-light">BugWiser Model Setup</h2>
+        {selected && (
+          <Badge variant="outline" className="text-xs text-bw-peach">
+            {MODEL_SETUPS.find((s) => s.id === selected)?.title} selected
+          </Badge>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {MODEL_SETUPS.map((setup) => {
+          const isSelected = selected === setup.id;
+          return (
+            <Card key={setup.id} className={`p-5 flex flex-col ${isSelected ? 'ring-1 ring-primary-container' : ''}`}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold text-bw-peach-light">{setup.title}</h3>
+                {isSelected && <Badge className="text-xs text-green-500 bg-green-500/10 border-green-500">Selected</Badge>}
+              </div>
+              <p className="text-xs text-bw-peach mt-2 flex-1">{setup.description}</p>
+              <Button size="sm" variant={isSelected ? 'default' : 'outline'} className="mt-4" onClick={() => onSelect(setup.id)}>
+                {isSelected ? 'Selected' : `Select ${setup.title}`}
+              </Button>
+            </Card>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ModelLibrary({ models, providers, baseCount, filter, onFilterChange, search, onSearchChange }: { models: CatalogModel[]; providers: CatalogProvider[]; baseCount: number; filter: LibraryFilter; onFilterChange: (filter: LibraryFilter) => void; search: string; onSearchChange: (search: string) => void; }) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-semibold text-bw-peach-light">Model Library</h2>
+        <Badge variant="outline" className="text-xs text-bw-peach">{models.length} of {baseCount} models</Badge>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {LIBRARY_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => onFilterChange(f.id)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+              filter === f.id
+                ? 'bg-primary-container text-on-primary-container border-primary-container'
+                : 'border-bw-surface bg-bw-surface/50 text-bw-peach hover:bg-bw-surface/80'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <input
+        type="text"
+        placeholder="Search models by name, ID, or provider..."
+        value={search}
+        onChange={(e) => onSearchChange(e.target.value)}
+        className="w-full px-4 py-2 rounded-lg border border-bw-surface bg-bw-surface/50 text-sm text-bw-peach-light placeholder-bw-peach/60 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all mb-4"
+      />
+
+      {baseCount === 0 ? (
+        <Card className="p-8 text-center">
+          <p className="text-sm font-medium text-bw-peach-light">No models available</p>
+          <p className="text-xs text-bw-peach mt-1">Models from your connected providers will appear here.</p>
+        </Card>
+      ) : models.length === 0 ? (
+        <Card className="p-8 text-center">
+          <p className="text-sm font-medium text-bw-peach-light">No models match</p>
+          <p className="text-xs text-bw-peach mt-1">Try a different filter or search term.</p>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {models.map((model) => (
+            <ModelCard key={`${model.providerId}-${model.modelId}`} model={model} providers={providers} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ModelCard({ model, providers }: { model: CatalogModel; providers: CatalogProvider[] }) {
+  const provider = providers.find((p) => p.providerId === model.providerId);
+  const capabilities = getCapabilityLabel(model);
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-bw-peach-light truncate">{model.displayName}</div>
+          <div className="text-xs text-bw-peach mt-1">{provider ? provider.displayName : model.providerId}</div>
+        </div>
+        <Badge className={model.price.isFree ? 'text-xs text-green-500 bg-green-500/10 border-green-500' : 'text-xs text-purple-500 bg-purple-500/10 border-purple-500'}>
+          {model.price.isFree ? 'Free' : 'Paid'}
+        </Badge>
+      </div>
+      <div className="mt-3 space-y-1 text-xs text-bw-peach">
+        <div><span className="font-semibold text-bw-peach-light">Cost:</span> {getCostLabel(model)}</div>
+        <div><span className="font-semibold text-bw-peach-light">Context:</span> <span className="font-mono">{formatContext(model.contextWindow)}</span></div>
+        {capabilities && <div><span className="font-semibold text-bw-peach-light">Capabilities:</span> {capabilities}</div>}
+      </div>
+    </Card>
+  );
 }
 
 function StageChangeModal({ stageId, stage, providers, models, selectedProvider, selectedModel, selectedReason, selectedCost, isOverride, onApply, onCancel, initialPriceInput }: { stageId: string; stage: typeof STAGES[0]; providers: CatalogProvider[]; models: CatalogModel[]; selectedProvider: string; selectedModel: string; selectedReason: string; selectedCost: string; isOverride: boolean; onApply: (provider: string, model: string, reason: string, cost: string, isOverride: boolean) => void; onCancel: () => void; initialPriceInput?: number | null; }) {
@@ -674,7 +690,6 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
     const reason = localReason || 'Recommended model';
     const cost = localCost || 'N/A';
     onApply(localProvider, localModel, reason, cost, localIsOverride);
-    // Reset the price input so next time it reads from the selected model
     setLocalPriceInput(null);
   };
 
@@ -690,7 +705,6 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
         </div>
 
         <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-          {/* Search Input */}
           <div className="pt-4 pb-4">
             <input
               type="text"
@@ -701,7 +715,6 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
             />
           </div>
 
-          {/* Recommended Models */}
           {!modelSearch && (
             <>
               <div className="mb-4">
@@ -783,7 +796,6 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
             </>
           )}
 
-          {/* Search Results */}
           {modelSearch && (
             <>
               {searchEmpty && (
@@ -800,93 +812,88 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
               )}
               {!searchEmpty && (
                 <>
-                  {hasModels && (
-                    <>
-                      <div className="mb-4">
-                        <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
-                        <div className="space-y-2">
-                          {recommendedModels.map((model) => {
-                            const cost = calculateTotalCost(model);
-                            const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
-                            return (
-                              <button key={model.modelId} onClick={() => {
-                                setLocalProvider(model.providerId);
-                                setLocalModel(model.modelId);
-                                setLocalReason('Best value model');
-                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                                setLocalCost(displayCost);
-                              }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-bw-peach-light font-medium">{model.displayName}</span>
-                                  {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
-                                </div>
-                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                  <div className="mb-4">
+                    <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
+                    <div className="space-y-2">
+                      {recommendedModels.map((model) => {
+                        const cost = calculateTotalCost(model);
+                        const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
+                        return (
+                          <button key={model.modelId} onClick={() => {
+                            setLocalProvider(model.providerId);
+                            setLocalModel(model.modelId);
+                            setLocalReason('Best value model');
+                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                            setLocalCost(displayCost);
+                          }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-bw-peach-light font-medium">{model.displayName}</span>
+                              {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
+                            </div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                      <Separator />
+                  <Separator />
 
-                      <div>
-                        <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
-                        <div className="space-y-2">
-                          {freeModels.map((model) => {
-                            const cost = calculateTotalCost(model);
-                            return (
-                              <button key={model.modelId} onClick={() => {
-                                setLocalProvider(model.providerId);
-                                setLocalModel(model.modelId);
-                                setLocalReason('Free model');
-                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                                setLocalCost(displayCost);
-                              }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-bw-peach-light">{model.displayName}</span>
-                                  {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                                </div>
-                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                  <div>
+                    <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
+                    <div className="space-y-2">
+                      {freeModels.map((model) => {
+                        const cost = calculateTotalCost(model);
+                        return (
+                          <button key={model.modelId} onClick={() => {
+                            setLocalProvider(model.providerId);
+                            setLocalModel(model.modelId);
+                            setLocalReason('Free model');
+                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                            setLocalCost(displayCost);
+                          }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-bw-peach-light">{model.displayName}</span>
+                              {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                            </div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                      <Separator />
+                  <Separator />
 
-                      <div>
-                        <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
-                        <div className="space-y-2">
-                          {paidModels.map((model) => {
-                            const cost = calculateTotalCost(model);
-                            return (
-                              <button key={model.modelId} onClick={() => {
-                                setLocalProvider(model.providerId);
-                                setLocalModel(model.modelId);
-                                setLocalReason('Paid model');
-                                const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                                setLocalCost(displayCost);
-                              }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-bw-peach-light">{model.displayName}</span>
-                                  {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                                </div>
-                                <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </>
-                  )}
+                  <div>
+                    <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
+                    <div className="space-y-2">
+                      {paidModels.map((model) => {
+                        const cost = calculateTotalCost(model);
+                        return (
+                          <button key={model.modelId} onClick={() => {
+                            setLocalProvider(model.providerId);
+                            setLocalModel(model.modelId);
+                            setLocalReason('Paid model');
+                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
+                            setLocalCost(displayCost);
+                          }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
+                            <div className="flex items-center justify-between">
+                              <span className="text-bw-peach-light">{model.displayName}</span>
+                              {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                            </div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </>
               )}
             </>
           )}
         </div>
 
-        {/* Sticky Footer - Always Visible */}
         <div className="pt-4 border-t border-bw-surface mt-auto">
           <div className="text-sm text-bw-peach">
             <div className="flex items-center gap-2 mb-2">
@@ -903,8 +910,4 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
       </div>
     </div>
   );
-}
-
-function Card({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) {
-  return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
 }

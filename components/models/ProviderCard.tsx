@@ -10,6 +10,7 @@ interface ProviderCardProps {
   provider: CatalogProvider;
   onConnect: (providerId: string, apiKey: string) => Promise<void>;
   onDisconnect: (providerId: string) => Promise<void>;
+  modelCount?: number;
 }
 
 const AUTH_LABEL: Record<string, string> = {
@@ -18,7 +19,7 @@ const AUTH_LABEL: Record<string, string> = {
   none: 'None',
 };
 
-export function ProviderCard({ provider, onConnect, onDisconnect }: ProviderCardProps) {
+export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: ProviderCardProps) {
   const [showKey, setShowKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
@@ -71,6 +72,10 @@ export function ProviderCard({ provider, onConnect, onDisconnect }: ProviderCard
         <Badge variant="outline">{AUTH_LABEL[authType] || authType}</Badge>
         {provider.serverConfigured && <Badge variant="secondary">Server env</Badge>}
       </div>
+
+      {typeof modelCount === 'number' && (
+        <p className="text-xs text-bw-peach font-mono">{modelCount} models</p>
+      )}
 
       {connected ? (
         <div className="flex items-center justify-between">

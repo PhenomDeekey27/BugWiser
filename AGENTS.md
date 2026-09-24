@@ -434,6 +434,18 @@ Toasts should use the glassmorphic style:
 - No premature architecture
 - No unnecessary dependencies
 
+## Large File Writing Rules
+
+When creating or modifying a source file, follow these guidelines:
+
+- Write files in manageable chunks rather than producing one huge write operation.
+- Prefer incremental edits/patches over rewriting an entire large file.
+- Keep each individual write operation reasonably small (around 100–150 lines when practical).
+- For files that require more content, continue with multiple sequential writes/edits.
+- Never split code merely to satisfy a write-size limit — split only when it improves clarity or maintainability.
+- Preserve existing code and behavior unless the task explicitly requires a change.
+- If a file is large but logically cohesive, it is acceptable to write it in one go; split only when the file contains distinct responsibilities that would benefit from separation.
+
 ## Mock Data
 
 Use centralized mock data in `lib/mock/`. Do NOT scatter mock objects throughout components. Mock data should resemble real GitHub repositories and issues. Keep mock data clearly separated from future API/database code.

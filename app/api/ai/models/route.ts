@@ -106,7 +106,7 @@ export async function GET() {
     { id: 'custom', label: 'Custom', description: 'Base auto strategy with optional stage overrides.' },
   ];
 
-  const selectedStrategy = preference.selection_mode || 'auto';
+  const selectedStrategy = (preference.selection_mode || 'auto') as 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
 
   return NextResponse.json({
     selectedStrategy,
