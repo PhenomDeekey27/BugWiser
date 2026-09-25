@@ -31,6 +31,25 @@ function toPerMillion(usdPerToken: number | null): number | null {
   return usdPerToken * PER_TOKEN_TO_PER_MILLION;
 }
 
+/**
+ * Coerces a provider price value (string or number) into a finite number,
+ * or null when absent/unparseable. Providers send "0", 0, "0.000003", null…
+ * so free detection must run on the coerced number, never on the raw value.
+ */
+function toPriceNumber(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Free ⇔ EXPLICIT zero pricing on both sides. Null/missing/unknown pricing
+ * is NEVER free (requirements: unknown ≠ free; only confirmed zero cost).
+ */
+function isExplicitlyFree(input: number | null, output: number | null, known: boolean): boolean {
+  return known && input != null && output != null && input === 0 && output === 0;
+}
+
 // ── Provider-specific fetch functions ──
 
 async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
@@ -51,8 +70,13 @@ async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
     .map((m: Record<string, unknown>) => {
       const pricing = m.pricing as Record<string, unknown> | undefined;
       const topProvider = m.top_provider as Record<string, unknown> | undefined;
-      const input = typeof pricing?.prompt === 'string' ? Number(pricing.prompt) : null;
-      const output = typeof pricing?.completion === 'string' ? Number(pricing.completion) : null;
+      // Raw values may be strings OR numbers (e.g. 0); coerce before use so
+      // numeric zero is not mistaken for "unknown price".
+      const inputRaw = toPriceNumber(pricing?.prompt);
+      const outputRaw = toPriceNumber(pricing?.completion);
+      const hasPricingField = pricing != null && ('prompt' in pricing || 'completion' in pricing);
+      const input = toPerMillion(inputRaw);
+      const output = toPerMillion(outputRaw);
       return {
         providerId: 'openrouter' as ProviderName,
         modelId: (m.id as string) || '',
@@ -60,9 +84,11 @@ async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
         contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
         maxOutputTokens: typeof topProvider?.max_completion_tokens === 'number' ? topProvider.max_completion_tokens : null,
         // OpenRouter prices are USD PER TOKEN (e.g. "0.000003"); normalize to USD per 1M tokens.
-        inputPrice: toPerMillion(Number.isFinite(input) ? input : null),
-        outputPrice: toPerMillion(Number.isFinite(output) ? output : null),
-        isFree: pricing?.prompt === '0' && pricing?.completion === '0',
+        inputPrice: input,
+        outputPrice: output,
+        // Free ⇔ pricing fields exist and both coerce to exactly 0 (string "0"
+        // or numeric 0). Missing/null pricing is unknown, NOT free.
+        isFree: isExplicitlyFree(inputRaw, outputRaw, hasPricingField),
       };
     });
 }
@@ -83,17 +109,22 @@ async function fetchChutes(apiKey: string): Promise<LiveModelEntry[]> {
     const price = m.price as Record<string, unknown> | undefined;
     const inputVal = pricing?.input ?? (price?.input as Record<string, unknown>)?.value;
     const outputVal = pricing?.output ?? (price?.output as Record<string, unknown>)?.value;
-    const numInput = typeof inputVal === 'number' ? inputVal : inputVal != null ? Number(inputVal) : null;
-    const numOutput = typeof outputVal === 'number' ? outputVal : outputVal != null ? Number(outputVal) : null;
+    // Coerce strings/numbers uniformly; numeric-0 pricing must survive.
+    const numInput = toPriceNumber(inputVal);
+    const numOutput = toPriceNumber(outputVal);
+    const hasPriceData = inputVal != null || outputVal != null;
     return {
       providerId: 'chutes' as ProviderName,
       modelId: id,
       displayName: (m.name as string) || (m.display_name as string) || id,
       contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
       maxOutputTokens: typeof m.max_output_tokens === 'number' ? m.max_output_tokens : null,
-      inputPrice: Number.isFinite(numInput) ? numInput : null,
-      outputPrice: Number.isFinite(numOutput) ? numOutput : null,
-      isFree: false,
+      inputPrice: numInput,
+      outputPrice: numOutput,
+      // Not every Chutes model is paid by assumption: when the provider
+      // explicitly reports zero pricing, honor it. Absent pricing stays
+      // unknown (isFree false, null price) — never fabricated as free.
+      isFree: isExplicitlyFree(numInput, numOutput, hasPriceData),
     };
   }).filter((e): e is LiveModelEntry => !!e);
 }
@@ -118,18 +149,19 @@ async function fetchOpenCode(apiKey: string): Promise<LiveModelEntry[]> {
       const pricing = m.pricing as Record<string, unknown> | undefined;
       const input = pricing?.prompt ?? pricing?.input;
       const output = pricing?.completion ?? pricing?.output;
-      const numInput = typeof input === 'number' ? input : input != null ? Number(input) : null;
-      const numOutput = typeof output === 'number' ? output : output != null ? Number(output) : null;
+      const numInput = toPriceNumber(input);
+      const numOutput = toPriceNumber(output);
       const contextWindow = (m.context_length as number) ?? (m.context_window as number) ?? null;
-      const isFree = (numInput != null && numInput === 0 && numOutput != null && numOutput === 0);
+      const hasPriceData = input != null || output != null;
+      const isFree = isExplicitlyFree(numInput, numOutput, hasPriceData);
       return {
         providerId: 'opencode' as ProviderName,
         modelId: id,
         displayName: (m.name as string) || (m.display_name as string) || id,
         contextWindow: typeof contextWindow === 'number' ? contextWindow : null,
         maxOutputTokens: typeof m.max_output_tokens === 'number' ? m.max_output_tokens : null,
-        inputPrice: Number.isFinite(numInput) ? numInput : null,
-        outputPrice: Number.isFinite(numOutput) ? numOutput : null,
+        inputPrice: numInput,
+        outputPrice: numOutput,
         isFree,
       };
     });
@@ -166,6 +198,15 @@ async function fetchOpenAI(apiKey: string): Promise<LiveModelEntry[]> {
     });
 }
 
+// ── Gemini modality guard ──
+// models.list does not expose structured modality metadata, so guard at the
+// generation-FAMILY level: these families are image/video/music/speech or
+// embedding endpoints, not text/code generation (prevents models like Lyria
+// from entering the text-model candidate pool). Family tokens only — not a
+// per-model blacklist. Replace with a modality-metadata check if/when Google
+// exposes one on models.list.
+const GEMINI_NON_TEXT_FAMILY = /(^|[^a-z])(imagen|veo|lyria|chirp|tts|embedding|aqa)([^a-z]|$)/;
+
 async function fetchGemini(apiKey: string): Promise<LiveModelEntry[]> {
   const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey, {
     next: { revalidate: 3600 },
@@ -176,7 +217,10 @@ async function fetchGemini(apiKey: string): Promise<LiveModelEntry[]> {
   return models
     .filter((m: Record<string, unknown>) => {
       const methods = (m.supportedGenerationMethods as string[]) || [];
-      return methods.includes('generateContent');
+      if (!methods.includes('generateContent')) return false;
+      const id = ((m.name as string) || '').replace('models/', '');
+      const displayName = ((m.displayName as string) || '').toLowerCase();
+      return !GEMINI_NON_TEXT_FAMILY.test(id.toLowerCase()) && !GEMINI_NON_TEXT_FAMILY.test(displayName);
     })
     .map((m: Record<string, unknown>) => {
       const name = (m.name as string) || '';
@@ -271,22 +315,30 @@ export async function fetchLiveModels(
   const resolved = await import('@/lib/ai/connection/service').then((m) => m.resolveUserCredentials(userId));
   const outputs: { providerId: ProviderName; models: ModelDefinition[] }[] = [];
 
-  // Fetch from EVERY provider that has a configured key
+  // Fetch from EVERY provider that has a configured key — in PARALLEL.
+  // These fetches used to run sequentially, adding each provider's full
+  // latency (OpenRouter's multi-MB catalog alone is slow) to the rebuild
+  // critical path. Each provider fails independently into its own slot.
+  const tasks: Promise<void>[] = [];
   for (const [providerId, fetcher] of Object.entries(PROVIDER_FETCHERS) as Array<[ProviderName, typeof PROVIDER_FETCHERS[ProviderName]]>) {
     if (!fetcher) continue;
     const apiKey = resolved[providerId] || envKeyForProvider(providerId);
     if (!apiKey) continue;
 
-    try {
-      const entries = await fetcher.fetch(apiKey);
-      outputs.push({
-        providerId,
-        models: entries.map(historyEntryToModel),
-      });
-    } catch (err) {
-      console.warn(`[live-catalog] ${providerId} fetch failed:`, err);
-    }
+    tasks.push(
+      fetcher.fetch(apiKey)
+        .then((entries) => {
+          outputs.push({
+            providerId,
+            models: entries.map(historyEntryToModel),
+          });
+        })
+        .catch((err) => {
+          console.warn(`[live-catalog] ${providerId} fetch failed:`, err);
+        })
+    );
   }
+  await Promise.all(tasks);
 
   return outputs;
 }

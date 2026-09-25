@@ -3,17 +3,10 @@
 // Selection runs entirely on the user's ACTUAL catalog (models from connected
 // providers, already scored by the existing model-intelligence system). No
 // model names or providers are hardcoded — only stage-to-capability PREFERENCES.
-//
-// CatalogModel field scales (from /api/models + model-intelligence):
-//   scores.{coding,reasoning,speed,longContext}: 0–100
-//   price.{input,output}: USD per 1M tokens (null = unknown), price.isFree
-//   capabilities: 'coding' | 'reasoning' | 'vision' | 'tool_calling' | 'structured_output'
-//
-// Automatic selection uses a DERIVED pool: full catalog → family grouping →
-// context sufficiency gate → per-provider top-N. Manual Configure/Change Model
-// keeps using the FULL catalog (app/models/page.tsx) — nothing here mutates it.
 
 import type { CatalogModel } from '@/app/models/page';
+import { estimateCostUsd } from '@/lib/ai/catalog/cost';
+import { STAGE_TOKEN_PROFILES } from '@/lib/ai/catalog/stageTokenProfiles';
 
 export type SetupChoice = 'free' | 'balanced' | 'quality';
 
@@ -89,6 +82,26 @@ function definedPrice(model: CatalogModel): { input: number; output: number } | 
   if (model.price.isFree) return { input: 0, output: 0 };
   if (model.price.input == null || model.price.output == null) return null;
   return { input: model.price.input, output: model.price.output };
+}
+
+/**
+ * Estimated USD cost of running ONE stage request with this model, via the
+ * shared Task 2 cost system (cost.ts arithmetic + stageTokenProfiles
+ * workloads). Selection must never reimplement price × tokens / 1M.
+ *
+ * Returns null when pricing is unknown — callers handle that explicitly;
+ * unknown pricing is NEVER treated as zero cost.
+ */
+function stageEstimatedCostUsd(model: CatalogModel, stageId: StageKey): number | null {
+  const estimate = estimateCostUsd(
+    {
+      inputPricePerMillion: model.price.input,
+      outputPricePerMillion: model.price.output,
+      isFree: model.price.isFree,
+    },
+    STAGE_TOKEN_PROFILES[stageId]
+  );
+  return estimate.status === 'unknown' ? null : estimate.usd;
 }
 
 // ── Automatic-selection pool: family grouping → context gate → provider top-N ──
@@ -236,21 +249,41 @@ function buildAutomaticPool(
 }
 
 /**
- * BALANCED: cost/quality trade-off on the stage-weighted score (0–100) vs
- * defined per-1M price. Free models rank by score; paid models need to earn
- * their cost. Never simply the cheapest, priciest, or highest-quality model.
+ * BALANCED: deterministic price/performance value on the stage-weighted
+ * quality score (0–100) vs the ACTUAL stage-specific estimated cost (shared
+ * cost helper + per-stage token profiles — an evidence-extraction request
+ * costs more than a discovery request for the same model, and the cost term
+ * reflects that). Free models carry zero cost and rank by quality alone;
+ * paid models must earn their cost. Never simply the cheapest, never simply
+ * the highest-quality.
+ *
+ * Unknown pricing is explicit, never silent zero cost: it takes the worst
+ * cost tier (the same sentinel the family grouping uses), so a known-priced
+ * candidate always outranks an unknown one. If ALL candidates are unknown,
+ * the best stage score wins (deterministic pool order).
  */
-function pickBalanced(models: CatalogModel[], weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
+// Stage costs are per-analysis cents; this scale puts them on the same
+// penalty magnitude as the previous per-1M-price heuristic so the
+// cost/quality trade-off stays meaningful against the 0–100 quality scale.
+const BALANCED_COST_SCALE = 100;
+const BALANCED_COST_MULTIPLIER = 12;
+function pickBalanced(
+  models: CatalogModel[],
+  weights: { coding: number; reasoning: number; speed: number; longContext: number },
+  stageId: StageKey
+): number {
   let bestIdx = 0;
   let bestValue = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < models.length; i++) {
     const m = models[i];
-    const p = definedPrice(m);
-    if (!p) continue;
     const quality = stageScore(m, weights); // 0–100
+    const costUsd = stageEstimatedCostUsd(m, stageId);
     // Cheap model: quality dominates. Expensive model: must be much better.
-    const costPenalty = Math.log10(1 + p.input * 2 + p.output); // diminishing cost penalty
-    const value = quality - costPenalty * 12;
+    const costPenalty =
+      costUsd === null
+        ? Number.POSITIVE_INFINITY // unknown pricing — explicitly worst tier
+        : Math.log10(1 + costUsd * BALANCED_COST_SCALE) * BALANCED_COST_MULTIPLIER;
+    const value = quality - costPenalty;
     if (value > bestValue) {
       bestValue = value;
       bestIdx = i;
@@ -260,17 +293,43 @@ function pickBalanced(models: CatalogModel[], weights: { coding: number; reasoni
 }
 
 /**
- * QUALITY: strongest suitable model per stage by stage-weighted score.
- * Deliberately ignores price — a free model wins when its metadata score is
- * the highest (paid ≠ higher quality).
+ * QUALITY: capability-first, not price-blind.
+ *
+ * 1. Find the best stage-weighted capability score.
+ * 2. Qualify every candidate within QUALITY_COMPARABLE_TOLERANCE points of
+ *    it ("sufficiently comparable" capability for this stage).
+ * 3. Among qualified candidates prefer the lower stage-specific estimated
+ *    cost (free = $0 wins comparable paid models; unknown pricing = worst
+ *    cost tier, eligible only when all qualified candidates are unknown).
+ * 4. A stronger model still wins when its capability advantage exceeds the
+ *    tolerance — cheaper-but-materially-weaker candidates are not qualified.
+ *
+ * Deterministic: strict cost comparison keeps earlier pool order (higher
+ * stage score, then valueScore, then stable ID) on cost ties. Deliberately
+ * NOT "highest price wins" / "largest model wins".
  */
-function pickQuality(models: CatalogModel[], weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
-  let bestIdx = 0;
+const QUALITY_COMPARABLE_TOLERANCE = 5; // points on the 0–100 stage-score scale
+function pickQuality(
+  models: CatalogModel[],
+  weights: { coding: number; reasoning: number; speed: number; longContext: number },
+  stageId: StageKey
+): number {
   let bestScore = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < models.length; i++) {
     const s = stageScore(models[i], weights);
-    if (s > bestScore) {
-      bestScore = s;
+    if (s > bestScore) bestScore = s;
+  }
+
+  const threshold = bestScore - QUALITY_COMPARABLE_TOLERANCE;
+  let bestIdx = 0;
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < models.length; i++) {
+    if (stageScore(models[i], weights) < threshold) continue;
+    const cost = stageEstimatedCostUsd(models[i], stageId);
+    // Unknown pricing → Infinity (worst tier, still eligible as last resort).
+    const comparable = cost === null ? Number.POSITIVE_INFINITY : cost;
+    if (comparable < bestCost) {
+      bestCost = comparable;
       bestIdx = i;
     }
   }
@@ -319,24 +378,51 @@ export function selectForStage(
   let isPaidFallback = false;
 
   if (setup === 'free') {
+    // Free selection: consider FREE models first. A model is free ONLY when its
+    // pricing data explicitly indicates zero cost (price.isFree). Unknown/null
+    // pricing is NEVER treated as free (requirement: free ⇔ explicitly zero
+    // cost). Among suitable free candidates, choose the highest-scoring model
+    // using the existing stage scoring system — the `pool` is already sorted
+    // best-first by stage score, so the first free candidate is the best.
+    // Deterministic tie-breakers are already established by the pool sort.
+    // Price is NOT part of the Free ranking.
     const freePool = pool.filter((m) => m.price.isFree);
     if (freePool.length > 0) {
       chosen = freePool[0];
     } else {
-      // No free model: lowest-cost suitable available model (priced first).
-      const priced = pool.filter((m) => definedPrice(m) !== null);
-      const cheapest = (priced.length > 0 ? priced : pool).reduce((best, m) => {
-        const pA = definedPrice(m);
-        const pB = definedPrice(best);
-        const cA = pA ? pA.input * 2 + pA.output : Number.POSITIVE_INFINITY;
-        const cB = pB ? pB.input * 2 + pB.output : Number.POSITIVE_INFINITY;
-        return cA < cB ? m : best;
-      }, pool[0]);
-      chosen = cheapest;
-      isPaidFallback = true;
+      // No suitable free model: paid fallback.
+      // Requirement: choose the best suitable paid candidate using the existing
+      // stage scoring — price must NOT be used in the Free ranking. The pool is
+      // already best-first by stage score, so scan it and take the best candidate
+      // that has defined pricing (a confirmed paid, non-null price).
+      let bestPaid: CatalogModel | null = null;
+      let bestPaidScore = Number.NEGATIVE_INFINITY;
+      for (const m of pool) {
+        const p = definedPrice(m);
+        if (!p) continue; // unknown/null pricing is not a confirmed paid candidate
+        const score = stageScore(m, w);
+        if (score > bestPaidScore) {
+          bestPaidScore = score;
+          bestPaid = m;
+        }
+      }
+      if (bestPaid) {
+        chosen = bestPaid;
+        isPaidFallback = true;
+      } else {
+        // No confirmed priced (paid) candidate: last resort — best candidate by
+        // stage score deterministically (still via existing scoring), marked as
+        // paid fallback since no zero-cost free model was suitable.
+        if (pool.length > 0) {
+          chosen = pool[0];
+        } else {
+          chosen = null;
+        }
+        isPaidFallback = true;
+      }
     }
   } else {
-    const idx = setup === 'balanced' ? pickBalanced(pool, w) : pickQuality(pool, w);
+    const idx = setup === 'balanced' ? pickBalanced(pool, w, stageId) : pickQuality(pool, w, stageId);
     chosen = pool[idx] || null;
   }
 

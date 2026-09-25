@@ -15,6 +15,10 @@ export interface NormalizedModel {
   isFree: boolean;
   inputPrice: number | null;
   outputPrice: number | null;
+  /** Where the price numbers came from. 'unknown' = no reliable pricing. */
+  priceSource: 'live' | 'registry' | 'unknown';
+  /** When this price was last confirmed, ISO string. Null when unknown. */
+  priceFetchedAt: string | null;
   contextWindow: number;
   maxOutputTokens: number | null;
   supportsReasoning: boolean;
@@ -52,6 +56,22 @@ export function buildProviderFingerprint(connected: Record<ProviderName, boolean
   return entries.map(([p]) => p).join(':') || 'none';
 }
 
+/**
+ * Catalog freshness window. A persisted catalog older than this is treated as
+ * stale: loadCatalog() keeps working (offline safety), but getOrBuildCatalog()
+ * will silently rebuild with fresh provider data instead of serving it.
+ * Provider pricing moves often enough that unbounded staleness makes cost
+ * estimates and free/paid selection unreliable.
+ */
+export const CATALOG_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function isCatalogStale(analyzedAt: string | null | undefined): boolean {
+  if (!analyzedAt) return true;
+  const t = Date.parse(analyzedAt);
+  if (!Number.isFinite(t)) return true;
+  return Date.now() - t > CATALOG_TTL_MS;
+}
+
 async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   const connected = await getProviderConnections(userId);
   const connectedIds = (Object.keys(connected) as ProviderName[]).filter((p) => connected[p]);
@@ -62,6 +82,7 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   }
   console.log('[model-intelligence] Connected providers:', connectedIds);
 
+  const nowIso = new Date().toISOString();
   console.log('[model-intelligence] STATIC_MODEL_REGISTRY count:', STATIC_MODEL_REGISTRY.length);
   const staticModels: NormalizedModel[] = STATIC_MODEL_REGISTRY
     .filter((m) => connectedIds.includes(m.providerId as ProviderName))
@@ -72,6 +93,10 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
       isFree: m.price.isFree,
       inputPrice: m.price.input,
       outputPrice: m.price.output,
+      // Static registry pricing: provenance reflects that. Entries with null
+      // prices are 'unknown' — they must NOT read as confirmed zero cost.
+      priceSource: m.price.input == null && m.price.output == null ? 'unknown' : 'registry',
+      priceFetchedAt: m.price.input == null && m.price.output == null ? null : nowIso,
       contextWindow: m.contextWindow,
       maxOutputTokens: m.maxOutputTokens,
       supportsReasoning: m.supportsReasoning,
@@ -97,6 +122,11 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
       console.log('[model-intelligence] Processing live models for provider', group.providerId, 'count:', group.models.length);
       for (const m of group.models) {
         const staticEntry = STATIC_MODEL_REGISTRY.find((s) => s.providerId === group.providerId && s.modelId === m.modelId);
+        // 'live' provenance only when the live payload carried an actual price;
+        // registry-backed live entries (openai/gemini/deepseek/zai) inherit the
+        // registry fallback, unknown when neither source has pricing.
+        const liveHasPrice = m.price.input != null || m.price.output != null;
+        const usesStaticPrice = !liveHasPrice && !!(staticEntry && (staticEntry.price.input != null || staticEntry.price.output != null));
         liveModels.push({
           provider: m.providerId,
           modelId: m.modelId,
@@ -104,6 +134,8 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
           isFree: m.price.isFree,
           inputPrice: m.price.input,
           outputPrice: m.price.output,
+          priceSource: liveHasPrice ? 'live' : usesStaticPrice ? 'registry' : 'unknown',
+          priceFetchedAt: liveHasPrice || usesStaticPrice ? nowIso : null,
           contextWindow: m.contextWindow,
           maxOutputTokens: m.maxOutputTokens,
           supportsReasoning: m.supportsReasoning,
@@ -235,7 +267,34 @@ function computeValueScore(m: NormalizedModel): number {
   return Math.round(quality * 12 + costEfficiency * 12);
 }
 
-async function aiClassify(userId: string, models: NormalizedModel[], freeModel: NormalizedModel): Promise<ClassifiedModel[]> {
+/**
+ * Classification outcome. `applied: false` means the classifier's output was
+ * unusable (HTTP failure, unparseable, skipped, or fewer scored entries than
+ * models — the typical truncation case) and deterministic metadata scoring
+ * was used. Callers MUST NOT report classified_by_ai=true for `applied: false`
+ * results: stamping a failed classification misled the UI and meta stats while
+ * hundreds of models carried identical constant scores.
+ */
+interface ClassificationOutcome {
+  models: ClassifiedModel[];
+  applied: boolean;
+}
+
+/**
+ * Above this many models the classification call provably cannot succeed: each
+ * scored entry costs ~40-50 output tokens and max_tokens is 4096, so anything
+ * beyond ~80 models is ALWAYS truncated (observed: 576-model catalog → partial
+ * JSON → zip-fill assigned constant 50/50/50/50 scores to hundreds of models).
+ * Skipping the doomed call removes ~5-15s of pure latency from every rebuild
+ * AND removes the corruption source; deterministic metadata scoring is used
+ * instead. Small catalogs still benefit from genuine AI classification.
+ */
+const AI_CLASSIFY_MAX_MODELS = 80;
+
+async function aiClassify(userId: string, models: NormalizedModel[], freeModel: NormalizedModel): Promise<ClassificationOutcome> {
+  if (models.length > AI_CLASSIFY_MAX_MODELS) {
+    return { models: deterministicRank(models), applied: false };
+  }
   const modelList = models.map((m, i) =>
     (i + 1) + '. ' + m.provider + '/' + m.modelId + ' -- ' + m.displayName +
     ' | free=' + m.isFree + ' | price=$' + (m.inputPrice ?? '?') + '/' + (m.outputPrice ?? '?') +
@@ -260,22 +319,34 @@ async function aiClassify(userId: string, models: NormalizedModel[], freeModel: 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || '';
   const jsonMatch = content.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return deterministicRank(models);
+  if (!jsonMatch) return { models: deterministicRank(models), applied: false };
 
   try {
     const scores = JSON.parse(jsonMatch[0]) as Array<{ codingScore: number; reasoningScore: number; speedScore: number; longContextScore: number; valueScore: number; overallScore: number; recommendedCategories: string[] }>;
-    return models.map((m, i) => {
-      const s = scores[i] || {};
-      const codingScore = clamp(s.codingScore ?? 50);
-      const reasoningScore = clamp(s.reasoningScore ?? 50);
-      const speedScore = clamp(s.speedScore ?? 50);
-      const longContextScore = clamp(s.longContextScore ?? 50);
-      const valueScore = clamp(s.valueScore ?? 50);
-      const overallScore = clamp(s.overallScore ?? Math.round(codingScore * 0.3 + reasoningScore * 0.25 + speedScore * 0.15 + longContextScore * 0.15 + valueScore * 0.15));
-      return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: s.recommendedCategories || [] };
-    }).sort((a, b) => b.overallScore - a.overallScore);
+    // The classifier frequently truncates its list (max_tokens, refusals).
+    // Zip-mapping past the response length silently assigned the 50/50
+    // fallback tuple to every unmatched model — flattening hundreds of
+    // distinct models into identical generic scores (observed: hundreds of
+    // rows all stored 50/50/50/50). A shorter-than-models response is
+    // therefore unusable → deterministic metadata scoring for ALL models.
+    if (!Array.isArray(scores) || scores.length < models.length) {
+      return { models: deterministicRank(models), applied: false };
+    }
+    return {
+      models: models.map((m, i) => {
+        const s = scores[i] || {};
+        const codingScore = clamp(s.codingScore ?? 50);
+        const reasoningScore = clamp(s.reasoningScore ?? 50);
+        const speedScore = clamp(s.speedScore ?? 50);
+        const longContextScore = clamp(s.longContextScore ?? 50);
+        const valueScore = clamp(s.valueScore ?? 50);
+        const overallScore = clamp(s.overallScore ?? Math.round(codingScore * 0.3 + reasoningScore * 0.25 + speedScore * 0.15 + longContextScore * 0.15 + valueScore * 0.15));
+        return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: s.recommendedCategories || [] };
+      }).sort((a, b) => b.overallScore - a.overallScore),
+      applied: true,
+    };
   } catch {
-    return deterministicRank(models);
+    return { models: deterministicRank(models), applied: false };
   }
 }
 
@@ -298,16 +369,21 @@ function clamp(v: number): number {
 
 async function storeCatalog(userId: string, result: ModelIntelligenceResult): Promise<void> {
   const db = createBackgroundClient();
-  await db.from('model_catalog_meta').upsert({
-    user_id: userId, provider_fingerprint: result.providerFingerprint,
-    model_count: result.models.length, free_model_count: result.models.filter((m) => m.isFree).length,
-    paid_model_count: result.models.filter((m) => !m.isFree).length, classified_by_ai: result.classifiedByAi,
-    classification_model: result.classificationModel, last_analyzed_at: result.analyzedAt,
-  }, { onConflict: 'user_id' });
-  await db.from('model_catalog').delete().eq('user_id', userId);
+  // Meta-level provenance: the most authoritative price confirmation across
+  // the catalog (live beats registry beats unknown; freshest timestamp wins).
+  const rank = { live: 2, registry: 1, unknown: 0 } as const;
+  const bestPrice = result.models.reduce<{ source: 'live' | 'registry' | 'unknown'; at: string | null }>((best, m) => {
+    const src = m.priceSource ?? 'unknown';
+    if (rank[src] > rank[best.source]) return { source: src, at: m.priceFetchedAt ?? null };
+    if (rank[src] === rank[best.source] && m.priceFetchedAt && (!best.at || m.priceFetchedAt > best.at)) {
+      return { source: src, at: m.priceFetchedAt };
+    }
+    return best;
+  }, { source: 'unknown', at: null });
   const rows = result.models.map((m) => ({
     user_id: userId, provider: m.provider, model_id: m.modelId, display_name: m.displayName,
     is_free: m.isFree, input_price: m.inputPrice, output_price: m.outputPrice,
+    price_source: m.priceSource, price_fetched_at: m.priceFetchedAt,
     context_window: m.contextWindow, max_output_tokens: m.maxOutputTokens,
     supports_reasoning: m.supportsReasoning, supports_tool_calling: m.supportsToolCalling,
     supports_structured_output: m.supportsStructuredOutput, supports_coding: m.supportsCoding,
@@ -317,11 +393,57 @@ async function storeCatalog(userId: string, result: ModelIntelligenceResult): Pr
     availability: m.availability, source: result.classifiedByAi ? 'ai_classified' : m.source,
     provider_fingerprint: result.providerFingerprint, last_analyzed_at: result.analyzedAt,
   }));
+
+  // Upsert row-by-row (chunked), THEN write meta LAST.
+  //
+  // Why not delete-then-insert: the old sequence (meta upsert → DELETE all →
+  // INSERT) left the catalog EMPTY whenever any insert batch failed, and
+  // loadCatalog() then returned null → the very next request went through a
+  // full synchronous rebuild (all provider fetches + classification + writes)
+  // — the 20s /api/models loop. Persisted rows also vanish while a batch is
+  // in flight. An upsert on (user_id, provider, model_id) keeps the previous
+  // catalog intact when a batch fails and makes every write idempotent.
+  //
+  // Why meta LAST: meta.last_analyzed_at is the freshness clock. Writing meta
+  // first marked the catalog fresh while rows were still being (re)written, so
+  // a crash mid-store pinned a stale catalog until TTL expiry; writing meta
+  // last means a failed store leaves the OLD meta (old analyzedAt) → the next
+  // request correctly sees stale and retries the refresh.
+  let stored = 0;
   for (let i = 0; i < rows.length; i += 50) {
     const batch = rows.slice(i, i + 50);
-    const { error } = await db.from('model_catalog').insert(batch);
-    if (error) console.error('[model-intelligence] Store error:', error.message);
+    const { error } = await db.from('model_catalog').upsert(batch, { onConflict: 'user_id,provider,model_id' });
+    if (error) {
+      console.error('[model-intelligence] Store error:', error.message);
+      continue;
+    }
+    stored += batch.length;
   }
+
+  // Remove rows that dropped out of the rebuilt catalog (disconnected
+  // provider, vanished model) — delete-by-fingerprint, so a failed rebuild
+  // never destroys the previous catalog's data.
+  if (stored > 0) {
+    const { error: delErr } = await db.from('model_catalog')
+      .delete()
+      .eq('user_id', userId)
+      .neq('provider_fingerprint', result.providerFingerprint);
+    if (delErr) console.error('[model-intelligence] Cleanup error:', delErr.message);
+  }
+
+  // Meta LAST (see above): freshness clock only advances after rows persisted.
+  // Truthful counts: 'source' may say ai_classified for all rows, but the
+  // classification itself is deterministic metadata-derived scoring unless
+  // classifiedByAi — counts reflect the actual result object, and
+  // classifiedByAi is only true when the classifier returned a COMPLETE score
+  // list (see aiClassify).
+  await db.from('model_catalog_meta').upsert({
+    user_id: userId, provider_fingerprint: result.providerFingerprint,
+    model_count: result.models.length, free_model_count: result.models.filter((m) => m.isFree).length,
+    paid_model_count: result.models.filter((m) => !m.isFree).length, classified_by_ai: result.classifiedByAi,
+    classification_model: result.classificationModel, last_analyzed_at: result.analyzedAt,
+    price_source: bestPrice.source, price_fetched_at: bestPrice.at,
+  }, { onConflict: 'user_id' });
 }
 
 async function loadCatalog(userId: string): Promise<ModelIntelligenceResult | null> {
@@ -333,6 +455,9 @@ async function loadCatalog(userId: string): Promise<ModelIntelligenceResult | nu
   const models: ClassifiedModel[] = rows.map((r) => ({
     provider: r.provider as ProviderName, modelId: r.model_id, displayName: r.display_name,
     isFree: r.is_free, inputPrice: r.input_price, outputPrice: r.output_price,
+    // Default pre-migration rows to 'unknown' — do not assume stale prices are
+    // live or registry-confirmed.
+    priceSource: r.price_source ?? 'unknown', priceFetchedAt: r.price_fetched_at ?? null,
     contextWindow: r.context_window, maxOutputTokens: r.max_output_tokens,
     supportsReasoning: r.supports_reasoning, supportsToolCalling: r.supports_tool_calling,
     supportsStructuredOutput: r.supports_structured_output, supportsCoding: r.supports_coding,
@@ -341,13 +466,69 @@ async function loadCatalog(userId: string): Promise<ModelIntelligenceResult | nu
     longContextScore: r.long_context_score, valueScore: r.value_score, overallScore: r.overall_score,
     recommendedCategories: r.recommended_categories || [],
   }));
+  // Enrich with CURRENT static registry scores (no registry_scores DB column):
+  // keeps loaded live rows from being stuck with build-time default scores.
+  for (const m of models) {
+    const s = STATIC_MODEL_REGISTRY.find((e) => e.providerId === m.provider && e.modelId === m.modelId);
+    if (s) m.registryScores = s.scores;
+  }
   return { models, providerFingerprint: meta.provider_fingerprint, classifiedByAi: meta.classified_by_ai, classificationModel: meta.classification_model, analyzedAt: meta.last_analyzed_at };
+}
+
+// Single-flight guard: dedupes concurrent force rebuilds for the same user so
+// a connect/disconnect background refresh and a racing page request share one
+// build instead of interleaving provider fetches and model_catalog rewrites.
+const inFlightRebuilds = new Map<string, Promise<ModelIntelligenceResult>>();
+
+/**
+ * Force-rebuilds the catalog for a user, collapsing concurrent calls into a
+ * single build. Connect/disconnect routes and the manual refresh endpoint
+ * should use this instead of getOrBuildCatalog(userId, true) so that a
+ * background refresh and a page GET triggered right after connect cannot run
+ * two competing builds (duplicate provider API calls, interleaved deletes).
+ */
+export function rebuildCatalogOnce(userId: string): Promise<ModelIntelligenceResult> {
+  let p = inFlightRebuilds.get(userId);
+  if (!p) {
+    p = getOrBuildCatalog(userId, true).finally(() => {
+      inFlightRebuilds.delete(userId);
+    });
+    inFlightRebuilds.set(userId, p);
+  }
+  return p;
 }
 
 export async function getOrBuildCatalog(userId: string, forceRefresh = false): Promise<ModelIntelligenceResult> {
   if (!forceRefresh) {
     const existing = await loadCatalog(userId);
-    if (existing) return existing;
+    if (existing) {
+      const connected = await getProviderConnections(userId);
+      const fingerprint = buildProviderFingerprint(connected);
+
+      if (existing.providerFingerprint !== fingerprint) {
+        // Provider set changed (connect/disconnect): the persisted catalog no
+        // longer matches reality. Rebuild synchronously (deduped) so the
+        // request that follows an explicit user action reflects it; keep the
+        // last-known catalog only if the rebuild fails or comes back empty.
+        try {
+          const rebuilt = await rebuildCatalogOnce(userId);
+          if (rebuilt.models.length > 0) return rebuilt;
+        } catch (err) {
+          console.warn('[model-intelligence] Fingerprint rebuild failed, serving persisted catalog:', err);
+        }
+        return existing;
+      }
+
+      if (isCatalogStale(existing.analyzedAt)) {
+        // Merely time-stale: serve the persisted catalog immediately (do not
+        // block routine page loads) and refresh in the background, deduped.
+        rebuildCatalogOnce(userId).catch((err) =>
+          console.warn('[model-intelligence] Background staleness refresh failed:', err)
+        );
+      }
+
+      return existing;
+    }
   }
   const models = await discoverModels(userId);
   if (models.length === 0) {
@@ -361,12 +542,19 @@ export async function getOrBuildCatalog(userId: string, forceRefresh = false): P
   let classificationModel: string | null = null;
   if (freeModel) {
     try {
-      classified = await aiClassify(userId, models, freeModel);
-      classifiedByAi = true;
-      classificationModel = freeModel.provider + '/' + freeModel.modelId;
+      const outcome = await aiClassify(userId, models, freeModel);
+      classified = outcome.models;
+      // classifiedByAi is TRUE only when the classifier's output was actually
+      // applied (complete, parseable score list). aiClassify itself falls back
+      // to deterministicRank on any unusable output; stamping those fallbacks
+      // as 'AI classified' was misleading (UI + meta stats).
+      classifiedByAi = outcome.applied;
+      classificationModel = outcome.applied ? freeModel.provider + '/' + freeModel.modelId : null;
     } catch (err) {
       console.warn('[model-intelligence] AI classification failed:', err);
       classified = deterministicRank(models);
+      classifiedByAi = false;
+      classificationModel = null;
     }
   } else {
     classified = deterministicRank(models);
@@ -376,10 +564,22 @@ export async function getOrBuildCatalog(userId: string, forceRefresh = false): P
   return result;
 }
 
+/**
+ * Kept as the documented fingerprint/staleness entry point (single refresh
+ * mechanism — getOrBuildCatalog owns all freshness logic).
+ * Returns the persisted catalog when it is fresh AND matches the current
+ * provider set; otherwise rebuilds (deduped).
+ */
 export async function refreshCatalogIfNeeded(userId: string): Promise<ModelIntelligenceResult> {
   const connected = await getProviderConnections(userId);
   const currentFingerprint = buildProviderFingerprint(connected);
   const existing = await loadCatalog(userId);
-  if (existing && existing.providerFingerprint === currentFingerprint) return existing;
-  return getOrBuildCatalog(userId, true);
+  if (
+    existing &&
+    existing.providerFingerprint === currentFingerprint &&
+    !isCatalogStale(existing.analyzedAt)
+  ) {
+    return existing;
+  }
+  return rebuildCatalogOnce(userId);
 }

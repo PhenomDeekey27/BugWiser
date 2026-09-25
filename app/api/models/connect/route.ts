@@ -53,9 +53,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: result.error || 'Failed to save connection' }, { status: 500 });
     }
 
-    // Trigger model catalog refresh in background (fire-and-forget)
+    // Trigger model catalog refresh in background (fire-and-forget).
+    // rebuildCatalogOnce dedupes concurrent rebuilds so a page GET racing this
+    // refresh shares one build instead of two competing ones.
     import('@/lib/ai/model-intelligence').then((m) =>
-      m.getOrBuildCatalog(user.id, true).catch((err) =>
+      m.rebuildCatalogOnce(user.id).catch((err) =>
         console.warn('[connect] Catalog refresh failed:', err)
       )
     );

@@ -73,8 +73,12 @@ export interface ResolvedProviderConnection {
 
 export async function getProviderConnections(userId: string): Promise<Record<ProviderName, boolean>> {
   const result = {} as Record<ProviderName, boolean>;
+  // Default: nothing connected. Connected status is resolved purely from the
+  // user's stored DB connections so that disconnect (which deletes the row)
+  // reliably flips a provider back to disconnected. Env-var configuration is a
+  // separate, server-only concern and must NOT keep a provider connected.
   for (const p of PROVIDER_NAMES) {
-    result[p] = isProviderConfiguredBysEnv(p);
+    result[p] = false;
   }
 
   try {
@@ -88,7 +92,7 @@ export async function getProviderConnections(userId: string): Promise<Record<Pro
       return result;
     }
     for (const row of data || []) {
-      result[row.provider as ProviderName] = row.status === 'connected' || result[row.provider as ProviderName];
+      result[row.provider as ProviderName] = row.status === 'connected';
     }
   } catch (err) {
     console.error('[provider-conn] Load connections error:', err);

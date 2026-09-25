@@ -18,6 +18,10 @@ export interface ModelEntry {
 
 function s(level: ScoreLevel): ScoreLevel { return level; }
 
+// Runtime routing registry (task weights, fallbacks). `free` means ONLY
+// explicitly confirmed zero cost — it must agree with the pricing authority
+// (STATIC_MODEL_REGISTRY in lib/ai/catalog/registry.ts); prices are not
+// duplicated here.
 export const MODEL_REGISTRY: ModelEntry[] = [
   // ── OpenCode Zen Free Models ──
   {
@@ -140,12 +144,17 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     recommendedFor: ['complex_reasoning', 'debugging', 'code_generation', 'patch_generation'],
   },
 
-  // ── Chutes Models (Testing) ──
-  {
-    id: 'chutes/Qwen/Qwen3.5-397B-A17B-TEE',
-    provider: 'chutes',
-    model: 'Qwen/Qwen3.5-397B-A17B-TEE',
-    free: true,
+// ── Chutes Models (Testing) ──
+// NOTE: `free: false` for TEE models. STATIC_MODEL_REGISTRY (the pricing
+// authority, lib/ai/catalog/registry.ts) prices these 0.08–0.60 USD/1M — they
+// are paid. `free` here must agree with pricing provenance; these entries were
+// previously marked free while carrying paid prices, which made runtime
+// routing and catalog selection disagree about what is free.
+{
+  id: 'chutes/Qwen/Qwen3.5-397B-A17B-TEE',
+  provider: 'chutes',
+  model: 'Qwen/Qwen3.5-397B-A17B-TEE',
+  free: false,
     codingScore: s(5),
     reasoningScore: s(5),
     speedScore: s(3),
@@ -155,10 +164,10 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     recommendedFor: ['complex_reasoning', 'debugging', 'code_generation', 'patch_generation'],
   },
   {
-    id: 'chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE',
-    provider: 'chutes',
-    model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE',
-    free: true,
+  id: 'chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE',
+  provider: 'chutes',
+  model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE',
+  free: false,
     codingScore: s(5),
     reasoningScore: s(5),
     speedScore: s(4),
@@ -168,10 +177,10 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     recommendedFor: ['simple_coding', 'evidence_extraction', 'relevant_file_analysis', 'code_generation'],
   },
   {
-    id: 'chutes/moonshotai/Kimi-K2.6-TEE',
-    provider: 'chutes',
-    model: 'moonshotai/Kimi-K2.6-TEE',
-    free: true,
+  id: 'chutes/moonshotai/Kimi-K2.6-TEE',
+  provider: 'chutes',
+  model: 'moonshotai/Kimi-K2.6-TEE',
+  free: false,
     codingScore: s(5),
     reasoningScore: s(5),
     speedScore: s(3),

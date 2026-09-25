@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getModelPreference, saveModelPreference } from '@/lib/ai/preferences';
+import { getModelPreference, saveModelPreference, type SelectedStrategy } from '@/lib/ai/preferences';
 import type { ProviderName } from '@/lib/ai/providers/registry';
 
 export async function GET() {
@@ -32,7 +32,7 @@ export async function PUT(request: Request) {
       selection_mode?: 'auto' | 'manual';
       provider?: ProviderName | null;
       model?: string | null;
-      selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
+      selected_strategy?: SelectedStrategy;
       stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
     };
     try {

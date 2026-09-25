@@ -15,13 +15,16 @@ export async function DELETE(
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    await removeUserConnection(user.id, provider as ProviderName);
+    const pid = provider as ProviderName;
 
-    // Trigger model catalog refresh in background (fire-and-forget)
-    import('@/lib/ai/model-intelligence').then((m) =>
-      m.getOrBuildCatalog(user.id, true).catch((err) =>
-        console.warn('[disconnect] Catalog refresh failed:', err)
-      )
+    await removeUserConnection(user.id, pid);
+
+    // Trigger model catalog rebuild synchronously (deduped) so the refresh
+    // that follows the page reload reflects the changed provider set via the
+    // fingerprint check, instead of racing it.
+    const { rebuildCatalogOnce } = await import('@/lib/ai/model-intelligence');
+    rebuildCatalogOnce(user.id).catch((err) =>
+      console.warn('[disconnect] Catalog refresh failed:', err)
     );
 
     return NextResponse.json({ ok: true });

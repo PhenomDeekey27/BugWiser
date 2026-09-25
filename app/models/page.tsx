@@ -23,6 +23,8 @@ import type { GitHubUser } from '@/types';
 import { ProviderCard } from '@/components/models/ProviderCard';
 import { StageConfigPanel } from '@/components/models/StageConfigPanel';
 import { selectStageModels, type SetupChoice, type StageKey } from '@/lib/ai/catalog/stageSelection';
+import { estimateCostUsd, formatCostUsd, type CostEstimate } from '@/lib/ai/catalog/cost';
+import { STAGE_TOKEN_PROFILES, type StageTokenProfile } from '@/lib/ai/catalog/stageTokenProfiles';
 
 const STAGES = [
   { id: 'relevant_file_discovery', label: 'File Discovery', icon: FileSearchIcon, task: 'relevant_file_discovery', provider: 'simple_coding' },
@@ -32,14 +34,9 @@ const STAGES = [
   { id: 'patch_generation', label: 'Patch Generation', icon: WrenchIcon, task: 'patch_generation', provider: 'code_generation' },
 ];
 
-// Rough per-stage token assumptions used ONLY for the "~cost / analysis"
-// display. The pipeline does not track real per-stage token usage yet, so
-// these are UX-level estimates, not measured values.
-const STAGE_ESTIMATE_TOKENS = { input: 12_000, output: 2_000 } as const;
-
-// Catalog prices are normalized to USD per 1M tokens (see lib/ai/catalog/types.ts
-// ModelPrice), so estimated token counts must be scaled by 1M to yield USD.
-const TOKENS_PER_MILLION = 1_000_000;
+// Per-stage token estimates come from STAGE_TOKEN_PROFILES (lib/ai/catalog/
+// stageTokenProfiles.ts) and ALL cost arithmetic from the shared helper in
+// lib/ai/catalog/cost.ts — do not add local cost formulas here.
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; };
 
@@ -65,9 +62,9 @@ const CAPABILITY_LABELS: Record<string, string> = {
 
 export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
 
-export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
+export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
 
-export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
+export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
 
 export default function ModelsPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
@@ -81,8 +78,6 @@ export default function ModelsPage() {
   const [selectedStageProvider, setSelectedStageProvider] = useState<string>('');
   const [selectedStageModel, setSelectedStageModel] = useState<string>('');
   const [selectedStageReason, setSelectedStageReason] = useState<string>('');
-  const [selectedStageCost, setSelectedStageCost] = useState<string>('');
-  const [selectedStagePriceInput, setSelectedStagePriceInput] = useState<number | null>(null);
   const [selectedStageIsOverride, setSelectedStageIsOverride] = useState<boolean>(false);
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
   const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
@@ -250,7 +245,8 @@ export default function ModelsPage() {
   const handleDisconnect = async (providerId: string) => {
     try {
       const res = await fetch(`/api/models/connections/${providerId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to disconnect');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to disconnect');
       toast.success(`${providerId} disconnected.`);
       await refresh();
     } catch (e) {
@@ -277,19 +273,13 @@ export default function ModelsPage() {
     return [...list].sort((a, b) => b.valueScore - a.valueScore);
   }, [libraryBaseModels, filter, search]);
 
-  const getStageCost = (stageModel: StageModel, model: CatalogModel): string => {
+  const getStageCostEstimate = (model: CatalogModel | null, stageId: string): string => {
     if (!model) return 'Unknown';
-    if (model.price.isFree) return 'Free';
-    if (model.price.input === null || model.price.input === undefined) return 'Pricing unavailable';
-    return `$${model.price.input.toFixed(2)}`;
-  };
-
-  const getStageCostEstimate = (model: CatalogModel | null): string => {
-    if (!model) return 'Unknown';
-    if (model.price.isFree) return 'Free';
-    if (model.price.input == null || model.price.output == null) return 'Pricing unavailable';
-    // Prices are USD per 1M tokens: (price × tokens) / 1M = USD.
-    return `~${formatCost((model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION)}`;
+    const label = formatCostUsd(stageCostEstimateUsd(model, stageId));
+    // The estimate marker applies only to calculated costs, so free models
+    // read "Free" and unknown pricing reads "Pricing unavailable" — never
+    // "~$0" or "~Free".
+    return label.startsWith('$') ? `~${label}` : label;
   };
 
   const getSelectedProviderModels = (providerId: string): CatalogModel[] => {
@@ -309,9 +299,10 @@ export default function ModelsPage() {
     return models.find((m) => m.providerId === sm.selectedProvider && m.modelId === sm.selectedModel && m.available) || null;
   };
 
-  /** Total estimated cost per analysis: sums the exact per-stage estimates so the
-   * total stays consistent with the individual stage rows. */
-  const estimateTotalCost = (): number => {
+  /** Total estimated cost per analysis: sums the exact per-stage estimates (each
+   * with its own stage token profile) so the total stays consistent with the
+   * individual stage rows. */
+  const estimateTotalCost = (): CostEstimate => {
     let total = 0;
     let hasUnknown = false;
     STAGES.forEach((stage) => {
@@ -320,17 +311,17 @@ export default function ModelsPage() {
         hasUnknown = true;
         return;
       }
-      if (model.price.isFree) return;
-      if (model.price.input == null || model.price.output == null) {
+      const estimate = stageCostEstimateUsd(model, stage.id);
+      if (estimate.status === 'unknown') {
         hasUnknown = true;
         return;
       }
-      total += (model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION;
+      total += estimate.usd;
     });
-    return hasUnknown ? -1 : total;
+    return hasUnknown ? { status: 'unknown', usd: null } : { status: 'priced', usd: total };
   };
 
-  const handleApplyStageChange = (stageId: string, provider: string, model: string, reason: string, cost: string, isOverride: boolean) => {
+  const handleApplyStageChange = (stageId: string, provider: string, model: string, reason: string, isOverride: boolean) => {
     const stage = STAGES.find((s) => s.id === stageId);
     if (stage) {
       const newStageModels = { ...stageModels };
@@ -339,8 +330,6 @@ export default function ModelsPage() {
       setSelectedStageProvider(provider || '');
       setSelectedStageModel(model || '');
       setSelectedStageReason(reason);
-      setSelectedStageCost(cost);
-      setSelectedStagePriceInput(null);
       setSelectedStageIsOverride(isOverride);
     }
     setShowStageModal(null);
@@ -403,7 +392,7 @@ export default function ModelsPage() {
                       const providerModels = getSelectedProviderModels(selectedProvider);
                       const configuredModel = getConfiguredStageModel(sm);
                       const bestModel = configuredModel || getBestModelForStage(sm);
-                      const stageCost = getStageCostEstimate(configuredModel);
+                      const stageCost = getStageCostEstimate(configuredModel, stage.id);
                       const capability = configuredModel ? getStageCapability(configuredModel) : 'unknown';
                       const modelSubline = configuredModel
                         ? `${stageCost} / analysis · ${capability}`
@@ -478,13 +467,10 @@ export default function ModelsPage() {
                                 size="sm"
                                 className="w-full h-8 text-xs border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80 cursor-pointer"
                                 onClick={() => {
-                                  const selectedModelForCost = sm.selectedModel && sm.selectedProvider ? providerModels.find((m) => m.modelId === sm.selectedModel) : null;
                                   setShowStageModal(stage.id);
                                   setSelectedStageProvider(selectedProvider);
                                   setSelectedStageModel(sm.selectedModel || '');
                                   setSelectedStageReason(capability || 'unknown');
-                                  setSelectedStageCost(stageCost);
-                                  setSelectedStagePriceInput(selectedModelForCost ? selectedModelForCost.price.input : null);
                                   setSelectedStageIsOverride(sm.isOverride);
                                 }}
                               >
@@ -514,7 +500,7 @@ export default function ModelsPage() {
                     <h3 className="text-lg font-semibold text-bw-peach-light">Estimated Cost per Analysis</h3>
                     <p className="text-sm text-bw-peach mt-1">Based on selected models for each stage</p>
                   </div>
-                  <div className="text-2xl font-bold text-bw-peach-light">{formatCost(estimateTotalCost())}</div>
+                  <div className="text-2xl font-bold text-bw-peach-light">{formatCostUsd(estimateTotalCost())}</div>
                 </div>
               </Card>
             </section>
@@ -534,9 +520,8 @@ export default function ModelsPage() {
                 selectedProvider={selectedStageProvider}
                 selectedModel={selectedStageModel}
                 selectedReason={selectedStageReason}
-                selectedCost={selectedStageCost}
                 isOverride={selectedStageIsOverride}
-                onApply={(provider, model, reason, cost, isOverride) => handleApplyStageChange(showStageModal!, provider, model, reason, cost, isOverride)}
+                onApply={(provider, model, reason, isOverride) => handleApplyStageChange(showStageModal!, provider, model, reason, isOverride)}
                 onCancel={() => setShowStageModal(null)}
               />
             )}
@@ -551,15 +536,6 @@ function Card({ children, className, onClick }: { children: React.ReactNode; cla
   return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
 }
 
-function formatCost(cost: number): string {
-  if (cost === 0) return 'Free';
-  if (cost === -1) return 'Pricing unavailable';
-  if (cost < 0) return 'Pricing unavailable';
-  // Keep micro-costs readable (e.g. $0.002 instead of $0.00).
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  if (cost < 1) return `$${cost.toFixed(3)}`;
-  return `$${cost.toFixed(2)}`;
-}
 
 /** Maps the persisted strategy to the UI setup; legacy strategies → null. */
 function toSetupChoice(strategy: string | null | undefined): SetupChoice | null {
@@ -577,14 +553,22 @@ function getStageCapability(model: CatalogModel): string {
   return reasons.length > 0 ? reasons.join(', ') : 'general';
 }
 
-function calculateTotalCost(model: CatalogModel): number {
-  if (model.price.isFree) return 0;
-  if (model.price.input == null || model.price.output == null) {
-    return -1;
-  }
-  // Prices are USD per 1M tokens: estimated USD cost for one stage
-  // (12k input + 2k output tokens), matching the per-stage estimate rows.
-  return (model.price.input * STAGE_ESTIMATE_TOKENS.input + model.price.output * STAGE_ESTIMATE_TOKENS.output) / TOKENS_PER_MILLION;
+/** Estimated USD cost for one stage request, via the shared cost helper. */
+function stageCostEstimateUsd(model: CatalogModel, stageId: string): CostEstimate {
+  return estimateCostUsd(
+    {
+      inputPricePerMillion: model.price.input,
+      outputPricePerMillion: model.price.output,
+      isFree: model.price.isFree,
+    },
+    getStageTokenProfile(stageId)
+  );
+}
+
+/** Token profile for a stage id; falls back to the discovery profile rather
+ * than failing when an unexpected id slips in. */
+function getStageTokenProfile(stageId: string): StageTokenProfile {
+  return STAGE_TOKEN_PROFILES[stageId as StageKey] ?? STAGE_TOKEN_PROFILES.relevant_file_discovery;
 }
 
 function formatContext(tokens: number): string {
@@ -724,8 +708,14 @@ function ModelCard({ model, providers }: { model: CatalogModel; providers: Catal
           <div className="text-sm font-semibold text-bw-peach-light truncate">{model.displayName}</div>
           <div className="text-xs text-bw-peach mt-1">{provider ? provider.displayName : model.providerId}</div>
         </div>
-        <Badge className={model.price.isFree ? 'text-xs text-green-500 bg-green-500/10 border-green-500' : 'text-xs text-purple-500 bg-purple-500/10 border-purple-500'}>
-          {model.price.isFree ? 'Free' : 'Paid'}
+        <Badge className={
+          model.price.isFree
+            ? 'text-xs text-green-500 bg-green-500/10 border-green-500'
+            : model.price.input == null || model.price.output == null
+              ? 'text-xs text-bw-peach bg-bw-surface/50 border-bw-surface-bright'
+              : 'text-xs text-purple-500 bg-purple-500/10 border-purple-500'
+        }>
+          {model.price.isFree ? 'Free' : model.price.input == null || model.price.output == null ? 'Pricing unavailable' : 'Paid'}
         </Badge>
       </div>
       <div className="mt-3 space-y-1 text-xs text-bw-peach">
@@ -737,13 +727,11 @@ function ModelCard({ model, providers }: { model: CatalogModel; providers: Catal
   );
 }
 
-function StageChangeModal({ stageId, stage, providers, models, selectedProvider, selectedModel, selectedReason, selectedCost, isOverride, onApply, onCancel, initialPriceInput }: { stageId: string; stage: typeof STAGES[0]; providers: CatalogProvider[]; models: CatalogModel[]; selectedProvider: string; selectedModel: string; selectedReason: string; selectedCost: string; isOverride: boolean; onApply: (provider: string, model: string, reason: string, cost: string, isOverride: boolean) => void; onCancel: () => void; initialPriceInput?: number | null; }) {
+function StageChangeModal({ stageId, stage, providers, models, selectedProvider, selectedModel, selectedReason, isOverride, onApply, onCancel }: { stageId: string; stage: typeof STAGES[0]; providers: CatalogProvider[]; models: CatalogModel[]; selectedProvider: string; selectedModel: string; selectedReason: string; isOverride: boolean; onApply: (provider: string, model: string, reason: string, isOverride: boolean) => void; onCancel: () => void; }) {
   const [localProvider, setLocalProvider] = useState(selectedProvider);
   const [localModel, setLocalModel] = useState(selectedModel);
   const [localReason, setLocalReason] = useState(selectedReason);
-  const [localCost, setLocalCost] = useState(selectedCost);
   const [localIsOverride, setLocalIsOverride] = useState(isOverride);
-  const [localPriceInput, setLocalPriceInput] = useState<number | null>(initialPriceInput || null);
   const [modelSearch, setModelSearch] = useState('');
 
   const connectedProviderModels = useMemo(() => {
@@ -776,9 +764,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
 
   const handleApply = () => {
     const reason = localReason || 'Recommended model';
-    const cost = localCost || 'N/A';
-    onApply(localProvider, localModel, reason, cost, localIsOverride);
-    setLocalPriceInput(null);
+    onApply(localProvider, localModel, reason, localIsOverride);
   };
 
   const hasModels = connectedProviderModels.length > 0;
@@ -830,21 +816,18 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
                 <div className="space-y-2">
                   {recommendedModels.map((model) => {
-                    const cost = calculateTotalCost(model);
                     const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                     return (
                       <button key={model.modelId} onClick={() => {
                         setLocalProvider(model.providerId);
                         setLocalModel(model.modelId);
                         setLocalReason('Best value model');
-                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                        setLocalCost(displayCost);
                       }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light font-medium">{model.displayName}</span>
                           {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
                         </div>
-                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                       </button>
                     );
                   })}
@@ -857,20 +840,17 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
                 <div className="space-y-2">
                   {freeModels.map((model) => {
-                    const cost = calculateTotalCost(model);
                     return (
                       <button key={model.modelId} onClick={() => {
                         setLocalProvider(model.providerId);
                         setLocalModel(model.modelId);
                         setLocalReason('Free model');
-                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                        setLocalCost(displayCost);
                       }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light">{model.displayName}</span>
                           {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
                         </div>
-                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                       </button>
                     );
                   })}
@@ -883,20 +863,17 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
                 <div className="space-y-2">
                   {paidModels.map((model) => {
-                    const cost = calculateTotalCost(model);
                     return (
                       <button key={model.modelId} onClick={() => {
                         setLocalProvider(model.providerId);
                         setLocalModel(model.modelId);
                         setLocalReason('Paid model');
-                        const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                        setLocalCost(displayCost);
                       }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light">{model.displayName}</span>
                           {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
                         </div>
-                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                        <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                       </button>
                     );
                   })}
@@ -925,21 +902,18 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                     <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
                     <div className="space-y-2">
                       {recommendedModels.map((model) => {
-                        const cost = calculateTotalCost(model);
                         const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                         return (
                           <button key={model.modelId} onClick={() => {
                             setLocalProvider(model.providerId);
                             setLocalModel(model.modelId);
                             setLocalReason('Best value model');
-                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                            setLocalCost(displayCost);
                           }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <div className="flex items-center justify-between">
                               <span className="text-bw-peach-light font-medium">{model.displayName}</span>
                               {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
                             </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                           </button>
                         );
                       })}
@@ -952,20 +926,17 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                     <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
                     <div className="space-y-2">
                       {freeModels.map((model) => {
-                        const cost = calculateTotalCost(model);
                         return (
                           <button key={model.modelId} onClick={() => {
                             setLocalProvider(model.providerId);
                             setLocalModel(model.modelId);
                             setLocalReason('Free model');
-                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                            setLocalCost(displayCost);
                           }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <div className="flex items-center justify-between">
                               <span className="text-bw-peach-light">{model.displayName}</span>
                               {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
                             </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                           </button>
                         );
                       })}
@@ -978,20 +949,17 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                     <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
                     <div className="space-y-2">
                       {paidModels.map((model) => {
-                        const cost = calculateTotalCost(model);
                         return (
                           <button key={model.modelId} onClick={() => {
                             setLocalProvider(model.providerId);
                             setLocalModel(model.modelId);
                             setLocalReason('Paid model');
-                            const displayCost = localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost);
-                            setLocalCost(displayCost);
                           }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
                             <div className="flex items-center justify-between">
                               <span className="text-bw-peach-light">{model.displayName}</span>
                               {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
                             </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {localPriceInput !== null ? formatCost(localPriceInput) : formatCost(cost)} • {getStageCapability(model)}</div>
+                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
                           </button>
                         );
                       })}

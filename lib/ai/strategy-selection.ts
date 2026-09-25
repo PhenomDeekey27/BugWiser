@@ -8,6 +8,12 @@
 //   auto        — auto-selects the best model per-stage (default)
 //
 // Uses the existing MODEL_REGISTRY scoring system.
+//
+// Persisted stage_overrides (the concrete picks saved by the /models page
+// setups) are honored by EVERY mode via applyStageOverrides — so /api/ai/models
+// reports the same assignments the UI and runtime use, and an automatic setup
+// plus manual per-stage customization stay consistent. Manual model selection
+// is unaffected (it flows through selection_mode/manualModel, not here).
 
 import type { ProviderName } from './providers/registry';
 import { MODEL_REGISTRY } from './model-registry';
@@ -79,7 +85,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
         }
       }
 
-      return assignments;
+      return applyStageOverrides(assignments, stageOverrides);
     },
   },
   {
@@ -143,7 +149,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
         }
       }
 
-      return assignments;
+      return applyStageOverrides(assignments, stageOverrides);
     },
   },
   {
@@ -190,7 +196,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
         }
       }
 
-      return assignments;
+      return applyStageOverrides(assignments, stageOverrides);
     },
   },
   {
@@ -294,6 +300,28 @@ export const STRATEGY_MODES: StrategyMode[] = [
   },
 ];
 
+/**
+ * Applies persisted per-stage overrides (user_model_preferences.stage_overrides)
+ * on top of built assignments. An override with a valid provider+model replaces
+ * the assignment; `isFree` is re-derived from the registry (unknown entry →
+ * false, conservative). Used by every mode so the engine's stage list always
+ * reflects what the user actually configured on /models.
+ */
+function applyStageOverrides(
+  assignments: StageAssignment[],
+  stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>
+): StageAssignment[] {
+  if (!stageOverrides) return assignments;
+  return assignments.map((assignment) => {
+    const override = stageOverrides[assignment.task];
+    if (!override?.provider || !override?.model) return assignment;
+    const isFree = MODEL_REGISTRY.find(
+      (m) => m.provider === override.provider && m.model === override.model
+    )?.free ?? false;
+    return { ...assignment, provider: override.provider, model: override.model, isFree };
+  });
+}
+
 type LocalTaskWeights = {
   coding: number;
   reasoning: number;
@@ -315,7 +343,13 @@ function pickBestForTask(
         m.longContextScore * weights.longContext) /
       norm,
   }));
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => {
+    const d = b.score - a.score;
+    if (d !== 0) return d;
+    // Deterministic tie-break so equal-scored models never depend on registry
+    // iteration order: stable provider/model ID comparison.
+    return `${a.entry.provider}/${a.entry.model}`.localeCompare(`${b.entry.provider}/${b.entry.model}`);
+  });
   return scored[0]?.entry || undefined;
 }
 

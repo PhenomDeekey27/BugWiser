@@ -72,6 +72,8 @@ export async function GET() {
       supportsReasoning: m.supportsReasoning,
       supportsToolCalling: m.supportsToolCalling,
       supportsStructuredOutput: m.supportsStructuredOutput,
+      priceSource: m.priceSource,
+      priceFetchedAt: m.priceFetchedAt,
       capabilities: [
         ...(m.supportsCoding ? ['coding'] : []),
         ...(m.supportsReasoning ? ['reasoning'] : []),

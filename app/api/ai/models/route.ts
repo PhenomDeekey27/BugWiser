@@ -41,14 +41,27 @@ export async function GET() {
     (Object.keys(connections) as ProviderName[]).filter((p) => connections[p])
   );
 
-  // Build stage assignments based on user's preference
+  // Build stage assignments based on user's preference.
   const selectionMode = preference.selection_mode || 'auto';
-  // Handle 'manual' mode by converting to 'auto' for strategy selection
-  const strategyMode = selectionMode === 'manual' ? 'auto' : selectionMode;
-  // For preset mode, use auto as fallback for API (presets are client-side)
-  const apiStrategyMode = selectionMode === 'preset' ? 'auto' : strategyMode;
+
+  // Resolve the effective strategy mode used for automatic stage assignment.
+  // Manual mode is preserved exactly (converts to 'auto' for strategy
+  // resolution, so manual stage overrides keep working as before).
+  // In auto/preset mode, an explicitly saved selected_strategy (free /
+  // free_paid / fully_paid / custom) takes priority over selection_mode so
+  // that a persisted setup strategy (e.g. 'free') actually controls the
+  // automatic selection. If selected_strategy is missing, null, or invalid,
+  // it falls back to 'auto' — the existing safe default, so older
+  // preferences keep working unchanged.
+  // Note: 'balanced' / 'quality' are /models UI setups with no dedicated
+  // engine mode, so they resolve to 'auto' here; their concrete per-stage
+  // picks are persisted in stage_overrides and honored by EVERY engine mode
+  // (applyStageOverrides), so the assignments below still reflect what the
+  // user configured.
+  const strategyMode = resolveStrategyMode(selectionMode, preference);
+
   // Build stage assignments - filter out undefined/null overrides
-  const stageAssignments = buildStageAssignments(apiStrategyMode, availableProviders, preference.stage_overrides as any);
+  const stageAssignments = buildStageAssignments(strategyMode, availableProviders, preference.stage_overrides as any);
 
   // Transform stage assignments to strategy page format
   const stages = AI_STAGES.map((task) => {
@@ -101,7 +114,11 @@ export async function GET() {
     { id: 'custom', label: 'Custom', description: 'Base auto strategy with optional stage overrides.' },
   ];
 
-  const selectedStrategy = (preference.selection_mode || 'auto') as 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
+  // Echo the user's SAVED strategy (balanced/quality included) rather than
+  // the resolved engine mode — the resolved mode is an internal detail and
+  // the persisted picks live in stage_overrides regardless.
+  const savedStrategy = preference.selected_strategy;
+  const selectedStrategy = (savedStrategy === 'free' || savedStrategy === 'free_paid' || savedStrategy === 'fully_paid' || savedStrategy === 'custom' || savedStrategy === 'balanced' || savedStrategy === 'quality' ? savedStrategy : strategyMode) as 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality';
 
   return NextResponse.json({
     selectedStrategy,
@@ -120,6 +137,8 @@ export async function GET() {
           output: m.outputPrice,
           isFree: m.isFree,
         },
+        priceSource: m.priceSource,
+        priceFetchedAt: m.priceFetchedAt,
         supportsReasoning: m.supportsReasoning,
         supportsToolCalling: m.supportsToolCalling,
         supportsStructuredOutput: m.supportsStructuredOutput,
@@ -140,4 +159,50 @@ export async function GET() {
     preference,
     analyzedAt: catalog.analyzedAt,
   });
+}
+
+/**
+ * Resolves the effective strategy mode passed to buildStageAssignments().
+ *
+ * - Manual mode is preserved exactly: it always resolves to 'auto' for
+ *   strategy resolution, so manual stage overrides keep working as before.
+ * - In auto/preset mode, an explicitly saved selected_strategy that maps to a
+ *   buildStageAssignments mode (free / free_paid / fully_paid / custom) takes
+ *   priority over selection_mode. This ensures a persisted setup strategy
+ *   (e.g. 'free') actually controls the automatic stage assignment instead of
+ *   being overwritten.
+ * - If selected_strategy is missing, null, invalid, or a UI-setup mode
+ *   ('balanced' / 'quality' — no dedicated engine mode), it falls back to
+ *   'auto' — the existing safe default, so older preferences keep working
+ *   unchanged. UI-setup picks still apply via persisted stage_overrides,
+ *   which every engine mode honors (applyStageOverrides).
+ */
+function resolveStrategyMode(selectionMode: string, preference: { selected_strategy?: string }): 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' {
+  // Preset mode: presets are client-side, so the API always falls back to
+  // 'auto' for stage assignment regardless of any selected_strategy value.
+  if (selectionMode === 'preset') {
+    return 'auto';
+  }
+
+  // Manual mode is preserved exactly: strategy resolution uses auto, so
+  // manual stage overrides keep working as before.
+  if (selectionMode === 'manual') {
+    return 'auto';
+  }
+
+  const validStrategy = preference.selected_strategy;
+  const selectedStrategyValid =
+    typeof validStrategy === 'string' &&
+    ['auto', 'free', 'free_paid', 'fully_paid', 'custom', 'balanced', 'quality'].includes(validStrategy);
+
+  if (selectedStrategyValid) {
+    const mode = validStrategy;
+    if (mode === 'free' || mode === 'free_paid' || mode === 'fully_paid' || mode === 'custom') {
+      return mode;
+    }
+    // 'auto', 'balanced', 'quality', or any invalid value -> fall back to auto.
+    return 'auto';
+  }
+  // Missing or invalid selected_strategy -> safe 'auto' default.
+  return 'auto';
 }
