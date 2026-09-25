@@ -1,58 +1,29 @@
 // Live model-catalog fetchers. Fetches from ANY provider that has a configured API key.
 // Called server-side, keys never reach the client.
+//
+// Transport lives here; ALL raw→normalized interpretation lives in
+// lib/ai/catalog/normalizers.ts (normalizeProviderModel — the single normalization
+// boundary). Fetchers fetch, normalize each entry, and drop nulls (excluded entries).
 
 import type { ProviderName, ModelDefinition } from './types';
 import { envKeyForProvider } from '@/lib/ai/connection/service';
-import { findStaticModel } from './registry';
+import { normalizeProviderModel } from './normalizers';
 
-interface LiveModelEntry {
-  providerId: ProviderName;
-  modelId: string;
-  displayName: string;
-  contextWindow: number | null;
-  maxOutputTokens: number | null;
-  inputPrice: number | null;
-  outputPrice: number | null;
-  isFree: boolean;
+type RawEntry = Record<string, unknown>;
+
+function normalizeAll(providerId: ProviderName, entries: unknown[]): ModelDefinition[] {
+  const out: ModelDefinition[] = [];
+  for (const e of entries) {
+    if (!e || typeof e !== 'object') continue;
+    const n = normalizeProviderModel(providerId, e as RawEntry);
+    if (n) out.push(n);
+  }
+  return out;
 }
 
-// ── Pricing unit normalization ──
-// Internal normalized unit everywhere in the catalog is USD PER 1M TOKENS
-// (see lib/ai/catalog/types.ts ModelPrice). Providers differ:
-//   openrouter: USD PER TOKEN (e.g. "0.000003")  → multiply by 1_000_000
-//   chutes:     USD PER 1M tokens (native catalog) → no conversion
-//   opencode:   USD PER 1M tokens (per provider docs) → no conversion
-//   openai/gemini/deepseek/zai: no live pricing API; static registry values
-//               (already USD per 1M) are used, never converted.
-const PER_TOKEN_TO_PER_MILLION = 1_000_000;
+// ── Provider-specific fetch functions (transport + envelope parsing only) ──
 
-function toPerMillion(usdPerToken: number | null): number | null {
-  if (usdPerToken == null || !Number.isFinite(usdPerToken)) return null;
-  return usdPerToken * PER_TOKEN_TO_PER_MILLION;
-}
-
-/**
- * Coerces a provider price value (string or number) into a finite number,
- * or null when absent/unparseable. Providers send "0", 0, "0.000003", null…
- * so free detection must run on the coerced number, never on the raw value.
- */
-function toPriceNumber(v: unknown): number | null {
-  if (v == null) return null;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-/**
- * Free ⇔ EXPLICIT zero pricing on both sides. Null/missing/unknown pricing
- * is NEVER free (requirements: unknown ≠ free; only confirmed zero cost).
- */
-function isExplicitlyFree(input: number | null, output: number | null, known: boolean): boolean {
-  return known && input != null && output != null && input === 0 && output === 0;
-}
-
-// ── Provider-specific fetch functions ──
-
-async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchOpenRouter(apiKey: string): Promise<ModelDefinition[]> {
   const baseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -60,40 +31,10 @@ async function fetchOpenRouter(apiKey: string): Promise<LiveModelEntry[]> {
   });
   if (!res.ok) throw new Error(`OpenRouter catalog: ${res.status}`);
   const data = await res.json();
-  const models = data?.data || [];
-  return models
-    .filter((m: Record<string, unknown>) => {
-      const arch = m.architecture as Record<string, unknown> | undefined;
-      const mod = arch?.modality as string | undefined;
-      return mod?.includes('text');
-    })
-    .map((m: Record<string, unknown>) => {
-      const pricing = m.pricing as Record<string, unknown> | undefined;
-      const topProvider = m.top_provider as Record<string, unknown> | undefined;
-      // Raw values may be strings OR numbers (e.g. 0); coerce before use so
-      // numeric zero is not mistaken for "unknown price".
-      const inputRaw = toPriceNumber(pricing?.prompt);
-      const outputRaw = toPriceNumber(pricing?.completion);
-      const hasPricingField = pricing != null && ('prompt' in pricing || 'completion' in pricing);
-      const input = toPerMillion(inputRaw);
-      const output = toPerMillion(outputRaw);
-      return {
-        providerId: 'openrouter' as ProviderName,
-        modelId: (m.id as string) || '',
-        displayName: (m.name as string) || (m.id as string) || '',
-        contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
-        maxOutputTokens: typeof topProvider?.max_completion_tokens === 'number' ? topProvider.max_completion_tokens : null,
-        // OpenRouter prices are USD PER TOKEN (e.g. "0.000003"); normalize to USD per 1M tokens.
-        inputPrice: input,
-        outputPrice: output,
-        // Free ⇔ pricing fields exist and both coerce to exactly 0 (string "0"
-        // or numeric 0). Missing/null pricing is unknown, NOT free.
-        isFree: isExplicitlyFree(inputRaw, outputRaw, hasPricingField),
-      };
-    });
+  return normalizeAll('openrouter', data?.data || []);
 }
 
-async function fetchChutes(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchChutes(apiKey: string): Promise<ModelDefinition[]> {
   const baseUrl = process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -101,35 +42,11 @@ async function fetchChutes(apiKey: string): Promise<LiveModelEntry[]> {
   });
   if (!res.ok) throw new Error(`Chutes catalog: ${res.status}`);
   const data = await res.json();
-  const models: Array<Record<string, unknown>> = Array.isArray(data) ? data : data?.data || [];
-  return models.map((m) => {
-    const id = (m.id as string) || (m.model as string);
-    if (!id) return null;
-    const pricing = m.pricing as Record<string, unknown> | undefined;
-    const price = m.price as Record<string, unknown> | undefined;
-    const inputVal = pricing?.input ?? (price?.input as Record<string, unknown>)?.value;
-    const outputVal = pricing?.output ?? (price?.output as Record<string, unknown>)?.value;
-    // Coerce strings/numbers uniformly; numeric-0 pricing must survive.
-    const numInput = toPriceNumber(inputVal);
-    const numOutput = toPriceNumber(outputVal);
-    const hasPriceData = inputVal != null || outputVal != null;
-    return {
-      providerId: 'chutes' as ProviderName,
-      modelId: id,
-      displayName: (m.name as string) || (m.display_name as string) || id,
-      contextWindow: typeof m.context_length === 'number' ? m.context_length : null,
-      maxOutputTokens: typeof m.max_output_tokens === 'number' ? m.max_output_tokens : null,
-      inputPrice: numInput,
-      outputPrice: numOutput,
-      // Not every Chutes model is paid by assumption: when the provider
-      // explicitly reports zero pricing, honor it. Absent pricing stays
-      // unknown (isFree false, null price) — never fabricated as free.
-      isFree: isExplicitlyFree(numInput, numOutput, hasPriceData),
-    };
-  }).filter((e): e is LiveModelEntry => !!e);
+  const models: unknown[] = Array.isArray(data) ? data : data?.data || [];
+  return normalizeAll('chutes', models);
 }
 
-async function fetchOpenCode(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchOpenCode(apiKey: string): Promise<ModelDefinition[]> {
   const baseUrl = process.env.OPENCODE_ZEN_BASE_URL || 'https://opencode.ai/zen/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -137,134 +54,40 @@ async function fetchOpenCode(apiKey: string): Promise<LiveModelEntry[]> {
   });
   if (!res.ok) throw new Error(`OpenCode catalog: ${res.status}`);
   const data = await res.json();
-  const models: Array<Record<string, unknown>> = data?.data || (Array.isArray(data) ? data : []);
-  return models
-    .filter((m) => {
-      if (!m.id) return false;
-      const mods = (m.modalities as string[]) || [];
-      return mods.length === 0 || mods.some((mod) => mod.includes('text'));
-    })
-    .map((m) => {
-      const id = m.id as string;
-      const pricing = m.pricing as Record<string, unknown> | undefined;
-      const input = pricing?.prompt ?? pricing?.input;
-      const output = pricing?.completion ?? pricing?.output;
-      const numInput = toPriceNumber(input);
-      const numOutput = toPriceNumber(output);
-      const contextWindow = (m.context_length as number) ?? (m.context_window as number) ?? null;
-      const hasPriceData = input != null || output != null;
-      const isFree = isExplicitlyFree(numInput, numOutput, hasPriceData);
-      return {
-        providerId: 'opencode' as ProviderName,
-        modelId: id,
-        displayName: (m.name as string) || (m.display_name as string) || id,
-        contextWindow: typeof contextWindow === 'number' ? contextWindow : null,
-        maxOutputTokens: typeof m.max_output_tokens === 'number' ? m.max_output_tokens : null,
-        inputPrice: numInput,
-        outputPrice: numOutput,
-        isFree,
-      };
-    });
+  const models: unknown[] = data?.data || (Array.isArray(data) ? data : []);
+  return normalizeAll('opencode', models);
 }
 
-async function fetchOpenAI(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchOpenAI(apiKey: string): Promise<ModelDefinition[]> {
   const res = await fetch('https://api.openai.com/v1/models', {
     headers: { Authorization: `Bearer ${apiKey}` },
     next: { revalidate: 3600 },
   });
   if (!res.ok) throw new Error(`OpenAI catalog: ${res.status}`);
   const data = await res.json();
-  const models = data?.data || [];
-  // OpenAI doesn't expose pricing in /models; use static registry for pricing
-  return models
-    .filter((m: Record<string, unknown>) => {
-      const owned = (m.owned_by as string) || '';
-      const id = (m.id as string) || '';
-      return owned === 'openai' && (id.includes('gpt') || id.includes('o1') || id.includes('o3') || id.includes('chat'));
-    })
-    .map((m: Record<string, unknown>) => {
-      const id = (m.id as string) || '';
-      const staticModel = findStaticModel('openai', id);
-      return {
-        providerId: 'openai' as ProviderName,
-        modelId: id,
-        displayName: staticModel?.displayName || id,
-        contextWindow: staticModel?.contextWindow ?? null,
-        maxOutputTokens: staticModel?.maxOutputTokens ?? null,
-        inputPrice: staticModel?.price.input ?? null,
-        outputPrice: staticModel?.price.output ?? null,
-        isFree: staticModel?.price.isFree ?? false,
-      };
-    });
+  return normalizeAll('openai', data?.data || []);
 }
 
-// ── Gemini modality guard ──
-// models.list does not expose structured modality metadata, so guard at the
-// generation-FAMILY level: these families are image/video/music/speech or
-// embedding endpoints, not text/code generation (prevents models like Lyria
-// from entering the text-model candidate pool). Family tokens only — not a
-// per-model blacklist. Replace with a modality-metadata check if/when Google
-// exposes one on models.list.
-const GEMINI_NON_TEXT_FAMILY = /(^|[^a-z])(imagen|veo|lyria|chirp|tts|embedding|aqa)([^a-z]|$)/;
-
-async function fetchGemini(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchGemini(apiKey: string): Promise<ModelDefinition[]> {
   const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey, {
     next: { revalidate: 3600 },
   });
   if (!res.ok) throw new Error(`Gemini catalog: ${res.status}`);
   const data = await res.json();
-  const models = data?.models || [];
-  return models
-    .filter((m: Record<string, unknown>) => {
-      const methods = (m.supportedGenerationMethods as string[]) || [];
-      if (!methods.includes('generateContent')) return false;
-      const id = ((m.name as string) || '').replace('models/', '');
-      const displayName = ((m.displayName as string) || '').toLowerCase();
-      return !GEMINI_NON_TEXT_FAMILY.test(id.toLowerCase()) && !GEMINI_NON_TEXT_FAMILY.test(displayName);
-    })
-    .map((m: Record<string, unknown>) => {
-      const name = (m.name as string) || '';
-      const id = name.replace('models/', '');
-      const staticModel = findStaticModel('gemini', id);
-      const ctx = m.inputTokenLimit as number | undefined;
-      return {
-        providerId: 'gemini' as ProviderName,
-        modelId: id,
-        displayName: staticModel?.displayName || (m.displayName as string) || id,
-        contextWindow: ctx ?? staticModel?.contextWindow ?? null,
-        maxOutputTokens: staticModel?.maxOutputTokens ?? null,
-        inputPrice: staticModel?.price.input ?? null,
-        outputPrice: staticModel?.price.output ?? null,
-        isFree: staticModel?.price.isFree ?? false,
-      };
-    });
+  return normalizeAll('gemini', data?.models || []);
 }
 
-async function fetchDeepSeek(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchDeepSeek(apiKey: string): Promise<ModelDefinition[]> {
   const res = await fetch('https://api.deepseek.com/v1/models', {
     headers: { Authorization: `Bearer ${apiKey}` },
     next: { revalidate: 3600 },
   });
   if (!res.ok) throw new Error(`DeepSeek catalog: ${res.status}`);
   const data = await res.json();
-  const models = data?.data || [];
-  return models.map((m: Record<string, unknown>) => {
-    const id = (m.id as string) || '';
-    const staticModel = findStaticModel('deepseek', id);
-    return {
-      providerId: 'deepseek' as ProviderName,
-      modelId: id,
-      displayName: staticModel?.displayName || id,
-      contextWindow: staticModel?.contextWindow ?? null,
-      maxOutputTokens: staticModel?.maxOutputTokens ?? null,
-      inputPrice: staticModel?.price.input ?? null,
-      outputPrice: staticModel?.price.output ?? null,
-      isFree: staticModel?.price.isFree ?? false,
-    };
-  });
+  return normalizeAll('deepseek', data?.data || []);
 }
 
-async function fetchZAI(apiKey: string): Promise<LiveModelEntry[]> {
+async function fetchZAI(apiKey: string): Promise<ModelDefinition[]> {
   // Z.AI uses OpenAI-compatible API — same canonical base URL as provider validation (lib/ai/providers/registry.ts)
   const baseUrl = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
   const res = await fetch(`${baseUrl}/models`, {
@@ -273,28 +96,14 @@ async function fetchZAI(apiKey: string): Promise<LiveModelEntry[]> {
   });
   if (!res.ok) throw new Error(`Z.AI catalog: ${res.status}`);
   const data = await res.json();
-  const models = data?.data || [];
-  return models.map((m: Record<string, unknown>) => {
-    const id = (m.id as string) || '';
-    const staticModel = findStaticModel('zai', id);
-    return {
-      providerId: 'zai' as ProviderName,
-      modelId: id,
-      displayName: staticModel?.displayName || id,
-      contextWindow: staticModel?.contextWindow ?? null,
-      maxOutputTokens: staticModel?.maxOutputTokens ?? null,
-      inputPrice: staticModel?.price.input ?? null,
-      outputPrice: staticModel?.price.output ?? null,
-      isFree: staticModel?.price.isFree ?? false,
-    };
-  });
+  return normalizeAll('zai', data?.data || []);
 }
 
 // ── Provider fetch registry ──
 // Maps each provider to its fetch function + env var fallback
 
 const PROVIDER_FETCHERS: Partial<Record<ProviderName, {
-  fetch: (apiKey: string) => Promise<LiveModelEntry[]>;
+  fetch: (apiKey: string) => Promise<ModelDefinition[]>;
   envKey?: string;
   baseUrl?: string;
 }>> = {
@@ -316,9 +125,7 @@ export async function fetchLiveModels(
   const outputs: { providerId: ProviderName; models: ModelDefinition[] }[] = [];
 
   // Fetch from EVERY provider that has a configured key — in PARALLEL.
-  // These fetches used to run sequentially, adding each provider's full
-  // latency (OpenRouter's multi-MB catalog alone is slow) to the rebuild
-  // critical path. Each provider fails independently into its own slot.
+  // Each provider fails independently into its own slot.
   const tasks: Promise<void>[] = [];
   for (const [providerId, fetcher] of Object.entries(PROVIDER_FETCHERS) as Array<[ProviderName, typeof PROVIDER_FETCHERS[ProviderName]]>) {
     if (!fetcher) continue;
@@ -327,11 +134,8 @@ export async function fetchLiveModels(
 
     tasks.push(
       fetcher.fetch(apiKey)
-        .then((entries) => {
-          outputs.push({
-            providerId,
-            models: entries.map(historyEntryToModel),
-          });
+        .then((models) => {
+          outputs.push({ providerId, models });
         })
         .catch((err) => {
           console.warn(`[live-catalog] ${providerId} fetch failed:`, err);
@@ -341,30 +145,4 @@ export async function fetchLiveModels(
   await Promise.all(tasks);
 
   return outputs;
-}
-
-function historyEntryToModel(e: LiveModelEntry): ModelDefinition {
-  const staticModel = findStaticModel(e.providerId, e.modelId);
-  return {
-    providerId: e.providerId,
-    modelId: e.modelId,
-    displayName: staticModel?.displayName || e.displayName,
-    contextWindow: e.contextWindow ?? staticModel?.contextWindow ?? 128_000,
-    maxOutputTokens: e.maxOutputTokens ?? staticModel?.maxOutputTokens ?? 8192,
-    price: {
-      input: e.inputPrice,
-      output: e.outputPrice,
-      isFree: e.isFree,
-    },
-    supportsReasoning: staticModel?.supportsReasoning ?? false,
-    supportsToolCalling: staticModel?.supportsToolCalling ?? true,
-    supportsStructuredOutput: staticModel?.supportsStructuredOutput ?? true,
-    capabilities: staticModel?.capabilities ?? ['coding', 'tool_calling', 'structured_output'],
-    availability: 'available',
-    // 0–5 fallback scores must match the 0–5 scale of the static registry scores
-    // (UI/selection normalize 0–5 → 0–100 elsewhere).
-    scores: staticModel?.scores ?? { coding: 3, reasoning: 3, speed: 3, longContext: 3 },
-    tags: staticModel?.tags ? [...new Set([...staticModel.tags, 'live'])] : ['live'],
-    source: 'live',
-  };
 }

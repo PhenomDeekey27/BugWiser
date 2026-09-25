@@ -57,6 +57,38 @@ export interface ModelPrice {
   isFree: boolean;
 }
 
+/** Where the normalized price numbers came from. Never 'live'/'registry' with null prices. */
+export type PriceSource = 'live' | 'registry' | 'unknown';
+
+/** Where the normalized context window came from. */
+export type ContextSource = 'live' | 'registry' | 'default';
+
+/**
+ * Authority behind `isFree === true`. 'explicit-zero' = the live provider payload
+ * carried explicit zero pricing; 'registry-confirmed' = an exact static-registry entry
+ * explicitly marks the model free and the live payload had no pricing to contradict it.
+ * 'none' otherwise. Free is NEVER inferred from model names.
+ */
+export type FreeAuthority = 'explicit-zero' | 'registry-confirmed' | 'none';
+
+/**
+ * Per-flag capability provenance. 'observed' = provider payload evidence;
+ * 'curated' = exact static-registry entry; 'derived' = deterministic ID/family signal;
+ * 'unknown' = no evidence (flag must be false — never a silent true default).
+ */
+export type CapabilityProvenance = 'observed' | 'curated' | 'derived' | 'unknown';
+
+export interface CapabilityProvenanceMap {
+  coding: CapabilityProvenance;
+  reasoning: CapabilityProvenance;
+  vision: CapabilityProvenance;
+  toolCalling: CapabilityProvenance;
+  structuredOutput: CapabilityProvenance;
+}
+
+/** Overall trust in a normalized entry. high = live price + live context + ≥3 observed caps. */
+export type MetadataConfidence = 'high' | 'medium' | 'low';
+
 export interface ModelDefinition {
   providerId: ProviderName;
   /** Provider-scoped model identifier, e.g. `deepseek-ai/DeepSeek-V4-Flash-0731-TEE`. */
@@ -81,6 +113,21 @@ export interface ModelDefinition {
   tags: string[];
   /** Source of this catalog entry. */
   source: 'registry' | 'live';
+  /**
+   * Where the normalized price came from. Always set by normalizeProviderModel;
+   * absent only on pre-normalization static rows (the catalog layer fills it).
+   */
+  priceSource?: PriceSource;
+  /** Where the context window came from (absent on pre-normalization static rows). */
+  contextSource?: ContextSource;
+  /** Authority behind isFree (absent on pre-normalization static rows). */
+  freeAuthority?: FreeAuthority;
+  /** Per-flag capability provenance (absent on pre-normalization static rows). */
+  capabilityProvenance?: CapabilityProvenanceMap;
+  /** Overall metadata trust (absent on pre-normalization static rows). */
+  metadataConfidence?: MetadataConfidence;
+  /** Raw input/output modalities when the provider exposes them; undefined otherwise. */
+  modalities?: { input: string[]; output: string[] };
 }
 
 export interface ModelCatalog {

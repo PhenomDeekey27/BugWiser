@@ -2,8 +2,15 @@
 // Provider change detected -> discover models -> normalize -> AI classify -> store -> cache
 
 import { createBackgroundClient } from '@/lib/supabase/background';
-import type { ProviderName } from '../catalog/types';
+import type {
+  ProviderName,
+  ContextSource,
+  FreeAuthority,
+  CapabilityProvenanceMap,
+  MetadataConfidence,
+} from '../catalog/types';
 export type { ProviderName };
+import { paramSizeClass, activeParamBillions } from '../catalog/modelSignals';
 import { PROVIDER_DEFINITIONS, STATIC_MODEL_REGISTRY } from '../catalog/registry';
 import { fetchLiveModels } from '../catalog/live';
 import { getProviderConnections, resolveUserCredentials, envKeyForProvider } from '../connection/service';
@@ -29,6 +36,12 @@ export interface NormalizedModel {
   availability: 'available' | 'unavailable' | 'unknown';
   source: 'registry' | 'live';
   registryScores?: { coding: number; reasoning: number; speed: number; longContext: number };
+  /** Normalization provenance (passthrough from normalizeProviderModel; recomputed per build, not persisted). */
+  contextSource?: ContextSource;
+  freeAuthority?: FreeAuthority;
+  capabilityProvenance?: CapabilityProvenanceMap;
+  metadataConfidence?: MetadataConfidence;
+  modalities?: { input: string[]; output: string[] };
 }
 
 export interface ClassifiedModel extends NormalizedModel {
@@ -72,18 +85,24 @@ function isCatalogStale(analyzedAt: string | null | undefined): boolean {
   return Date.now() - t > CATALOG_TTL_MS;
 }
 
+// Debug tracing for catalog/selection investigation. Gated: enable with
+// AI_DEBUG_SELECTION=true (never on in production by default).
+const AI_DEBUG = process.env.AI_DEBUG_SELECTION === 'true';
+function debugLog(...args: unknown[]): void {
+  if (AI_DEBUG) console.log('[model-intelligence:debug]', ...args);
+}
+
 async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   const connected = await getProviderConnections(userId);
   const connectedIds = (Object.keys(connected) as ProviderName[]).filter((p) => connected[p]);
-  console.log('[model-intelligence] getProviderConnections returned:', connected);
+  if (AI_DEBUG) debugLog('getProviderConnections returned:', connected);
   if (connectedIds.length === 0) {
-    console.log('[model-intelligence] No connected providers');
+    debugLog('No connected providers');
     return [];
   }
-  console.log('[model-intelligence] Connected providers:', connectedIds);
+  debugLog('Connected providers:', connectedIds.join(','));
 
   const nowIso = new Date().toISOString();
-  console.log('[model-intelligence] STATIC_MODEL_REGISTRY count:', STATIC_MODEL_REGISTRY.length);
   const staticModels: NormalizedModel[] = STATIC_MODEL_REGISTRY
     .filter((m) => connectedIds.includes(m.providerId as ProviderName))
     .map((m) => ({
@@ -107,26 +126,35 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
       availability: m.availability === 'available' ? 'available' : 'unknown',
       source: 'registry' as const,
       registryScores: m.scores,
+      // Static rows are curated fallback metadata (never live-observed).
+      contextSource: 'registry' as const,
+      freeAuthority: (m.price.isFree ? 'registry-confirmed' : 'none') as FreeAuthority,
+      capabilityProvenance: {
+        coding: 'curated',
+        reasoning: 'curated',
+        vision: 'curated',
+        toolCalling: 'curated',
+        structuredOutput: 'curated',
+      } as CapabilityProvenanceMap,
+      metadataConfidence: 'medium' as const,
     }));
   console.log('[model-intelligence] Static models after filtering:', staticModels.length);
   let liveModels: NormalizedModel[] = [];
   try {
     const liveByProvider = await fetchLiveModels(userId);
-    console.log('[model-intelligence] Live providers response:', liveByProvider.map((g) => g.providerId + '(' + g.models.length + ')'));
-    console.log('[model-intelligence] Live models count:', liveModels.length);
+    debugLog('live providers:', liveByProvider.map((g) => g.providerId + '(' + g.models.length + ')').join(','));
     for (const group of liveByProvider) {
       if (!connectedIds.includes(group.providerId)) {
-        console.log('[model-intelligence] Skipping live group provider', group.providerId, 'not in connectedIds');
+        debugLog('Skipping live group provider', group.providerId, 'not in connectedIds');
         continue;
       }
-      console.log('[model-intelligence] Processing live models for provider', group.providerId, 'count:', group.models.length);
       for (const m of group.models) {
         const staticEntry = STATIC_MODEL_REGISTRY.find((s) => s.providerId === group.providerId && s.modelId === m.modelId);
-        // 'live' provenance only when the live payload carried an actual price;
-        // registry-backed live entries (openai/gemini/deepseek/zai) inherit the
-        // registry fallback, unknown when neither source has pricing.
-        const liveHasPrice = m.price.input != null || m.price.output != null;
-        const usesStaticPrice = !liveHasPrice && !!(staticEntry && (staticEntry.price.input != null || staticEntry.price.output != null));
+        // Provenance comes from normalizeProviderModel (live payload evidence vs
+        // exact-match static fill vs unknown). The normalizer already enforced:
+        // live nulls never overwrite static metadata, and 'registry' is never
+        // stamped on null prices — so no recompute here, just passthrough.
+        const priceSource = m.priceSource ?? 'unknown';
         liveModels.push({
           provider: m.providerId,
           modelId: m.modelId,
@@ -134,8 +162,8 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
           isFree: m.price.isFree,
           inputPrice: m.price.input,
           outputPrice: m.price.output,
-          priceSource: liveHasPrice ? 'live' : usesStaticPrice ? 'registry' : 'unknown',
-          priceFetchedAt: liveHasPrice || usesStaticPrice ? nowIso : null,
+          priceSource,
+          priceFetchedAt: priceSource !== 'unknown' ? nowIso : null,
           contextWindow: m.contextWindow,
           maxOutputTokens: m.maxOutputTokens,
           supportsReasoning: m.supportsReasoning,
@@ -146,6 +174,11 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
           availability: m.availability === 'available' ? 'available' : 'unknown',
           source: 'live' as const,
           registryScores: staticEntry?.scores,
+          contextSource: m.contextSource,
+          freeAuthority: m.freeAuthority,
+          capabilityProvenance: m.capabilityProvenance,
+          metadataConfidence: m.metadataConfidence,
+          modalities: m.modalities,
         });
       }
     }
@@ -153,7 +186,7 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
     console.warn('[model-intelligence] Live fetch failed:', err);
   }
 
-  console.log('[model-intelligence] Merging static (', staticModels.length, ') with live (', liveModels.length, ') models');
+  console.log('[model-intelligence] Merged static (%d) + live (%d) models', staticModels.length, liveModels.length);
   const merged = new Map<string, NormalizedModel>();
   for (const m of staticModels) merged.set(m.provider + ':' + m.modelId, m);
   for (const m of liveModels) {
@@ -169,7 +202,7 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   for (const m of result) {
     byProvider[m.provider] = (byProvider[m.provider] || 0) + 1;
   }
-  console.log('[model-intelligence] Final catalog:', byProvider, 'total:', result.length);
+  debugLog('Final catalog by provider:', JSON.stringify(byProvider), 'total:', result.length);
   return result;
 }
 
@@ -205,65 +238,113 @@ function deterministicRank(models: NormalizedModel[]): ClassifiedModel[] {
   }).sort((a, b) => b.overallScore - a.overallScore);
 }
 
-function registryBoost(m: NormalizedModel, base: number): number {
-  if (!m.registryScores) return base;
-  const avg = (m.registryScores.coding + m.registryScores.reasoning + m.registryScores.speed + m.registryScores.longContext) / 4;
-  return Math.round(base * 0.6 + (avg / 5) * 100 * 0.4);
+// ── Deterministic, metadata-derived capability scoring ──
+//
+// Every point of these scores maps to concrete evidence in the model's record:
+//   - capability booleans (tool calling / reasoning / structured output) come
+//     from the provider's own catalog metadata where available (OpenRouter
+//     supported_parameters) — see lib/ai/catalog/live.ts and modelSignals.ts;
+//   - context scores map to the provider-reported context_length;
+//   - speed uses ONLY the deterministic size/active-size signals parsed from
+//     the model ID (MoE active params are the closest honest proxy) plus the
+//     free-tier serving behavior. NO benchmark numbers are invented.
+//
+// The goal is DISCRIMINATION backed by data: distinct metadata must produce
+// distinct scores, so stage selection reflects real differences instead of
+// collapsing hundreds of models into 3-4 identical buckets.
+
+/** Maps context_length to a 0–100 long-context score (piecewise, documented). */
+function contextToScore(ctx: number): number {
+  if (ctx >= 1_000_000) return 95;
+  if (ctx >= 512_000) return 85;
+  if (ctx >= 256_000) return 75;
+  if (ctx >= 200_000) return 70;
+  if (ctx >= 128_000) return 55;
+  if (ctx >= 48_000) return 40;
+  if (ctx >= 32_000) return 30;
+  if (ctx >= 16_000) return 20;
+  return 10;
+}
+
+/** Deterministic speed score: active parameter size from the model ID. */
+function speedScoreFor(m: NormalizedModel, ctx: number): number {
+  const active = activeParamBillions(m.modelId);
+  let base: number;
+  if (active == null) base = 50; // no size signal in the ID
+  else if (active <= 4) base = 92;
+  else if (active <= 10) base = 84;
+  else if (active <= 30) base = 74;
+  else if (active <= 70) base = 62;
+  else if (active <= 120) base = 50;
+  else if (active <= 250) base = 40;
+  else base = 30;
+  // Larger context windows are slower per request in practice; a small
+  // deterministic correction (−1 pt per 128K above 128K, floor 0).
+  const ctxPenalty = Math.max(0, Math.floor((ctx - 128_000) / 128_000));
+  return Math.max(0, base - ctxPenalty);
 }
 
 function computeCodingScore(m: NormalizedModel): number {
-  let score = 30;
-  if (m.supportsCoding) score += 20;
+  // Coding capability = explicit coding flag (provider-evidence based) +
+  // tool calling (agentic coding needs it) + reasoning + long context.
+  let score = 25;
+  if (m.supportsCoding) score += 35;
+  if (m.supportsToolCalling) score += 15;
   if (m.supportsReasoning) score += 10;
-  if (m.supportsToolCalling) score += 8;
-  if (m.contextWindow >= 100_000) score += 7;
-  if (m.contextWindow >= 200_000) score += 5;
-  const base = Math.min(80, score);
-  if (m.registryScores) return registryBoost(m, base);
-  return base;
+  if (m.contextWindow >= 128_000) score += 5;
+  if (m.contextWindow >= 256_000) score += 5;
+  // Model-family size refinement: large parameter counts signal higher
+  // ceiling capability for code understanding.
+  const size = paramSizeClass(m.modelId);
+  if (size.size === 'large') score += 5;
+  if (size.size === 'tiny') score -= 15;
+  if (m.registryScores) {
+    // Registry-curated entries (verified metadata) blend in their curated
+    // 0–5 coding score; live-derived evidence stays dominant.
+    const curated = (m.registryScores.coding / 5) * 100;
+    return Math.round(Math.min(100, Math.max(0, score * 0.7 + curated * 0.3)));
+  }
+  return Math.round(Math.min(100, Math.max(0, score)));
 }
 
 function computeReasoningScore(m: NormalizedModel): number {
-  let score = 25;
-  if (m.supportsReasoning) score += 25;
-  if (m.supportsToolCalling) score += 10;
-  if (m.contextWindow >= 100_000) score += 10;
-  if (m.contextWindow >= 200_000) score += 5;
-  const base = Math.min(75, score);
-  if (m.registryScores) return registryBoost(m, base);
-  return base;
+  // Reasoning = explicit reasoning support (provider metadata) + context
+  // headroom (long chains of thought need room) + family/size signals.
+  let score = 20;
+  if (m.supportsReasoning) score += 35;
+  else score -= 10; // provider metadata explicitly lacks reasoning params
+  if (m.supportsToolCalling) score += 8;
+  score += Math.round(contextToScore(m.contextWindow) * 0.2); // up to +19
+  const size = paramSizeClass(m.modelId);
+  if (size.size === 'large') score += 8;
+  if (size.size === 'tiny') score -= 15;
+  if (m.registryScores) {
+    const curated = (m.registryScores.reasoning / 5) * 100;
+    return Math.round(Math.min(100, Math.max(0, score * 0.7 + curated * 0.3)));
+  }
+  return Math.round(Math.min(100, Math.max(0, score)));
 }
 
 function computeSpeedScore(m: NormalizedModel): number {
-  let base: number;
-  if (m.isFree) base = 70;
-  else if (m.inputPrice != null && m.inputPrice < 0.3) base = 65;
-  else if (m.inputPrice != null && m.inputPrice < 1) base = 58;
-  else if (m.inputPrice != null && m.inputPrice < 3) base = 48;
-  else base = 38;
-  if (m.registryScores) return registryBoost(m, base);
-  return base;
+  return Math.round(Math.min(100, Math.max(0, speedScoreFor(m, m.contextWindow))));
 }
 
 function computeLongContextScore(m: NormalizedModel): number {
   if (m.registryScores) {
-    const base = m.contextWindow >= 1_000_000 ? 80 : m.contextWindow >= 200_000 ? 70 : m.contextWindow >= 100_000 ? 55 : 30;
-    return registryBoost(m, base);
+    const curated = (m.registryScores.longContext / 5) * 100;
+    const derived = contextToScore(m.contextWindow);
+    return Math.round(Math.min(100, Math.max(0, derived * 0.6 + curated * 0.4)));
   }
-  if (m.contextWindow >= 1_000_000) return 85;
-  if (m.contextWindow >= 200_000) return 70;
-  if (m.contextWindow >= 100_000) return 55;
-  if (m.contextWindow >= 48_000) return 40;
-  if (m.contextWindow >= 24_000) return 25;
-  return 15;
+  return contextToScore(m.contextWindow);
 }
 
 function computeValueScore(m: NormalizedModel): number {
-  if (m.isFree) return 70;
-  if (m.inputPrice == null || m.outputPrice == null) return 50;
-  const combined = m.inputPrice * 2 + m.outputPrice;
+  if (m.isFree) return 95;
+  if (m.inputPrice == null || m.outputPrice == null) return 40; // unknown pricing — worse than any known price
+  const combined = m.inputPrice * 2 + m.outputPrice; // blended per-1M USD
+  // Piecewise cost-efficiency bands (deterministic, explainable).
+  const costEfficiency = combined <= 0.3 ? 5 : combined <= 0.75 ? 4 : combined <= 1.5 ? 3 : combined <= 3 ? 2 : 1;
   const quality = (m.supportsCoding ? 1 : 0) + (m.supportsReasoning ? 1 : 0) + (m.supportsToolCalling ? 0.5 : 0);
-  const costEfficiency = combined <= 0.5 ? 5 : combined <= 1.5 ? 4 : combined <= 3 ? 3 : combined <= 6 ? 2 : 1;
   return Math.round(quality * 12 + costEfficiency * 12);
 }
 
@@ -334,12 +415,21 @@ async function aiClassify(userId: string, models: NormalizedModel[], freeModel: 
     }
     return {
       models: models.map((m, i) => {
-        const s = scores[i] || {};
-        const codingScore = clamp(s.codingScore ?? 50);
-        const reasoningScore = clamp(s.reasoningScore ?? 50);
-        const speedScore = clamp(s.speedScore ?? 50);
-        const longContextScore = clamp(s.longContextScore ?? 50);
-        const valueScore = clamp(s.valueScore ?? 50);
+        const s = scores[i];
+        // NO constant fill: an entry the classifier did not actually score
+        // must NOT receive a fabricated 50/50/50/50 tuple (that constant
+        // fill is what historically flattened hundreds of distinct models
+        // into identical scores). Unscored entries fall back to the
+        // deterministic metadata ranking for this model instead.
+        if (!s || typeof s !== 'object') {
+          const [fallback] = deterministicRank([m]);
+          return fallback;
+        }
+        const codingScore = clamp(s.codingScore);
+        const reasoningScore = clamp(s.reasoningScore);
+        const speedScore = clamp(s.speedScore);
+        const longContextScore = clamp(s.longContextScore);
+        const valueScore = clamp(s.valueScore);
         const overallScore = clamp(s.overallScore ?? Math.round(codingScore * 0.3 + reasoningScore * 0.25 + speedScore * 0.15 + longContextScore * 0.15 + valueScore * 0.15));
         return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: s.recommendedCategories || [] };
       }).sort((a, b) => b.overallScore - a.overallScore),
@@ -363,8 +453,10 @@ function getBaseUrl(provider: ProviderName): string {
   return urls[provider] || 'https://api.openai.com/v1';
 }
 
-function clamp(v: number): number {
-  return Math.max(0, Math.min(100, Math.round(v)));
+function clamp(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return 0; // classifier omitted/garbled this field — 0, never a fake mid score
+  return Math.max(0, Math.min(100, Math.round(n)));
 }
 
 async function storeCatalog(userId: string, result: ModelIntelligenceResult): Promise<void> {

@@ -5,7 +5,8 @@ import { getModelPreference } from '@/lib/ai/preferences';
 import { getProviderConnections } from '@/lib/ai/connection/service';
 import { buildStageAssignments } from '@/lib/ai/strategy-selection';
 import { STAGE_WEIGHTS } from '@/lib/ai/catalog/stageSelection';
-import type { ProviderName } from '@/lib/ai/model-catalog/types';
+import { reconcileStageOverrides } from '@/lib/ai/catalog/overrideReconcile';
+import type { ProviderName } from '@/lib/ai/catalog/types';
 
 const AI_STAGES = [
   'relevant_file_discovery',
@@ -41,6 +42,19 @@ export async function GET() {
     (Object.keys(connections) as ProviderName[]).filter((p) => connections[p])
   );
 
+  // Reconcile persisted stage_overrides against the CURRENT connected catalog
+  // (same policy as /api/models): stale entries are dropped deterministically
+  // so neither this endpoint nor the runtime can act on phantom models.
+  const reconcile = reconcileStageOverrides(
+    (preference.stage_overrides ?? null) as Record<string, { provider: string | null; model: string | null; unavailable?: boolean }> | null,
+    catalog.models.map((m) => ({
+      providerId: m.provider as string,
+      modelId: m.modelId,
+      available: m.availability !== 'unavailable',
+    }))
+  );
+  const effectiveOverrides = reconcile.kept as typeof preference.stage_overrides;
+
   // Build stage assignments based on user's preference.
   const selectionMode = preference.selection_mode || 'auto';
 
@@ -60,8 +74,8 @@ export async function GET() {
   // user configured.
   const strategyMode = resolveStrategyMode(selectionMode, preference);
 
-  // Build stage assignments - filter out undefined/null overrides
-  const stageAssignments = buildStageAssignments(strategyMode, availableProviders, preference.stage_overrides as any);
+  // Build stage assignments - reconciled overrides only (stale entries dropped).
+  const stageAssignments = buildStageAssignments(strategyMode, availableProviders, effectiveOverrides as any);
 
   // Transform stage assignments to strategy page format
   const stages = AI_STAGES.map((task) => {
@@ -124,6 +138,8 @@ export async function GET() {
     selectedStrategy,
     strategies,
     stages,
+    stageOverridesReconciled: reconcile.changed,
+    droppedStageOverrides: reconcile.droppedStages,
     catalog: {
       providerFingerprint: catalog.providerFingerprint,
       models: catalog.models.map((m) => ({

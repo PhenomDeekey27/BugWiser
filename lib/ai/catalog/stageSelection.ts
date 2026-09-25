@@ -1,5 +1,9 @@
 // Per-stage model selection for the /models page setups (Free / Balanced / Quality).
 //
+// Free is STRICT: only confirmed-free models (price.isFree — explicit zero
+// cost) are eligible; when none survives a stage's automatic pool the pick is
+// an explicit `unavailable` state, never a paid fallback.
+//
 // Selection runs entirely on the user's ACTUAL catalog (models from connected
 // providers, already scored by the existing model-intelligence system). No
 // model names or providers are hardcoded — only stage-to-capability PREFERENCES.
@@ -58,12 +62,18 @@ export const MAX_CANDIDATES_PER_PROVIDER = 5;
 
 export interface StagePick {
   stageId: StageKey;
-  provider: string;
-  model: string;
+  /** Null only when `unavailable` — no model was chosen for this stage. */
+  provider: string | null;
+  /** Null only when `unavailable` — no model was chosen for this stage. */
+  model: string | null;
   /** True when the chosen model has confirmed zero cost (price.isFree). */
   isFree: boolean;
-  /** True when the pick fell back to a paid model because no free one was suitable. */
-  isPaidFallback: boolean;
+  /**
+   * Free setup only: no confirmed-free model survived the stage's automatic
+   * pool (family grouping → context gate → provider cap). The stage is
+   * explicitly unavailable — Free NEVER falls back to a paid model.
+   */
+  unavailable?: boolean;
 }
 
 function stageScore(model: CatalogModel, weights: { coding: number; reasoning: number; speed: number; longContext: number }): number {
@@ -363,7 +373,15 @@ export function selectForStage(
   // provider top-N). `availableModels` (the full connected catalog) is NOT
   // mutated — manual selection keeps seeing everything.
   const autoPool = buildAutomaticPool(availableModels, stageId, w);
-  if (autoPool.length === 0) return null;
+  if (autoPool.length === 0) {
+    // Free: the catalog exists but nothing survived this stage's gates, so no
+    // free model can serve it — explicit unavailable state (never a paid pick,
+    // never silently "No config"). Balanced/Quality keep the null semantics.
+    if (setup === 'free') {
+      return { stageId, provider: null, model: null, isFree: false, unavailable: true };
+    }
+    return null;
+  }
 
   // Score-ordered pool (stable tiebreak on valueScore, then name, for determinism).
   const pool = [...autoPool].sort((a, b) => {
@@ -375,52 +393,24 @@ export function selectForStage(
   });
 
   let chosen: CatalogModel | null = null;
-  let isPaidFallback = false;
 
   if (setup === 'free') {
-    // Free selection: consider FREE models first. A model is free ONLY when its
-    // pricing data explicitly indicates zero cost (price.isFree). Unknown/null
-    // pricing is NEVER treated as free (requirement: free ⇔ explicitly zero
-    // cost). Among suitable free candidates, choose the highest-scoring model
-    // using the existing stage scoring system — the `pool` is already sorted
-    // best-first by stage score, so the first free candidate is the best.
+    // STRICT FREE: a model is eligible ONLY when its pricing data explicitly
+    // indicates zero cost (price.isFree). Unknown/null pricing is NEVER
+    // treated as free (requirement: free ⇔ explicitly zero cost). Among
+    // suitable free candidates, choose the highest-scoring model using the
+    // existing stage scoring system — the `pool` is already sorted best-first
+    // by stage score, so the first free candidate is the best.
     // Deterministic tie-breakers are already established by the pool sort.
     // Price is NOT part of the Free ranking.
+    // No confirmed-free candidate → explicit unavailable state. Free NEVER
+    // falls back to a paid model (the paid-fallback branch was removed by the
+    // strict-Free task; see think/state.md).
     const freePool = pool.filter((m) => m.price.isFree);
-    if (freePool.length > 0) {
-      chosen = freePool[0];
-    } else {
-      // No suitable free model: paid fallback.
-      // Requirement: choose the best suitable paid candidate using the existing
-      // stage scoring — price must NOT be used in the Free ranking. The pool is
-      // already best-first by stage score, so scan it and take the best candidate
-      // that has defined pricing (a confirmed paid, non-null price).
-      let bestPaid: CatalogModel | null = null;
-      let bestPaidScore = Number.NEGATIVE_INFINITY;
-      for (const m of pool) {
-        const p = definedPrice(m);
-        if (!p) continue; // unknown/null pricing is not a confirmed paid candidate
-        const score = stageScore(m, w);
-        if (score > bestPaidScore) {
-          bestPaidScore = score;
-          bestPaid = m;
-        }
-      }
-      if (bestPaid) {
-        chosen = bestPaid;
-        isPaidFallback = true;
-      } else {
-        // No confirmed priced (paid) candidate: last resort — best candidate by
-        // stage score deterministically (still via existing scoring), marked as
-        // paid fallback since no zero-cost free model was suitable.
-        if (pool.length > 0) {
-          chosen = pool[0];
-        } else {
-          chosen = null;
-        }
-        isPaidFallback = true;
-      }
+    if (freePool.length === 0) {
+      return { stageId, provider: null, model: null, isFree: false, unavailable: true };
     }
+    chosen = freePool[0];
   } else {
     const idx = setup === 'balanced' ? pickBalanced(pool, w, stageId) : pickQuality(pool, w, stageId);
     chosen = pool[idx] || null;
@@ -432,6 +422,5 @@ export function selectForStage(
     provider: chosen.providerId,
     model: chosen.modelId,
     isFree: chosen.price.isFree,
-    isPaidFallback,
   };
 }

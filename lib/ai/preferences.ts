@@ -18,7 +18,7 @@ export interface ModelPreference {
   model: string | null;
   selection_mode: SelectionMode;
   selected_strategy: SelectedStrategy;
-  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
+  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
 }
 
 export interface ModelPreferenceSave {
@@ -26,7 +26,7 @@ export interface ModelPreferenceSave {
   selected_strategy?: SelectedStrategy;
   provider?: ProviderName | null;
   model?: string | null;
-  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
+  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
 }
 
 export async function getModelPreference(userId: string): Promise<ModelPreference> {
@@ -52,7 +52,7 @@ export async function getModelPreference(userId: string): Promise<ModelPreferenc
     model: data.model || null,
     selection_mode: (data.selection_mode === 'manual' ? 'manual' : 'auto'),
     selected_strategy: (data.selected_strategy as SelectedStrategy | undefined) || 'auto',
-    stage_overrides: data.stage_overrides as Record<string, { provider: ProviderName | null; model: string | null }> | undefined,
+    stage_overrides: data.stage_overrides as Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }> | undefined,
   };
 }
 

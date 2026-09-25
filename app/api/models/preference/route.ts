@@ -33,7 +33,7 @@ export async function PUT(request: Request) {
       provider?: ProviderName | null;
       model?: string | null;
       selected_strategy?: SelectedStrategy;
-      stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null }>;
+      stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
     };
     try {
       body = await request.json();

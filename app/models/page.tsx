@@ -38,7 +38,7 @@ const STAGES = [
 // stageTokenProfiles.ts) and ALL cost arithmetic from the shared helper in
 // lib/ai/catalog/cost.ts — do not add local cost formulas here.
 
-type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; };
+type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; /** Strict Free: no confirmed-free model available for this stage. */ unavailable?: boolean; };
 
 type LibraryFilter = 'all' | 'free' | 'paid' | 'coding' | 'reasoning' | 'long_context' | 'fast';
 
@@ -64,7 +64,7 @@ export interface CatalogProvider { providerId: string; displayName: string; auth
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
 
-export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality'; stage_overrides?: Record<string, { provider: string | null; model: string | null }>; }
+export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality'; stage_overrides?: Record<string, { provider: string | null; model: string | null; unavailable?: boolean }>; }
 
 export default function ModelsPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
@@ -104,7 +104,7 @@ export default function ModelsPage() {
     return { user: au, data };
   }, []);
 
-  const applyData = useCallback((payload: { user: { user_metadata?: Record<string, unknown> } | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; }; }) => {
+  const applyData = useCallback((payload: { user: { user_metadata?: Record<string, unknown> } | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; stageOverridesReconciled?: boolean; droppedStageOverrides?: string[]; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; }; }) => {
     const au = payload.user;
     const meta = au?.user_metadata ?? {};
     setUser({ login: (meta.user_name as string) || (meta.login as string) || 'user', name: (meta.full_name as string) || (meta.name as string) || null, avatarUrl: (meta.avatar_url as string) || '' });
@@ -114,19 +114,28 @@ export default function ModelsPage() {
     if (data.preference) {
       const pref = data.preference;
       setPreference(pref);
+      // The API already reconciled stage_overrides against the current
+      // connected catalog (stale entries dropped server-side), so the UI
+      // never renders phantom models from a previous catalog state.
       loadStageModels(pref.stage_overrides || {});
       setSetupChoice(toSetupChoice(pref.selected_strategy));
+      if (data.stageOverridesReconciled && (data.droppedStageOverrides?.length ?? 0) > 0) {
+        toast.info(
+          `${data.droppedStageOverrides!.length} stage model${data.droppedStageOverrides!.length === 1 ? '' : 's'} no longer available — re-select or re-apply a setup.`,
+          { description: `Stages affected: ${data.droppedStageOverrides!.join(', ')}` }
+        );
+      }
     } else {
       setStageModels({});
       setSetupChoice(null);
     }
   }, []);
 
-  const loadStageModels = useCallback((overrides: Record<string, { provider: string | null; model: string | null }>) => {
+  const loadStageModels = useCallback((overrides: Record<string, { provider: string | null; model: string | null; unavailable?: boolean }>) => {
     const loaded: Record<string, StageModel> = {};
     STAGES.forEach((stage) => {
       const override = overrides[stage.id];
-      loaded[stage.id] = { stageId: stage.id, label: stage.label, selectedProvider: override?.provider || null, selectedModel: override?.model || null, isOverride: !!override };
+      loaded[stage.id] = { stageId: stage.id, label: stage.label, selectedProvider: override?.provider || null, selectedModel: override?.model || null, isOverride: !!override, unavailable: override?.unavailable === true };
     });
     setStageModels(loaded);
   }, []);
@@ -171,15 +180,20 @@ export default function ModelsPage() {
           selectedProvider: pick?.provider || null,
           selectedModel: pick?.model || null,
           isOverride: true,
+          unavailable: pick?.unavailable === true,
         };
       });
       setStageModels(nextStageModels);
       setSetupChoice(setup);
 
-      const stageOverrides: Record<string, { provider: string | null; model: string | null }> = {};
+      const stageOverrides: Record<string, { provider: string | null; model: string | null; unavailable?: boolean }> = {};
       STAGES.forEach((stage) => {
         const sm = nextStageModels[stage.id];
-        if (sm.selectedProvider && sm.selectedModel) {
+        if (sm.unavailable) {
+          // Strict Free: persist the explicit unavailable marker (null/null +
+          // flag) so reload shows "No free model available" — never a paid pick.
+          stageOverrides[stage.id] = { provider: null, model: null, unavailable: true };
+        } else if (sm.selectedProvider && sm.selectedModel) {
           stageOverrides[stage.id] = { provider: sm.selectedProvider, model: sm.selectedModel };
         }
       });
@@ -191,7 +205,15 @@ export default function ModelsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to save setup');
       applySavedPreference(data.preference as Preference);
-      toast.success('Setup applied to all five stages.');
+      const unavailableLabels = STAGES.filter((s) => nextStageModels[s.id].unavailable).map((s) => s.label);
+      if (unavailableLabels.length > 0) {
+        toast.warning(
+          `Setup applied — no free model available for ${unavailableLabels.length} of ${STAGES.length} stages.`,
+          { description: `Stages affected: ${unavailableLabels.join(', ')}` }
+        );
+      } else {
+        toast.success('Setup applied to all five stages.');
+      }
     } catch (e) {
       toast.error((e as Error).message || 'Failed to apply setup');
     } finally {
@@ -202,10 +224,12 @@ export default function ModelsPage() {
   const handleSavePreference = async () => {
     setSaving(true);
     try {
-      const stageOverrides: Record<string, { provider: string | null; model: string | null }> = {};
+      const stageOverrides: Record<string, { provider: string | null; model: string | null; unavailable?: boolean }> = {};
       STAGES.forEach((stage) => {
         const sm = stageModels[stage.id];
-        if (sm.selectedProvider && sm.selectedModel) {
+        if (sm.unavailable) {
+          stageOverrides[stage.id] = { provider: null, model: null, unavailable: true };
+        } else if (sm.selectedProvider && sm.selectedModel) {
           stageOverrides[stage.id] = { provider: sm.selectedProvider, model: sm.selectedModel };
         }
       });
@@ -325,7 +349,9 @@ export default function ModelsPage() {
     const stage = STAGES.find((s) => s.id === stageId);
     if (stage) {
       const newStageModels = { ...stageModels };
-      newStageModels[stageId] = { stageId: stage.id, label: stage.label, selectedProvider: provider || null, selectedModel: model || null, isOverride: isOverride };
+      // Manual configuration always resolves an unavailable stage — the user
+      // picked a concrete model, so the strict-Free marker is cleared.
+      newStageModels[stageId] = { stageId: stage.id, label: stage.label, selectedProvider: provider || null, selectedModel: model || null, isOverride: isOverride, unavailable: false };
       setStageModels(newStageModels);
       setSelectedStageProvider(provider || '');
       setSelectedStageModel(model || '');
@@ -394,11 +420,14 @@ export default function ModelsPage() {
                       const bestModel = configuredModel || getBestModelForStage(sm);
                       const stageCost = getStageCostEstimate(configuredModel, stage.id);
                       const capability = configuredModel ? getStageCapability(configuredModel) : 'unknown';
-                      const modelSubline = configuredModel
-                        ? `${stageCost} / analysis · ${capability}`
-                        : 'Not configured';
+                      const modelSubline = sm?.unavailable
+                        ? 'Connect a provider offering a free model for this stage, or configure it manually.'
+                        : configuredModel
+                          ? `${stageCost} / analysis · ${capability}`
+                          : 'Not configured';
 
                       const getModelDisplay = () => {
+                        if (sm.unavailable) return 'No free model available';
                         if (configuredModel) return configuredModel.displayName;
                         if (sm.selectedModel && sm.selectedProvider) {
                           const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
@@ -408,6 +437,7 @@ export default function ModelsPage() {
                       };
 
                       const getProviderDisplay = () => {
+                        if (sm.unavailable) return '—';
                         if (sm.selectedProvider) {
                           const provider = providers.find((p) => p.providerId === sm.selectedProvider);
                           return provider ? provider.displayName : sm.selectedProvider;
@@ -416,6 +446,11 @@ export default function ModelsPage() {
                       };
 
                       const getStatusDisplay = () => {
+                        if (sm?.unavailable) return {
+                          text: 'No free model',
+                          variant: 'outline',
+                          className: 'text-xs text-amber-500 bg-amber-500/10 border-amber-500',
+                        };
                         if (!sm || (!sm.selectedProvider && !sm.selectedModel)) return {
                           text: 'No config',
                           variant: 'outline',
@@ -441,7 +476,7 @@ export default function ModelsPage() {
                             <div className="col-span-4 flex items-center gap-3">
                               <stage.icon className="h-4 w-4 text-bw-peach/80" aria-hidden="true" />
                               <span className="text-sm font-medium text-bw-peach-light">{stage.label}</span>
-                              {sm.isOverride && (
+                              {sm.isOverride && !sm.unavailable && (
                                 <Badge variant="outline" className="text-xs text-blue-500 border-blue-500">
                                   Custom Override
                                 </Badge>

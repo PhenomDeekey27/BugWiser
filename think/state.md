@@ -283,3 +283,690 @@ Goal: finalize deterministic automatic model selection. No runtime escalation, n
 ## Next task
 
 None scheduled. TASK 3 completed. Runtime quality escalation remains explicitly future work.
+
+---
+
+## INVESTIGATION — Why Free/Balanced/Quality picked Nemotron + Qwen (OpenRouter-only, Sept 25, 2026)
+
+**Status:** ✅ INVESTIGATION COMPLETE, NO SELECTION LOGIC CHANGED.
+
+Question: with only OpenRouter connected, Free/Quality pick Nemotron 3 Super (discovery)
++ Nemotron 3 Ultra (other 4 stages), while Balanced picks Qwen3.5-122B-A10B (~$0.0052)
+for discovery and Ultra elsewhere — all rows labelled "Custom Override". Verdict: the
+selections are CORRECT outputs of the current algorithm on live data; the label does NOT
+signal failure (see 7). Runtime evidence below from `scripts/debug-selection.ts` (live DB
++ live OpenRouter fetch, force rebuild) plus a throwaway ranking probe (deleted after use).
+
+### 1. Live candidate counts (measured, not estimated)
+- `getProviderConnections` DB truth: only `openrouter: true`; all others false.
+- Force rebuild: static 0 + live 455 → catalog 455, all `openrouter`, `classifiedByAi=false`
+  (catalog > 80 models → AI classify skipped by design, deterministic metadata scoring).
+  A second load minutes later served 457 rows — OpenRouter live catalog volatility (±2),
+  not a bug. Free models: 21. Distinct score tuples: 106 (was ~3-4 pre-fix).
+- Automatic pool (family grouping → ctx gate → provider cap 5, single provider):
+  457 avail → 425 families (32 near-duplicates dropped) → ctx pass per stage:
+  discovery 410, root-cause 386, evidence 308, solution 410, patch 410 → capped to 5/stage.
+- Capped top-5 (by stageScore) per stage:
+  - discovery: qwen3.5-122b-a10b 88.75, qwen3.5-9b 85.88, nemotron-3-super:free 85.00, qwen3.5-397b 85.00, nemotron-3-nano-omni:free 82.13
+  - root-cause: ultra:free 89.50, qwen3.5-122b 86.38, super:free 85.13, qwen3.5-397b 85.13, lightning:free 83.75
+  - evidence: qwen3.5-122b 84.60, ultra:free 83.30, qwen3.5-9b 82.00, super:free 81.60, qwen3.5-397b 81.60
+  - solution/patch: ultra:free 90.75, qwen3.5-122b 88.13, super:free 86.88, qwen3.5-397b 86.88, lightning:free 85.38
+- Family check: `modelFamilyKey(super:free) == modelFamilyKey(super paid)` → true, so the
+  paid Super variant is correctly absorbed (free rep wins on cost); it never contests picks.
+
+### 2. Winner catalog records (live `priceSource='live'` throughout)
+- `nvidia/nemotron-3-super-120b-a12b:free`: ctx 262144, in/out $0/$0, isFree true,
+  scores c/r/s/lc = 100/86/73/75, caps [coding,reasoning,tool_calling,structured_output].
+- `nvidia/nemotron-3-ultra-550b-a55b:free`: ctx 1000000, $0/$0, isFree true,
+  scores 100/90/56/95, caps [coding,reasoning,tool_calling] (no structured_output flag).
+- `qwen/qwen3.5-122b-a10b` (paid): ctx 262144, in $0.26/M out $2.08/M, isFree false,
+  scores 100/86/83/75, caps [coding,reasoning,vision,tool_calling,structured_output].
+
+### 3. Why Free picks Super once + Ultra ×4
+Free = best stageScore among `isFree` in the capped pool. Discovery free ranking:
+Super 85.00 > nano-omni 82.13 = qwen3.8-free 82.13 > Ultra 81.63 > lightning 74.25.
+Super beats Ultra on discovery because weights {3,1,3,1} punish Ultra's speed 56
+(550B MoE, 55B active → base 62 − 6 ctx penalty) vs Super's 73 (12B active → 74 − 1),
+while Ultra's reasoning/longContext edge (90/95 vs 86/75) gets weight 1 each:
+85.00 vs 81.63. All other stages weight reasoning/longContext ≥ discovery's, where
+Ultra's 100/90/56/95 dominates (89.50/83.30/90.75/90.75 — top of free pool each time).
+Genuine score win, not a tie-break: nearest free rival trails by 2.9–4.4 pts.
+
+### 4. Why Balanced differs ONLY on discovery
+Balanced = stageScore − log10(1+cost·100)·12 (free → penalty 0). Discovery:
+Qwen122b 88.75 − 2.18 ($0.0052 = 0.26·12000+2.08·1000 /1M) = 86.57 > Super-free 85.00
+> qwen3.5-9b 85.22 > others. The +3.75 quality lead exceeds the 2.18 cost penalty —
+  justified by the formula. Every other stage the best paid model is ALSO worse on
+  quality than free Ultra (root-cause: Qwen 86.38−3.72=82.66 vs 89.50; evidence:
+  84.60−6.52=78.08 vs 83.30; solution: 88.13−3.72=84.41 vs 90.75; patch:
+  88.13−5.46=83.67 vs 90.75), so free Ultra wins outright. Runner-up qwen3.5-9b on
+  discovery (85.22, $0.0014) shows the trade-off is continuous, not hard-coded.
+
+### 5. Why Quality == Free here (correct, not a bug)
+Quality = cheapest stage cost among candidates within 5 pts of best stageScore.
+Discovery best = Qwen 88.75, threshold 83.75 → qualified {Qwen122b $0.0052, qwen9b
+$0.0014, super-paid $0.0014, super-free $0, qwen397b $0.0101} → cheapest = super-free $0.
+Other stages: best = Ultra-free itself (89.50/83.30/90.75/90.75) → Ultra qualifies at $0
+and nothing beats free. No paid model is >5 pts stronger than the free winner on ANY
+stage (largest paid lead observed: +3.75 discovery Qwen over Super — inside tolerance),
+so free winning all five Quality stages is the SPEC-CORRECT outcome.
+
+### 6. Capability metadata provenance (current, post-fix)
+`codingFamilySignal` (ID family tokens: nemotron/qwen3.5/etc.) + OpenRouter
+`supported_parameters` (tools/tool_choice, reasoning/include_reasoning, response_format)
++ `architecture` input/output modalities → observed flags → deterministicRank
+(contextToScore piecewise, active-param speed w/ ctx penalty, size refinements, registry
+blend when a static entry exists — none exists for openrouter IDs, so pure live evidence).
+106 distinct tuples; no constant-fill (aiClassify skipped >80 models, `applied:false`).
+
+### 7. Persistence + "Custom Override" (traced, not assumed)
+- `handleSetupSelect` runs live `selectStageModels` → sets ALL five rows `isOverride:true`
+  → PUTs `{selection_mode:'auto', selected_strategy, stage_overrides}` → `saveModelPreference`.
+  Live preference row confirms: `selected_strategy:'quality'` + 5 overrides = exactly the
+  Quality picks. Reload path (`applyData` → `loadStageModels`) sets `isOverride = !!override`.
+- "Custom Override" badge + "Custom" status render IFF `sm.isOverride` (page.tsx ~427-457) —
+  i.e. ANY persisted `stage_overrides` entry, INCLUDING automatic-setup picks. It does NOT
+  mean manual-only and does NOT mean the algorithm failed. Manual modal reuses the same flag
+  via its own checkbox. Reconciliation (`overrideReconcile`, wired into both GET routes with
+  self-healing persist) keeps overrides pointing at live catalog models; current overrides
+  all resolve — no phantom/stale entries.
+- UI values after each setup apply ARE fresh algorithm selections; after reload they are the
+  persisted overrides (by design — same values, since overrides store the picks).
+
+### 8. Task mapping verified independent
+`selectStageModels` iterates `STAGE_WEIGHTS` entries passing per-stage weights
+(discovery {3,1,3,1}, root-cause {2,3,1,2}, evidence {2,2,3,3}, solution/patch {3,2,1,2})
+with per-stage `STAGE_CONTEXT_MIN` gates (32K/128K/200K/32K/32K) and shared cost profiles.
+Page `STAGES` ids match `StageKey`s 1:1. Winners differ by stage (Super vs Ultra; Balanced
+discovery diverges) — independent selection confirmed.
+
+### 9. Root cause(s) — nothing to fix in selection
+No defect found: Free/Balanced/Quality formulas, weights, gates, grouping, caps all behave
+as specified on truthful metadata. The ONLY stale artifact is this file's old "Next task:
+None scheduled" line predating the OpenRouter-only working-tree changes (observed flags,
+modelSignals, scoring refinements, debug endpoint/scripts, overrideReconcile) — that prior
+task's code is DONE in the working tree; its verification is what this entry completes.
+
+### 10. Recommended next fix (NOT implemented)
+Do NOT touch selection formulas. If Balanced-always-≈-Free feels wrong, the lever is
+metadata depth (e.g. per-model reasoning/tool evidence is still boolean-coarse) or tuning
+documented constants (BALANCED_COST_SCALE/MULTIPLIER, QUALITY tolerance 5) against real
+catalogs — a product decision with before/after diagnostic tables, plus committing the
+untracked debug/diagnostic files or removing them (`app/api/debug/`, `lib/ai/catalog/
+debugSelection.ts`, `modelSignals.ts` is IMPORTED — keep; `scripts/` probes).
+
+---
+
+## AUDIT — Multi-provider participation: opencode connected, selections unchanged (Sept 25, 2026)
+
+**Status:** ✅ AUDIT COMPLETE, NO PRODUCTION LOGIC CHANGED (temp probe deleted; `tsc` clean).
+
+Question: second provider (opencode, DB row `connected` 10:48:23 UTC) added, yet all
+Free/Balanced/Quality picks identical to OpenRouter-only. Verdict: CORRECT behavior —
+opencode fully participates end-to-end and loses on the merits everywhere (15/15
+multi-vs-OR-only cells SAME by fresh calculation, not by reading overrides).
+
+### 1. Providers tested / connection state (DB truth)
+- `provider_connections`: openrouter connected (09:22 UTC) + opencode connected (10:48 UTC),
+  same user; all others disconnected. `getProviderConnections` → `{openrouter:true,
+  opencode:true}` (DB-only by design; env keys don't connect).
+- Resolvable keys: gemini (env), openrouter + opencode (DB-decrypted). Raw
+  `fetchLiveModels`: openrouter 455 (21 free), gemini 36, opencode 80 — but
+  `discoverModels` filters by connectedIds, so gemini's 36 are correctly EXCLUDED
+  (disconnected-provider exclusion verified working).
+- Serving catalog rebuilt at connect time (fingerprint `opencode:openrouter`,
+  analyzedAt 10:48:24 UTC): 535 models = 455 openrouter + 80 opencode, `classifiedByAi=false`.
+  Available ∩ connected: openrouter 455, opencode 80. Opencode free models: **0**.
+
+### 2. Per-provider pipeline counts
+- Normalization → discoverModels → available: openrouter 455, opencode 80 (no loss).
+- Family grouping: 535 → 502 reps (33 dupes dropped); per-provider reps: openrouter 423, opencode 79.
+- Context gates (reps passing): discovery 487 {OR 408, OC 79}; root-cause 463 {384, 79};
+  evidence 308 {OR 308, OC **0**}; solution 487 {408, 79}; patch 487 {408, 79}.
+- Provider cap (top-5/provider by stageScore): 10 candidates (5+5) in 4 stages; evidence 5 (OR only).
+
+### 3. Opencode top models (discovery stageScore; all ctx=128000, prices null, isFree=false)
+1. `mimo-v2.5-free` "Mimo v2.5 (free)" 93/82/50/65 ss 72.00 src=registry, cost unknown
+2. `nemotron-3-ultra-free` 87/82/50/73 ss 70.75 src=registry, unknown
+3. `big-pickle` 87/76/50/65 ss 69.00 src=registry, unknown
+4. `nemotron-3.5-lightning-free` 80/38/50/57 ss 60.63 src=registry, unknown
+5-10. `gpt-5.3-codex-spark`, `gpt-5.4/mini/nano/pro`, `gpt-5.5` … all 45/29/50/55 ss 46.13 src=unknown.
+Best opencode (72.00) trails openrouter's 5th-place cap survivor (82.13) by ~10 pts on
+discovery; gaps are similar-or-larger on all other stages (e.g. root-cause OC best 77.00
+vs OR 5th 83.75; solution OC best 77.88 vs OR 5th 85.38).
+
+### 4. Before-cap vs after-cap (per stage)
+Before-cap top-8 are ALL openrouter on every stage (8th-place OR ≈ 77-82 vs OC best 70-78).
+After-cap pools (10, or 5 for evidence): OR top-5 unchanged from OR-only audit; OC slots
+6-10 (discovery: mimo 72.00, ultra-free 70.75, big-pickle 69.00, lightning 60.63,
+claude-fable-5 46.13). Cap keeps 5/provider — it HELPS opencode (5 survive) and changes
+nothing about the winners, who also lead pre-cap.
+
+### 5. Picks: multi vs OR-only (fresh `selectForStage`, all 5 stages × free/balanced/quality)
+All 15 SAME: discovery free Super-free 85.00 / balanced Qwen122b 86.57 ($0.0052) / quality
+Super-free; root-cause/evidence/solution/patch Ultra-free (89.50/83.30/90.75/90.75) in all
+three modes. Persisted overrides (quality picks, all OR, all still valid) agree with fresh
+calculation — overrides are not masking anything.
+
+### 6. Answers A–H
+A. YES, opencode participates (80 live → 79 reps → gated → 5 capped survivors in 4/5 stages).
+B. It loses on merits: ~10+ pt stageScore gaps + $0-cost rivals + unknown pricing.
+C. Nowhere structural — its only hard filter-out is evidence ctx gate (128000 < 200000: all 79 reps).
+D. NO — per-provider cap preserves opencode's 5; winners lead pre-cap too.
+E. NO — family grouping drops 1 opencode dupe (80→79).
+F. YES — all opencode prices null/unknown (src registry/unknown); consequence: ineligible for
+   Free, −Inf balanced penalty, worst-tier Quality cost. Striking: IDs literally named
+   `(free)` (`mimo-v2.5-free`, `nemotron-3-ultra-free`) carry NULL pricing → treated as paid.
+G. PARTLY — capability scores exist (registry-backed for top 4, defaults 45/29/50/55 for the
+   rest) but are materially lower: speed 50 (no size signal in IDs), longContext 55-73
+   (flat 128K ctx), coding 45-93 vs OR's 95-100.
+H. NO — fresh calculation matches persisted overrides exactly.
+
+### 7. Recommended next task (NOT implemented)
+Investigate opencode pricing payload: its `/models` response seemingly carries no usable
+price fields (all null → unknown), and "(free)"-named models are unwinnable in every mode
+(Free excludes them, Balanced −Inf, Quality worst-tier). If upstream exposes pricing
+(per-endpoint fields or headers), map it in `fetchOpenCode` like OpenRouter; until then,
+opencode can only ever win a stage if its stageScore beats OR's best by >tolerance AND the
+mode tolerates unknown cost (never in Balanced). Also note: evidence's 200K gate structurally
+locks out the entire opencode catalog (max 128K) — expected per current weights/gates, flag
+only if product wants opencode viable for evidence. Do NOT touch selection formulas for any
+of this.
+
+---
+
+## AUDIT — Provider metadata normalization (all 7 providers, live raw responses, Sept 25, 2026)
+
+**Status:** ✅ AUDIT COMPLETE, NO PRODUCTION CODE CHANGED (3 throwaway capture scripts deleted; `tsc` clean).
+**Scope lock:** no selection/scoring/weight/gate/cap changes. All provider rows `connected` at
+audit time, so raw `/models` (or equivalent) captured LIVE for all 7 — no doc-based assumptions.
+Live counts: openrouter 460, opencode 81, chutes 14, openai 126, gemini 50, deepseek 2, zai 11.
+
+### 1. What each fetcher currently reads (live.ts) vs what the API actually returns
+- **OpenRouter** (`fetchOpenRouter`): reads id/name/context_length/architecture/pricing.prompt|completion
+  (per-token → ×1e6 ✓)/top_provider.max_completion_tokens/supported_parameters/reasoning-object/arch
+  modalities. CORRECT and complete for selection; unused extras: `reasoning.{mandatory,default_enabled,
+  supported_efforts}`, `per_request_limits`, `benchmarks.artificial_analysis`, `hugging_face_id`,
+  `canonical_slug`, `created/knowledge_cutoff/expiration_date`. Zero = string "0" both sides
+  (24 models; 0 numeric-zero; 0 null-priced; 0 negative — the −1 pseudo-models are gone).
+- **OpenCode** (`fetchOpenCode`): reads id/name/context_length|context_window/max_output_tokens/pricing.prompt|completion.
+  REALITY: entries carry ONLY `{id, object, created, owned_by}` — every read except id/name misses, so
+  all 81 models get ctx 128000 default, null prices, default caps. 9 IDs match /free/i.
+- **Chutes** (`fetchChutes`): reads `pricing.input`, `price.input.value`, `context_length`,
+  `max_output_tokens`, observed=null. REALITY: `{pricing:{prompt,completion,input_cache_read},
+  price:{input:{tao,usd},output:{tao,usd},input_cache_read}, context_length, max_model_len,
+  max_output_length, input_modalities, output_modalities, supported_features:[json_mode,tools,
+  structured_outputs,reasoning], quantization, chute_id, owned_by, ...}` — EVERY field the code reads
+  is misnamed (pricing.prompt not .input; price.*.usd not .value; max_output_length not
+  max_output_tokens). Units are USD per 1M native (0.12/0.37 scale matches registry) — the no-convert
+  assumption is right, the field names are wrong → all chutes prices null. Capabilities/modalities ignored.
+- **OpenAI** (`fetchOpenAI`): filters `owned_by==='openai'` + id regex, reads static-only for the rest.
+  REALITY: 121/126 rows have `owned_by:'system'` (4 internal, 1 openai) → code filter passes **1/126**.
+  Fields are `{id,object,created,owned_by,shutdown_date}` — no pricing/ctx/caps (static fallback correct in
+  principle, but STATIC has zero openai rows → all defaults). `shutdown_date` (e.g. o1-2024-12-17 →
+  2026-10-23) ignored; availability always 'available'.
+- **Gemini** (`fetchGemini`): filters generateContent + family regex; reads inputTokenLimit (+static fallback).
+  REALITY: `{name,version,displayName,description,inputTokenLimit,outputTokenLimit,
+  supportedGenerationMethods,temperature,topP,topK,maxTemperature,thinking?}` — no pricing (static/unknown
+  handling correct), no modality fields. `outputTokenLimit` IGNORED (stored null→8192 default; e.g. gemma
+  32768 lost). `thinking:true` IGNORED (reasoning from static/default). Filter audit 50 models: 14 dropped
+  (tts×5, lyria×3, embedding×3, aqa, veo×2 — both guards fire correctly, incl. end-of-string `-tts`),
+  36 pass — but passers include `*-image` (6: 2.5-flash-image, 3-pro-image×2, nano-banana, 3.1-flash-image×2,
+  3.1-flash-lite-image), `gemini-3.5-transcribe`, `computer-use`, `robotics-er`, `deep-research`×3,
+  `omni`×2, `antigravity`×3: modality leakage via names the regex doesn't cover, undetectable otherwise
+  (no modality fields in list API).
+- **DeepSeek** (`fetchDeepSeek`): static-only for everything. REALITY (2 models): `{id,name,context_window
+  (1048576!),max_output_tokens (393216!),input_modalities,output_modalities,effort:{supported_levels},
+  api_capabilities}` — live IDs are `deepseek-flash` + `deepseek-v4-pro`; static `deepseek-v4-flash` is DEAD
+  (no match) and static `deepseek-v4-pro` ctx 131072 contradicts live 1048576 → `deepseek-flash` gets 128000
+  default (wrong; evidence-gate-relevant), displayName=id (live `name` ignored), effort/modalities ignored.
+- **ZAI** (`fetchZAI`): static-only. REALITY (11 models): `{id,object,created,owned_by}` only — no pricing/ctx/caps
+  anywhere; static `glm-4.7-flash` DEAD (live IDs `glm-4.5…4.7` plain). Live `glm-4.7` → defaults + coding=false,
+  while the same GLM family on OR gets coding=true via family signal (cross-provider inconsistency).
+
+### 2. Mapping tables (raw → normalized, confidence)
+Pricing (all → USD per 1M): OR `pricing.prompt|completion` string-per-token ×1e6 HIGH; chutes
+`pricing.prompt|completion` number-per-1M as-is (FIX fields) HIGH + `price.*.usd` fallback HIGH +
+`input_cache_read` special (no normalized slot — ignore initially) MEDIUM; opencode NONE→static-if-matched
+else unknown (FIX: fill static 0/0/free for the 4 matched, src registry) MEDIUM; openai/gemini/zai NONE→
+static-if-matched else unknown HIGH-as-unknown; deepseek NONE→static-if-matched (FIX IDs) else unknown.
+Zero: OR explicit "0"+"0" HIGH; chutes presumably numeric 0 (none observed — no zero models in 14) MEDIUM;
+opencode free NOT name-inferable — authority is static registry only. Missing: OR none observed; chutes
+n/a (fields misread); OC/ZAI/OpenAI/Gemini/DeepSeek = absent fields → unknown (never free) HIGH.
+Context: OR `context_length` = window HIGH + `top_provider.max_completion_tokens` HIGH; chutes
+`context_length` (=deploy ctx, ≤ `max_model_len` arch max — keep former, document) MEDIUM-HIGH +
+`max_output_length` (FIX name) HIGH; gemini `inputTokenLimit` = max-input≈window MEDIUM + `outputTokenLimit`
+(FIX: use) HIGH; deepseek `context_window` (FIX: use) + `max_output_tokens` (FIX: use) HIGH; openai NONE→
+default 128000 LOW + `shutdown_date`→availability (FIX) MEDIUM; opencode/zai NONE→static-if-matched else
+128000 default LOW (all-128000 uniformity is a smell — flag in UI provenance).
+Capabilities (OBSERVED vs DERIVED): OR tools/reasoning/structured OBSERVED (params), vision OBSERVED
+(modalities), coding DERIVED (family signal); chutes tools/reasoning/structured OBSERVED
+(`supported_features`, FIX) + vision OBSERVED (modalities, FIX), coding DERIVED; deepseek reasoning
+OBSERVED (`effort.supported_levels`, FIX) + vision OBSERVED (modalities, FIX) + displayName←`name` (FIX);
+gemini reasoning OBSERVED (`thinking`, FIX), vision/tools/structured UNKNOWN-marked (no fields; tools/struct
+currently default-true = fabricated confidence); OC/ZAI/OpenAI: no evidence → all UNKNOWN-marked (today:
+coding/reasoning=false, tools/struct=true defaults — same fabrication flag); static-matched rows keep
+curated caps with registry confidence.
+
+### 3. Normalized schema proposal (next task implements; observed/derived/unknown per field)
+`{provider, modelId, displayName, contextLength(+provenance: window|input-max|default),
+inputPricePerMillion, outputPricePerMillion, priceSource: live|registry|unknown, priceFetchedAt, isFree
+(+freeAuthority: explicit-zero|registry-confirmed|none), modalities: observed|unknown, supportsCoding
+(observed:chutes-features/reasoning-effort? no — coding stays DERIVED family signal, applied UNIFORMLY
+post-normalization to fix B13), supportsReasoning, supportsVision, supportsTools, supportsStructuredOutput
+(each: observed|curated|unknown, never silent-true-default), speedSignals {activeParams, ctxPenalty},
+familySignals, source, metadataConfidence: high|medium|low}`. Static registry role narrowed to
+display/pricing/caps fallback with refreshed IDs (deepseek-v4-flash→deepseek-flash w/ 1M ctx; glm-4.7-flash→glm-4.7).
+
+### 4. Bugs/gaps (15; selection logic untouched by all)
+B1 opencode free-overwrite: live null-pricing stomps static explicit-free (4 models) → isFree=false +
+null prices + priceSource 'registry' (triple inconsistency). B2 chutes price fields misnamed → all null.
+B3 chutes output field misnamed → null. B4 chutes ignores supported_features/modalities. B5 deepseek ignores
+live context_window/max_output_tokens/name/modalities/effort. B6 deepseek static ID dead + v4-pro ctx wrong
+(131072 vs 1048576). B7 zai static ID dead. B8 openai owned_by filter stale → 1/126 pass. B9 openai
+shutdown_date ignored. B10 gemini outputTokenLimit ignored. B11 gemini `thinking` ignored. B12 gemini
+modality leakage (image/transcribe/computer-use/robotics/deep-research/omni/antigravity pass; no list-API
+modality fields — name-heuristic extension only). B13 coding family signal OR-route-only (same family differs
+by route). B14 silent-true defaults (tools/struct) + 'registry' stamped on null prices (B1/B2 fallout).
+B15 OR extras unused (reasoning.efforts, per_request_limits, benchmarks — recommend NOT wiring benchmarks:
+third-party, unstable; hugging_face_id usable for size signals later, low priority).
+
+### 5. Implementation plan (NEXT task, audit must be reviewed first)
+Single `normalizeProviderModel()` per provider returning the schema above; fix order: B8 (one-line filter:
+`owned_by==='openai'` + keep id regex) → B2/B3/B4 chutes → B5/B6 deepseek → B1 opencode static-fill
+→ B10/B11 gemini + B12 token extension → B7 zai IDs → B9 availability via shutdown_date → B13 uniform family
+signals → B14 confidence marking (schema-visible, no silent defaults). Verify with a kept
+`scripts/probe-raw-capture.ts` (redacted) + catalog rebuild diff (per-provider counts, free counts, null-price
+counts) + re-run multi-provider audit tables. No selection/scoring/weight/gate/cap changes in that task either.
+
+---
+
+## IMPLEMENTATION — Provider metadata normalization (Sept 25, 2026)
+
+**Status:** ✅ IMPLEMENTED + VALIDATED. No selection/weight/gate/cap/scoring changes
+(`stageSelection.ts`, `cost.ts`, `stageTokenProfiles.ts` untouched — diff confirms).
+`npx tsc --noEmit` clean. All temp scripts deleted. Fresh force rebuild with all 7
+providers connected: 657 models, fingerprint all-7, `classifiedByAi=false`.
+
+### What changed (files)
+- **NEW `lib/ai/catalog/normalizers.ts`** — `normalizeProviderModel(provider, raw)` dispatch +
+  7 normalizers + shared unit helpers (moved from live.ts) + static exact-match fallback
+  (`applyStaticFallback`: live-wins, static-fills-absent-only, 'registry' never on null prices,
+  exact `provider:modelId` only) + provenance (`priceSource/contextSource/freeAuthority/
+  capabilityProvenance/metadataConfidence/modalities`).
+- **`lib/ai/catalog/live.ts`** — transport-only fetchers (envelope parsing + normalize + drop
+  nulls); deleted `LiveModelEntry`/`historyEntryToModel`/duplicated helpers. `fetchLiveModels`
+  signature unchanged → dead `model-catalog/builder.ts` untouched, intelligence merge intact.
+- **`lib/ai/catalog/types.ts`** — optional provenance fields on `ModelDefinition` (+`priceSource`).
+- **`lib/ai/model-intelligence/index.ts`** — provenance passthrough into `NormalizedModel`
+  (recomputed per build, NOT persisted — no schema change); priceSource now comes from the
+  normalizer instead of recompute. Static path labeled curated/medium.
+- Static registry rows: UNCHANGED (exact-match + live-wins makes dead IDs harmless; v4-pro's
+  wrong static ctx now loses to live 1M).
+
+### Per-provider behavior (measured on rebuild)
+- **OpenRouter** 455, all high-confidence, zero-pricing free intact (21), Qwen $0.26/$2.08 ✓.
+  Preserved exactly (same code path, moved).
+- **Chutes** 14/14 priced-live (was 0), ctx live (12) + max_output_length populated,
+  supported_features→observed caps (14 tools/reasoning/structured), vision observed where image
+  input; 2 ctx-default rows (field absent upstream — honest default).
+- **DeepSeek** 3 rows: flash + v4-pro live (1M ctx, 393216 maxOut, reasoning/vision observed),
+  plus static-only `deepseek-v4-flash` phantom (registry, pre-existing fallback semantics —
+  documented limitation, loses every ranking).
+- **OpenCode** 81: 4 static explicit-free now free (`registry-confirmed`/`registry`, B1 fixed);
+  other 77 unknown-price + all-false caps (no name inference, no silent-true defaults).
+- **OpenAI** 126 raw → 64 eligible (owned `system`+`openai` kept, `openai-internal` out;
+  13 past-`shutdown_date` excluded incl. sunset codex/chat-latest rows; 36 image/audio/realtime/
+  transcribe/tts functional names excluded — gate breakdown verified ID-by-ID). Rest unknown/low.
+- **Gemini** 50 → 28 (image×6 + banana + transcribe newly excluded; tts/lyria/embed/aqa/veo still
+  excluded). outputTokenLimit populated 28/28, `thinking`→reasoning-observed 25/28. Agent models
+  (computer-use/robotics/deep-research/omni/antigravity) deliberately KEPT (text I/O, no counter-evidence).
+- **ZAI** 12 (11 live defaults + 1 static phantom): 0 false static attaches (live glm rows pure
+  defaults 30/21/50/55); cross-provider coding note: zai glm coding=false (unknown) vs OR glm
+  coding=true (derived) — now VISIBLE via provenance instead of silently inconsistent.
+- Capability defaults are now all-false + 'unknown' (B14 fixed) except curated static matches.
+
+### Before/after (all "before" values previously measured live)
+OpenAI count 1→64; chutes priced 0→14, observed caps 0→14 (+vision where applicable), maxOut null→
+populated; deepseek live-ctx 0→2, reasoning-observed 0→2; opencode free 0→4 (77 correctly non-free);
+gemini eligible 36→28, outLimit known 0→28, thinking-observed 0→25; zai false matches 0→0 (kept honest);
+OR 455 high→455 high.
+
+### Regression + selection impact
+OR-only 15/15 picks IDENTICAL to prior audit (Super/Qwen/Super + Ultra×12) — PASS. Full
+7-provider picks also unchanged across all 15 (chutes Qwen-235B 86.75 qualifies in discovery
+quality but $0 free still wins; balanced OR-Qwen still leads). Score inputs shifted honestly
+(defaults-removed models score lower — e.g. zai/gemini-nonstatic/openai rows at 30/21/50/55-class
+tuples), which is the intended data-accuracy effect, not a formula change.
+
+### Remaining unknowns/limitations (not bugs)
+No live pricing for OC/ZAI/OpenAI/Gemini/DeepSeek (unknown, correctly); OC/ZAI/OpenAI ctx all
+128000-default; `input_cache_read` (chutes) has no normalized slot — ignored for now; OR
+`reasoning.efforts`/`per_request_limits`/`benchmarks` deliberately unwired; `openai-internal`
+owned rows excluded by policy; static phantoms (`deepseek-v4-flash`, `glm-4.7-flash`) remain as
+registry-only rows (exact-match-only, never overwrite live).
+
+### Next recommended task
+Wire `metadataConfidence`/provenance into the /models UI (badges/columns: price provenance,
+observed-vs-default capabilities) so users can SEE why providers win/lose; optionally backfill a
+`registry_scores`-style column if persistence of provenance is wanted (schema migration — not
+required). Do NOT tune selection until the UI exposes the new provenance.
+
+---
+
+## VALIDATION — Full 7-provider selection on corrected metadata (Sept 25, 2026)
+
+**Status:** ✅ VALIDATED. Zero production changes (temp probe deleted; `tsc` clean; diff untouched
+except this entry). Force rebuild via real `getOrBuildCatalog`: 657 models, all-7 fingerprint.
+
+### 1. Catalog + pools (657 avail; families 619; gates/caps per stage)
+- Per provider live/priced-live/free/ctxKnown: OR 455/455/21/455; chutes 14/14/0/12; OC 81/0/4/4;
+  deepseek 3/0/0/3; gemini 28/0/0/28; zai 12/0/0/1; openai 64/0/0/0.
+- Discovery/solution/patch: 657 → 619 fams → 604 gated → 33 capped (5/provider ×6 + deepseek 3).
+  Root-cause: 579 gated → 33 capped. Evidence (200K): 339 gated {OR 308, chutes 9, deepseek 2,
+  gemini 20} → 17 capped. OC/zai/openai structurally locked out of evidence (128K max).
+
+### 2. Winners: all 15 = OpenRouter (fresh calculation)
+Free: discovery Super-free 85.00, others Ultra-free (89.50/83.30/90.75/90.75). Balanced:
+discovery Qwen122b 88.75−2.18=86.57 ($0.0052), others Ultra-free (penalty 0). Quality:
+discovery Super-free (best 88.75, tol 5, 6 qualified, $0 cheapest), others Ultra-free
+(best itself, 9/7/9 qualified). Full top-10s + alternatives recorded in this run's output.
+
+### 3. Competition is real now (inputs transformed, outputs stable)
+Chutes Qwen-235B/397B rank #2-3 discovery (86.75), #2-3 root-cause (89.13), **#1-2 evidence
+(85.40 — beats winner 83.30 on raw score, loses quality on $0.0239 vs $0 within tolerance)**,
+#2-3 solution/patch (90.38 vs 90.75 — 0.37 gap + cost). Balanced penalties verified live
+(root-cause 89.13→85.63; evidence 85.40→79.04). OC's 4 registry-free now qualify for Free
+(mimo 72.00 discovery alt3; ultra-free 77.00 root-cause alt4). DeepSeek-v4-pro + gemini-2.5-pro
+(registry-priced, 86.50-87.75) populate caps honestly.
+
+### 4. Mode/Free/Balanced/Quality/Evidence checks
+Free pool = 25 authoritative only (21 OR explicit-zero live + 4 OC registry-confirmed); 6 OC
+`-free`-named correctly non-free; chutes 0 false-free; unknown never free. Balanced: unknown
+price → worst tier (no unknown model in any top-4); chutes priced participate with exact
+penalties. Evidence ≥200K: OR 328, gemini 21, chutes 9, deepseek 2 — four providers viable.
+
+### 5. Persistence + runtime
+Preference row is now `selected_strategy:'balanced'` (user-applied) with overrides = exactly the
+fresh Balanced picks (discovery Qwen + 4× Ultra), all `inCatalog=true`. Fresh-vs-persisted DIFF
+on discovery is quality-vs-balanced mode difference (Super-free vs Qwen) — i.e. proof the modes
+diverge meaningfully. Runtime trace re-verified unchanged: gateway → `resolveAnalysisRouting`
+(`lib/ai/routing.ts:51`) reads `stage_overrides[task]` → `runWithFallback` first candidate;
+openrouter credentials resolve, so all 5 overrides are live-runnable.
+
+### 6. Conclusions A–H
+A. No winner changed, but selection INPUTS transformed (chutes priced+ranked, OC free restored,
+   deepseek 1M ctx, gemini filtered+limits, openai 1→64 eligible). B/C/D. Free: Super + 4×Ultra
+   (all OR). Balanced: Qwen + 4×Ultra (all OR). Quality: Super + 4×Ultra (all OR). E. Yes where
+   data justifies: Free≠Balanced on discovery ($0 vs $0.0052); Quality≡Free here by the 5-pt rule.
+   F. Sameness is catalog-driven, not algorithm-driven: best paid leads (+3.75 discovery, +2.1
+   evidence-chutes, +0.37 solution-chutes) all fall inside tolerance/cost-penalty defeat; no free
+   model beats Nemotron scores. G. No material normalization issue left: static phantoms
+   (`deepseek-v4-flash`, `glm-4.7-flash`) rank ≤73.0/≤62.38, 10+ pts off every win; openai/zai
+   unknown-rows never reach top-4; cosmetic float dust (`0.09999999999999999` from ×1e6) noted for
+   a future polish pass. H. YES — engine ready for product/UI work: deterministic, provenance-
+   labeled, 7-provider verified, persistence/runtime consistent.
+
+### Next recommended task (unchanged, now unblocked)
+Surface provenance in /models UI (price source + observed/default capability badges). Optional
+follow-ups (no selection changes): remove/refresh the 2 static phantom rows; round per-token
+conversion dust; keep `input_cache_read` ignored until a cost slot exists. Do NOT tune selection.
+
+---
+
+## INVESTIGATION — Paid Chutes model displayed under Free after OpenRouter disconnect (Sept 25, 2026)
+
+**Status:** ✅ INVESTIGATION COMPLETE, NO PRODUCTION LOGIC CHANGED (temp `buildAutomaticPool` export
+reverted — `git diff` confirms `stageSelection.ts` untouched; temp probe `scripts/probe-free-pool.ts`
+deleted; `npx tsc --noEmit` **0 errors**).
+
+**Exact reproduction:** OpenRouter disconnected (its `provider_connections` row deleted; the other six
+providers connected) → click **Free** in BugWiser Model Setup → all five stage rows populate:
+File Discovery → Mimo v2.5 (free)/OpenCode, Root Cause → Nemotron 3 Ultra (free)/OpenCode,
+**Evidence → Qwen3 235B A22B Thinking 2507/Chutes (PAID)**, Solution/Patch → Mimo v2.5 (free).
+Reload shows the same ("Free selected" badge + paid Evidence row).
+
+**Verdict: F.** The Free selector's *designed* paid fallback fired because the free candidate pool for
+Evidence is genuinely EMPTY (all remaining free models are OpenCode @ 128K context, and Evidence's
+200K context gate excludes them before free filtering); the `StagePick.isPaidFallback`/`isFree=false`
+flags are then DROPPED at the persistence boundary (`stage_overrides` stores only `{provider, model}`),
+so the UI renders the fallback as an ordinary Free pick with no disclosure. It is NOT stale data (B),
+NOT a stage-id mismatch (C), NOT a strategy mapping bug (D), NOT wrong free metadata (E).
+
+### 1. Connection state (DB truth — env vars do not connect providers)
+`provider_connections` rows (user `9efb32ca…c3e`): opencode 10:48:23Z, chutes 10:57:39Z,
+gemini 10:58:25Z, deepseek 12:05:21Z, zai 12:08:58Z, openai 12:09:59Z — **no openrouter row**.
+`getProviderConnections` = exactly the expected state: `openrouter:false, opencode:true,
+chutes:true, gemini:true, deepseek:true, zai:true, openai:true` ✓ (DB-only by design; env keys
+would not keep openrouter connected).
+
+### 2. Fresh catalog (real `getOrBuildCatalog(uid, force=true)` path — 3.4s)
+`fingerprint=chutes:deepseek:gemini:openai:opencode:zai`, `classifiedByAi=false`, static 14 + live 200
+merged → **202 models; OpenRouter contributes ZERO models ✓**.
+
+| provider | models | priced (non-null) | free | unknown price | ctx-known (live/registry) |
+|---|---|---|---|---|---|
+| chutes | 14 | 14 | **0** | 0 | 12 |
+| deepseek | 3 | 2 | 0 | 1 | 3 |
+| gemini | 28 | 2 | 0 | 26 | 28 |
+| openai | 64 | 0 | 0 | 64 | 0 |
+| opencode | 81 | 4 | **4** | 77 | 4 |
+| zai | 12 | 0 | 0 | 12 | 1 |
+| **total** | **202** | **22** (incl. the 4 free-at-$0 registry rows) | **4** | **180** | **48** |
+
+All 4 free models are OpenCode registry-confirmed (`mimo-v2.5-free`, `nemotron-3-ultra-free`,
+`big-pickle`, `nemotron-3.5-lightning-free`) — every one has **contextWindow 128,000**.
+
+### 3. Per-stage Free candidate pools (candidates entering Free selection → after free filter)
+Full tables printed by the probe (available = connected + not-unavailable, 202 models; automatic pool
+per stage = family grouping → context gate → provider cap):
+
+| stage | ctx gate | BEFORE free filter | AFTER free filter |
+|---|---|---|---|
+| File Discovery | 32K | 28 (top: chutes Qwen235B 86.75 paid, Qwen397B 86.75 paid … then mimo 72.00) | **4** — mimo 72.00, ultra 70.75, big-pickle 69.00, lightning 60.63 (all opencode) |
+| Root Cause | 128K | 28 (top: chutes 89.13 paid … then ultra-free 77.00) | **4** — ultra 77.00, mimo 76.50, big-pickle 72.75, lightning 54.75 |
+| **Evidence** | **200K** | **12** (chutes ×5, deepseek ×2, gemini ×5 — ALL paid/unknown) | **0** |
+| Solution | 32K | 28 (top chutes 90.38 paid … mimo 77.88) | **4** — mimo 77.88, ultra 77.63, big-pickle 74.13, lightning 60.00 |
+| Patch | 32K | 28 (same shape as Solution) | **4** — mimo 77.88, ultra 77.63, big-pickle 74.13, lightning 60.00 |
+
+**Explicit check — Chutes `Qwen/Qwen3-235B-A22B-Thinking-2507-TEE`** ("Qwen3 235B A22B Thinking 2507"):
+`isFree=false`, `in=$0.2989`, `out=$1.1957` (non-zero, `priceSource=live`, `freeAuthority=none`,
+ctx 262144). It appears in every BEFORE list (paid candidate) and in **zero** free-eligible lists
+(`in-free-list=false` on all five stages) ✓. Evidence's BEFORE list has no free model of any kind:
+the 4 free OpenCode models are structurally excluded (128,000 < 200,000) and every other connected
+provider has **0 free models** (chutes 0, gemini 0, deepseek 0, zai 0, openai 0).
+
+### 4. Actual Free selector run (`selectStageModels('free', …)` — the exact UI path)
+| stage | pick | StagePick.isFree | isPaidFallback | invariant (isFree===true) |
+|---|---|---|---|---|
+| relevant_file_discovery | opencode/mimo-v2.5-free | true | false | PASS |
+| root_cause_analysis | opencode/nemotron-3-ultra-free | true | false | PASS |
+| **evidence_extraction** | **chutes/Qwen/Qwen3-235B-A22B-Thinking-2507-TEE** | **false** | **true** | **FAIL** |
+| solution_generation | opencode/mimo-v2.5-free | true | false | PASS |
+| patch_generation | opencode/mimo-v2.5-free | true | false | PASS |
+
+**Exact violation point:** `selectForStage` in `lib/ai/catalog/stageSelection.ts` — free branch:
+`freePool = pool.filter((m) => m.price.isFree)` (**:389**) yields `[]` for Evidence → paid fallback
+path `chosen = bestPaid; isPaidFallback = true` (**:410–411**); the deeper fallback `chosen = pool[0]`
+is at **:417**. The selector correctly flagged the pick (`isFree:false`, `isPaidFallback:true`) —
+the fallback itself is documented Free behavior (Task 3: "no suitable free: best confirmed-paid
+candidate"), chosen here because best-scoring confirmed-priced candidate = chutes Qwen235B (85.40,
+valueScore tie-break over Qwen397B: blended $1.79 vs $3.90/1M).
+
+### 5. Fresh vs persisted (critical staleness check)
+Persisted `user_model_preferences` row: `selected_strategy='free'`, `selection_mode='auto'`,
+`stage_overrides` = exactly {discovery opencode/mimo-v2.5-free, root opencode/nemotron-3-ultra-free,
+**evidence chutes/Qwen/Qwen3-235B-A22B-Thinking-2507-TEE**, solution opencode/mimo-v2.5-free,
+patch opencode/mimo-v2.5-free}.
+Comparison: every stage's persisted override **matches fresh Free** (evidence also coincidentally
+matches fresh Balanced AND fresh Quality — all three modes independently pick the same chutes model
+for that stage on this catalog: quality best 85.40 with only the two chutes Qwen inside the 5-pt
+tolerance, balanced penalizes nothing cheaper; the other four stages match Free ONLY).
+→ **The UI is displaying a fresh Free calculation, not stale overrides (B ruled out).**
+
+### 6. UI data source trace (`app/models/page.tsx`)
+- **Click Free/Balanced/Quality** → `handleSetupSelect` (**:166**) → `selectStageModels(setup,
+  libraryBaseModels)` (**:173**) → local stage rows + `setSetupChoice(setup)` (**:185–186**) →
+  `PUT /api/models/preference` with `{selection_mode:'auto', selected_strategy: setup,
+  stage_overrides}` (**:195–199**) → `applySavedPreference` from the response (**:202**).
+  **Clicking Free DOES recalculate and persist fresh Free selections — proven by §5.**
+  BUT `stageOverrides` is built as `{provider, model}` only (**:188–194**) — `StagePick.isFree` and
+  `isPaidFallback` are dropped right here.
+- **Reload / connect / disconnect** → `refresh` → `GET /api/models` → `applyData` (**:107**) →
+  `loadStageModels(pref.stage_overrides)` (**:120**, `isOverride = !!override` **:138**) +
+  `setSetupChoice(toSetupChoice(pref.selected_strategy))` (**:121**; free/balanced/quality pass
+  through, legacy → null). Connect/disconnect does NOT re-run selection; reconcile
+  (`app/api/models/route.ts:76`) only drops overrides whose model left the catalog.
+- **Display:** stage rows render the persisted override's model/cost; badge "Custom Override" for
+  ANY override (**:453**), status "Custom" (**:433**); setup card badge "{SETUP_TITLES[selected]}
+  selected" purely from `selected_strategy` (`StageConfigPanel.tsx:28–32`).
+  **`isPaidFallback` is consumed NOWHERE outside `stageSelection.ts`** (grep) — nothing marks the
+  Evidence row as a fallback.
+- **Can an old Balanced/Quality/manual override survive displayed as Free?** Structurally yes via
+  two paths: (a) manual StageChangeModal edit + `handleSavePreference` (**:211–227**) persists
+  `setupChoice ?? 'custom'` as strategy alongside the hand-picked override; (b) a failed PUT after
+  local setState (transient, reverts on reload). **Neither occurred in this observation.**
+
+### 7. Strategy routing — free → free, verified end-to-end
+`handleSetupSelect` sends `selected_strategy: setup` verbatim (**:198**); preference PUT accepts
+`SelectedStrategy` incl. balanced/quality; reload maps back via `toSetupChoice` (**:550–552**).
+No `free → auto|balanced|quality` remapping exists anywhere on this path; persisted
+`selected_strategy='free'` and badge "Free selected" both confirm routing. Runtime is
+strategy-independent for the stage model: `resolveAnalysisRouting` (`lib/ai/routing.ts:51`) reads
+`stage_overrides[task]` directly, so Evidence will actually RUN the chutes paid model too
+(gateway's `analyses.model_strategy` only feeds the fallback chain).
+
+### 8. Stage ID mapping — verified programmatically
+`STAGE_WEIGHTS` keys == page `STAGES` ids, identical order: `relevant_file_discovery,
+root_cause_analysis, evidence_extraction, solution_generation, patch_generation` ✓
+(Evidence receives only `evidence_extraction` picks — no cross-stage bleed).
+
+### 9. Root cause: **F** (concrete chain, code evidence)
+1. OpenRouter (the only provider with explicit-zero free models ≥200K ctx) is disconnected →
+   catalog free set = 4 OpenCode models, all ctx 128,000 (§2).
+2. `buildAutomaticPool` applies `STAGE_CONTEXT_MIN.evidence_extraction = 200_000`
+   (`stageSelection.ts:44–50`) BEFORE the free filter → all 4 free models excluded → `freePool = []`
+   at **:389** → paid fallback `chosen = bestPaid` at **:410** (honest `isPaidFallback=true`).
+3. `handleSetupSelect` persists only `{provider, model}` (**page.tsx:188–194**); reload +
+   setup badge reconstruct "Free selected + paid model" with no fallback flag (**page.tsx:120–121,
+   453; StageConfigPanel.tsx:28–32**).
+Free filter, metadata, stage IDs, and strategy routing are all CORRECT (A/C/D/E ruled out with data
+in §1–§8); there is no stale override (B ruled out in §5). This is structural: with only OpenCode
+connected, Evidence will always paid-fallback (128K < 200K — also flagged in the multi-provider audit).
+
+### 10. Recommended minimal fix (NOT implemented — investigation only)
+Do not touch the Free filter/gates/fallback semantics. Surface what the selector already knows:
+- **Preferred (UI-only):** when `setupChoice === 'free'` and the configured stage model has
+  `price.isFree === false`, render a "Paid fallback" badge + reason ("No free model meets this
+  stage's 200K context requirement") on that row — computable client-side from data already
+  present, zero schema/selection change.
+- **Alternative (additive persistence):** carry `isPaidFallback`/`isFree` through `stage_overrides`
+  so runtime + reload both see it (schema/API additive field).
+- **Data path:** reconnect OpenRouter (or any provider with free ≥200K-context models) — restores a
+  non-empty Evidence free pool; no code change.
+`npx tsc --noEmit`: 0 errors. Temp diagnostics removed; selection/pricing/normalization/UI behavior
+all unchanged by this task.
+
+---
+
+## IMPLEMENTATION — Strict Free semantics + model-selection cleanup (Sept 25, 2026)
+
+**Status:** ✅ IMPLEMENTED + VALIDATED + CLEANED UP.
+`npx tsc --noEmit` 0 errors · `npm run build` ✓ (18 routes; /api/debug/selection gone, preflight kept)
+· `npm run lint` 15 errors/52 problems vs **15/60 at HEAD** (stash-baseline compare: zero new
+problems, 8 dead-file warnings removed; all 15 errors pre-existing at HEAD). Temp probes deleted
+afterwards (fixture probe 38/38 PASS; live run ALL PASSED).
+
+### PART A — strict Free (fixes verdict-F bug above)
+
+**Selector (`lib/ai/catalog/stageSelection.ts`)** — only header + free branch changed:
+- `StagePick`: `provider`/`model` → `string | null`; **removed `isPaidFallback`**; added
+  `unavailable?: boolean` (Free NEVER falls back to a paid model).
+- Free: `freePool = pool.filter(m => m.price.isFree)` unchanged (confirmed-free only, unknown
+  price never free); empty → explicit unavailable pick `{provider:null, model:null, isFree:false,
+  unavailable:true}`. Also when `buildAutomaticPool` yields 0 for Free (gates exclude everything).
+  Old paid-fallback block (bestPaid scan + `pool[0]` last resort, former :393–423) deleted.
+- Balanced/Quality branches, STAGE_WEIGHTS/STAGE_CONTEXT_MIN, pool construction, family grouping,
+  provider caps, scoring, cost helpers: **untouched** (diff-verified).
+
+**Persistence path (unavailable marker flow):**
+- `overrideReconcile.ts`: `StageOverrideEntry.unavailable?`; reconcile KEEPS
+  `{provider:null, model:null, unavailable:true}` verbatim (points at no model → can never be
+  stale); real entries unchanged (stale still dropped, never rewritten).
+- `preferences.ts` + PUT `/api/models/preference`: stage_overrides entry type carries `unavailable?`.
+- `/api/models` + `/api/ai/models`: cast types updated; `/api/models` self-healing save preserves
+  markers (kept includes them → `changed=false` when only markers exist → no spurious save/toast).
+- `app/models/page.tsx`: `StageModel.unavailable`; `handleSetupSelect` persists markers + warning
+  toast ("no free model available for N of 5 stages"); `handleSavePreference` re-persists markers;
+  `handleApplyStageChange` CLEARS the marker (manual pick wins); `loadStageModels` restores it on
+  reload; row UI: model cell **"No free model available"**, status pill **"No free model"** (amber,
+  text-first — not color-alone), provider "—", guidance subline, "Custom Override" badge suppressed.
+  Estimated cost: unconfigured stage ⇒ unknown total (existing semantics, honest).
+
+**Engine (`lib/ai/strategy-selection.ts`) `free` mode:** paid-fallback branch (best-any when
+registry-free pool empty) → `continue` (skip stage). Runtime error-fallback UNCHANGED:
+`runWithFallback` still appends `autoChain` after the strategy candidate; stage overrides still
+flow via `resolveAnalysisRouting` (`routing.ts:37` null-guard → marker = no override = existing
+auto behavior); `applyStageOverrides` null-guard skips markers (no null injection — asserted).
+
+### Validation (temp scripts deleted after run)
+- **Fixture probe 38/38 PASS** (pure, no DB): A free-capable→5/5 free; **B REPRO→evidence
+  unavailable + 4 free + chutes Qwen never picked**; B Balanced/Quality still concrete (Balanced
+  evidence may be paid = unchanged); C no-free-at-all→5/5 unavailable (paid never chosen); D empty
+  catalog→null; E free ≥200K restored→evidence free; persistence builder→exact marker shape;
+  reconcile keeps marker / drops stale / keeps valid; engine: no paid assignment without a
+  registry-free provider, all-free with opencode, marker never injects nulls.
+- **Live run (stored catalog, user 9efb32ca…, real serving path):** openrouter:false + 6×true,
+  202 models/4 free → Free = 4× opencode-free + **evidence NO FREE MODEL AVAILABLE**, chutes Qwen
+  absent. Persisted row BEFORE = paid chutes evidence (the bug) → repaired with the exact UI
+  payload (`saveModelPreference`) → AFTER: 4 real + evidence marker, strategy `free`/mode `auto`,
+  reconcile kept 5/changed=false. ALL PASSED.
+- **Leftover search:** `isPaidFallback` 0 hits; deleted modules 0 refs; free→paid fallback code
+  remains only in `free_paid` (strategy-selection :112) + `fully_paid` (:159, paid-by-design) —
+  scope notes below.
+
+### PART B — cleanup (reference-audit before every deletion: import greps incl. relative/bare + fetch strings)
+DELETED (zero references):
+- **`lib/ai/model-catalog/*`** (6 files) — only refs were 2 TYPE imports of `ProviderName`;
+  both swapped to `@/lib/ai/catalog/types` (the identical 7-member union that
+  model-catalog/types merely re-exported) → duplicate catalog system gone
+  (builder/cache/index/ranking/strategies/types).
+- **`lib/ai/orchestration/*`** (3 files) — duplicate strategy system, zero refs.
+- **`lib/ai/catalog/scoring.ts`** — old "BugWiser Fit" scorer, zero refs.
+- **`lib/ai/catalog/index.ts`** — dead barrel (getModelCatalog/MODEL_REGISTRY re-export); live
+  engine uses `lib/ai/model-registry.ts`.
+- **`lib/ai/catalog/debugSelection.ts` + `app/api/debug/selection/`** — temp debug tooling
+  (header: "remove when selection debugging is complete" — completed, recorded above).
+- **`components/analysis/ModelSelector.tsx`** (zero importers; sole consumer of /api/ai/models)
+  and **`components/analysis/StageModelBadge.tsx`** (zero importers).
+- **`scripts/*`** — 4 temp probes incl. `debug-selection.ts` (header: "delete when investigation
+  recorded in think/state.md" — recorded). scripts/ now empty.
+
+KEPT (audit proved live):
+- **`app/api/analysis/preflight/route.ts` + `components/analysis/ModelPreflight.tsx` — CORRECTION
+  to the old note at state.md:277 (listed preflight as dead): it is LIVE** —
+  `analysis/new` `handleStartAnalysis` → `setShowPreflight(true)` → POST /api/analysis/preflight.
+- `components/analysis/ModelTierBadge.tsx` (imported by analysis/[id]).
+- `lib/ai/catalog/{modelSignals,normalizers,overrideReconcile,types,registry,cost,live,stageSelection,stageTokenProfiles}.ts`
+  (all imported); `lib/ai/model-registry.ts`, `lib/ai/strategy-selection.ts` (engine).
+- `app/api/ai/models/route.ts` — no internal consumer after ModelSelector removal; retained as
+  the strategy-assignment endpoint (distinct from /api/models) — revisit when a strategies UI exists.
+
+### Scope notes / tech debt
+1. `free_paid` engine mode still falls back to paid for its free-designated stages when no
+   registry-free model is connected (strategy-selection.ts:112). Different strategy (not the Free
+   setup), unreachable from the /models UI (setups = free/balanced/quality) — outside this task's
+   strict-Free mandate; candidate for a follow-up.
+2. Unavailable markers are snapshots: they persist until the user re-applies a setup or configures
+   the stage; connecting a free ≥200K provider does NOT auto-clear them (re-run Free to pick the
+   new model). Deliberate: reconcile must not re-run selection server-side (would risk clobbering
+   deliberate manual paid overrides under Free — indistinguishable from old-fallback rows).
+3. Legacy paid rows from the old fallback are not auto-mutated (indistinguishable from manual
+   picks); the one observed live row was repaired above because the investigation proved it was
+   fallback-produced, not manual.
+4. Engine still ranks from static MODEL_REGISTRY with no context gates — pre-existing architecture,
+   untouched (parity would be its own task).
+
+**Next recommended task:** unchanged — surface provenance (price source / capability confidence) in
+the /models UI; optional follow-ups: strict-free-ify `free_paid` free stages (scope note 1), clear
+unavailable markers on free-pool recovery (scope note 2).

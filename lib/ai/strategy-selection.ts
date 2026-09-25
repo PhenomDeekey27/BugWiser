@@ -55,20 +55,10 @@ export const STRATEGY_MODES: StrategyMode[] = [
         });
 
         if (freeModels.length === 0) {
-          // Fallback: pick the best available model regardless of free/paid
-          const allAvailable = MODEL_REGISTRY.filter(
-            (m) => availableProviders.has(m.provider)
-          );
-          if (allAvailable.length === 0) {
-            continue;
-          }
-          const best = pickBestForTask(allAvailable, TASK_WEIGHTS[taskType]);
-          assignments.push({
-            task,
-            provider: best?.provider as ProviderName,
-            model: best?.model as string,
-            isFree: false,
-          });
+          // STRICT FREE: no confirmed-free model on any connected provider —
+          // skip the stage instead of falling back to a paid model. The
+          // runtime error-fallback chain (autoChain in runWithFallback) is
+          // unaffected; this only removes the paid model as the strategy pick.
           continue;
         }
 
