@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono, Space_Grotesk, Manrope } from "next/font/google"
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import { ThemeScript } from "@/components/theme/ThemeScript";
+import { SessionExpiryCheck } from "@/components/landing/SessionExpiryCheck";
 import "./globals.css";
 
 const inter = Inter({
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <ThemeProvider>
           <TooltipProvider>
+            <SessionExpiryCheck />
             {children}
           </TooltipProvider>
         </ThemeProvider>

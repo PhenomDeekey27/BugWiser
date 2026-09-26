@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useGitHubAuthValidity } from '@/lib/supabase/auth-session';
 import { GitHubUser } from '@/types';
 import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
@@ -17,6 +18,10 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const authValid = useGitHubAuthValidity();
+  // Stale profile is never shown: the header's user collapses to null the
+  // moment the canonical session becomes invalid.
+  const displayUser = authValid ? (user ?? null) : null;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -47,10 +52,10 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
 
       <div className="flex items-center gap-3">
         <ThemeToggle />
-        {user ? (
+        {displayUser ? (
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono text-bw-dusty-rose hidden sm:block">
-              @{user.login}
+              @{displayUser.login}
             </span>
             <div className="relative" ref={dropdownRef}>
               <button
@@ -58,17 +63,17 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
 className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-primary/15"
                  style={{ background: '#F0EBE6' }}
               >
-                {user.avatarUrl ? (
+                {displayUser.avatarUrl ? (
                   <img
-                    src={user.avatarUrl}
-                    alt={user.login}
+                    src={displayUser.avatarUrl}
+                    alt={displayUser.login}
                     className="w-8 h-8 rounded-full"
                     width={32}
                     height={32}
                   />
                 ) : (
                   <span className="text-sm font-medium text-bw-peach">
-                    {user.login?.charAt(0).toUpperCase()}
+                    {displayUser.login?.charAt(0).toUpperCase()}
                   </span>
                 )}
               </button>
@@ -78,8 +83,8 @@ className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden
                    className="absolute right-0 top-full mt-2 w-60 rounded-xl shadow-xl z-50 overflow-hidden glass-strong"
                 >
                   <div className="px-4 py-3.5 border-b border-border">
-                    <p className="text-sm font-semibold text-bw-peach-light">{user.name || user.login}</p>
-                    <p className="text-xs font-mono text-bw-dusty-rose mt-0.5">@{user.login}</p>
+                    <p className="text-sm font-semibold text-bw-peach-light">{displayUser.name || displayUser.login}</p>
+                    <p className="text-xs font-mono text-bw-dusty-rose mt-0.5">@{displayUser.login}</p>
                   </div>
                   <div className="py-1.5">
                     <button

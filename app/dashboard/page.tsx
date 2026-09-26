@@ -59,7 +59,8 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect('/');
+    // Backup for the middleware's protected-route redirect — same destination.
+    redirect('/auth/github');
   }
 
   const githubUser = user?.user_metadata
@@ -99,7 +100,11 @@ export default async function DashboardPage() {
   }
 
   if (tokenExpired) {
-    redirect('/');
+    // GitHub session expired (missing provider_token or GitHub rejected the
+    // token) — reconnect at /auth/github, never a silent bounce to home.
+    redirect(
+      `/auth/github?error=${encodeURIComponent('Your GitHub session has expired. Please sign in again.')}`
+    );
   }
 
   if (user) {

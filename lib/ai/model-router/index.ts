@@ -45,6 +45,26 @@ export interface RunRequest {
    * - custom: inherits auto strategy, with optional stage_overrides.
    */
   strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom';
+  /**
+   * STRICT FREE (user's selected strategy === 'free', auto mode). When set,
+   * the chain is built ONLY from confirmed-free, stage-eligible candidates —
+   * the ranked autoChain and strategy engine are never consulted, so no paid
+   * or unknown-priced model can execute or be reached via any fallback hop.
+   */
+  strictFree?: boolean;
+  /**
+   * Ordered confirmed-free stage candidates from the canonical stage-selection
+   * pool (gateway → prepareStrictFreeRun). Under strictFree this list (plus
+   * the verified override) IS the entire fallback chain.
+   */
+  freeCandidates?: TaskModelEntry[];
+  /**
+   * The persisted strict-Free unavailable marker for this stage
+   * ({provider: null, model: null, unavailable: true}). Under strictFree it
+   * fails the stage immediately with the structured no-free-model error —
+   * it never falls through to an automatic chain.
+   */
+  stageOverrideUnavailable?: boolean;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -201,17 +221,31 @@ function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
   return available;
 }
 
-export async function runWithFallback(request: RunRequest): Promise<RunResponse> {
-  const estimatedTokens = estimateTokensFromMessages(request.messages);
-  const availableProviders = buildAvailableProviders(request);
+/** Structured strict-Free failure: no confirmed-free model can serve this stage. */
+function noFreeModelError(task: string, detail: string): string {
+  return `No free model is available for this stage (task: ${task}) — ${detail}. The Free strategy never falls back to paid models.`;
+}
 
-  const autoChain = selectModelsForTask(
-    request.task,
-    estimatedTokens,
-    new Set(),
-    availableProviders
-  );
-
+/**
+ * Builds the fallback chain. Exported (pure) so strict-Free chain composition
+ * can be validated directly.
+ *
+ * - strictFree: the persisted unavailable marker throws the structured
+ *   no-free-model error immediately (never an automatic chain); otherwise the
+ *   chain is [verified free override, ...freeCandidates] deduplicated — and
+ *   an empty result also throws the structured error. autoChain and the
+ *   strategy engine are ignored by design (both can carry paid models).
+ * - non-strict: stage override > manual > strategy assignment > autoChain,
+ *   deduplicated — byte-for-byte the pre-strict-Free behavior.
+ */
+export function buildRunChain(
+  request: Pick<
+    RunRequest,
+    'task' | 'strictFree' | 'freeCandidates' | 'stageOverrideUnavailable' | 'stageOverrides' | 'manualModel'
+  >,
+  autoChain: TaskModelEntry[],
+  stageAssignments: StageAssignment[]
+): TaskModelEntry[] {
   const stageOverride = request.stageOverrides;
   const manual = request.manualModel;
   const manualEntry = manual
@@ -221,13 +255,27 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
     ? { provider: stageOverride.provider, model: stageOverride.model }
     : null;
 
-  const strategy = request.strategy;
-
-  // Strategy-based fallback chain
-  const stageAssignments = buildStageAssignments(
-    strategy || 'auto',
-    availableProviders
-  );
+  if (request.strictFree) {
+    if (request.stageOverrideUnavailable) {
+      throw new Error(
+        noFreeModelError(request.task, 'this stage is marked "no free model available" in your Free setup')
+      );
+    }
+    const freeChain: TaskModelEntry[] = [];
+    if (overrideEntry) freeChain.push(overrideEntry);
+    for (const candidate of request.freeCandidates ?? []) {
+      const key = `${candidate.provider}/${candidate.model}`;
+      if (!freeChain.some((c) => `${c.provider}/${c.model}` === key)) {
+        freeChain.push(candidate);
+      }
+    }
+    if (freeChain.length === 0) {
+      throw new Error(
+        noFreeModelError(request.task, "no confirmed-free model meets this stage's requirements on your connected providers")
+      );
+    }
+    return freeChain;
+  }
 
   const chain: TaskModelEntry[] = [];
 
@@ -279,13 +327,44 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
     }
   }
 
+  return chain;
+}
+
+export async function runWithFallback(request: RunRequest): Promise<RunResponse> {
+  const estimatedTokens = estimateTokensFromMessages(request.messages);
+  const availableProviders = buildAvailableProviders(request);
+
+  const strategy = request.strategy;
+
+  // STRICT FREE never consults the ranked autoChain or the strategy engine —
+  // both can carry paid models. The free-only chain comes from buildRunChain
+  // below. Everything else builds the chain exactly as before.
+  const autoChain = request.strictFree
+    ? []
+    : selectModelsForTask(
+        request.task,
+        estimatedTokens,
+        new Set(),
+        availableProviders
+      );
+  const stageAssignments = request.strictFree
+    ? []
+    : buildStageAssignments(strategy || 'auto', availableProviders);
+
+  const chain = buildRunChain(request, autoChain, stageAssignments);
+
+  const manual = request.manualModel;
+  const manualEntry = manual
+    ? { provider: manual.provider, model: manual.model }
+    : null;
+
   const attempted: RunResponse['attemptedProviders'] = [];
   const failedModels = new Set<string>();
   let fallbackCount = 0;
   let lastError = new Error('All providers in fallback chain failed');
 
   console.log(
-    `[model-router] Task: ${request.task} | strategy: ${strategy || 'auto'} | manual: ${manualEntry ? 'yes' : 'no'} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
+    `[model-router] Task: ${request.task} | strategy: ${strategy || 'auto'}${request.strictFree ? ' (STRICT FREE)' : ''} | manual: ${manualEntry ? 'yes' : 'no'} | estimated tokens: ${estimatedTokens} | candidates: ${chain.length}`
   );
 
   for (const entry of chain) {
@@ -389,9 +468,26 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
   }
 
   if (fallbackCount === 0) {
+    if (request.strictFree) {
+      // Every candidate was skipped by the availability gate (provider not
+      // connected/configured) — structured strict-Free failure, never a paid
+      // substitute.
+      throw new Error(
+        noFreeModelError(request.task, 'no candidate provider is reachable with your current connections')
+      );
+    }
     throw new Error(
       `No configured providers available for task: ${request.task}. ` +
       `Configure at least one provider API key.`
+    );
+  }
+
+  if (request.strictFree) {
+    // Every confirmed-free candidate was attempted and failed. Structured
+    // exhaustion failure that preserves the underlying cause.
+    throw new Error(
+      `All eligible free models failed for task: ${request.task} — no free model is available to complete this stage. ` +
+      `The Free strategy never falls back to paid models. Last error: ${lastError.message}`
     );
   }
 

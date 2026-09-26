@@ -6,6 +6,7 @@ import { getProviderConnections, isProviderConfiguredBysEnv } from '@/lib/ai/con
 import type { ProviderName } from '@/lib/ai/catalog/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
 import { reconcileStageOverrides } from '@/lib/ai/catalog/overrideReconcile';
+import { toCatalogModel } from '@/lib/ai/catalog/toCatalogModel';
 
 export async function GET() {
   try {
@@ -98,38 +99,7 @@ export async function GET() {
       );
     }
 
-    const models = catalog.models.map((m) => ({
-      providerId: m.provider,
-      modelId: m.modelId,
-      displayName: m.displayName,
-      contextWindow: m.contextWindow,
-      maxOutputTokens: m.maxOutputTokens,
-      price: { input: m.inputPrice, output: m.outputPrice, isFree: m.isFree },
-      supportsReasoning: m.supportsReasoning,
-      supportsToolCalling: m.supportsToolCalling,
-      supportsStructuredOutput: m.supportsStructuredOutput,
-      priceSource: m.priceSource,
-      priceFetchedAt: m.priceFetchedAt,
-      capabilities: [
-        ...(m.supportsCoding ? ['coding'] : []),
-        ...(m.supportsReasoning ? ['reasoning'] : []),
-        ...(m.supportsVision ? ['vision'] : []),
-        ...(m.supportsToolCalling ? ['tool_calling'] : []),
-        ...(m.supportsStructuredOutput ? ['structured_output'] : []),
-      ],
-      availability: m.availability,
-      scores: {
-        coding: m.codingScore,
-        reasoning: m.reasoningScore,
-        speed: m.speedScore,
-        longContext: m.longContextScore,
-      },
-      valueScore: m.valueScore,
-      tags: m.recommendedCategories,
-      fit: m.overallScore,
-      stageFit: {} as Record<string, number>,
-      available: true,
-    }));
+    const models = catalog.models.map(toCatalogModel);
 
     return NextResponse.json({
       providers: allProviders,

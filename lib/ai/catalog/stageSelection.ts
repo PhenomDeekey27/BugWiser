@@ -347,6 +347,25 @@ function pickQuality(
 }
 
 /**
+ * Score-orders an automatic pool: stage score desc, then valueScore desc,
+ * then stable provider/model ID. Shared by selectForStage and
+ * getFreeStageCandidates so runtime Free candidates observe the EXACT same
+ * ordering as Free setup selection.
+ */
+function scoreOrderedPool(
+  pool: CatalogModel[],
+  weights: { coding: number; reasoning: number; speed: number; longContext: number }
+): CatalogModel[] {
+  return [...pool].sort((a, b) => {
+    const d = stageScore(b, weights) - stageScore(a, weights);
+    if (d !== 0) return d;
+    const dv = (b.valueScore || 0) - (a.valueScore || 0);
+    if (dv !== 0) return dv;
+    return `${a.providerId}/${a.modelId}`.localeCompare(`${b.providerId}/${b.modelId}`);
+  });
+}
+
+/**
  * Select a model for every stage from the user's available (connected-provider)
  * catalog. Deterministic: same catalog + setup → same picks. Stages are
  * independent — different stages may resolve to different models.
@@ -384,13 +403,7 @@ export function selectForStage(
   }
 
   // Score-ordered pool (stable tiebreak on valueScore, then name, for determinism).
-  const pool = [...autoPool].sort((a, b) => {
-    const d = stageScore(b, w) - stageScore(a, w);
-    if (d !== 0) return d;
-    const dv = (b.valueScore || 0) - (a.valueScore || 0);
-    if (dv !== 0) return dv;
-    return `${a.providerId}/${a.modelId}`.localeCompare(`${b.providerId}/${b.modelId}`);
-  });
+  const pool = scoreOrderedPool(autoPool, w);
 
   let chosen: CatalogModel | null = null;
 
@@ -423,4 +436,81 @@ export function selectForStage(
     model: chosen.modelId,
     isFree: chosen.price.isFree,
   };
+}
+
+// ── STRICT FREE runtime support (strategy === 'free') ──
+// Runtime Free enforcement reuses the exact same canonical logic above:
+// automatic pool gates (family grouping → STAGE_CONTEXT_MIN → provider
+// top-N), the same score ordering, and the same `price.isFree` filter.
+// Nothing here redefines "free" — price.isFree (explicit zero cost, stamped
+// by the normalizers) is the single source of truth.
+
+/**
+ * The full ordered confirmed-free candidate pool for one stage — i.e. the
+ * entire freePool behind selectForStage('free', ...), not just its first
+ * pick. Used by gateway.generate under strict Free so primary selection AND
+ * every fallback hop can only ever see stage-eligible, confirmed-free models.
+ * Empty array ⇒ the stage is unavailable under Free (never a paid pick).
+ */
+export function getFreeStageCandidates(
+  availableModels: CatalogModel[],
+  stageId: StageKey
+): Array<{ provider: string; model: string }> {
+  if (availableModels.length === 0) return [];
+  const w = STAGE_WEIGHTS[stageId];
+  const autoPool = buildAutomaticPool(availableModels, stageId, w);
+  const pool = scoreOrderedPool(autoPool, w);
+  return pool
+    .filter((m) => m.price.isFree)
+    .map((m) => ({ provider: m.providerId, model: m.modelId }));
+}
+
+/**
+ * ONE canonical confirmed-free check for a specific provider/model pair:
+ * look the model up in the catalog and return its `price.isFree`. Unknown or
+ * null pricing, missing rows, and name-based guesses are NEVER free; a model
+ * absent from the catalog is conservatively not free.
+ */
+export function isConfirmedFreeModel(
+  availableModels: CatalogModel[],
+  providerId: string,
+  modelId: string
+): boolean {
+  const model = availableModels.find((m) => m.providerId === providerId && m.modelId === modelId);
+  return model ? model.price.isFree : false;
+}
+
+export interface StrictFreeRunPlan {
+  /** Ordered confirmed-free, stage-eligible candidates (canonical pool). */
+  freeCandidates: Array<{ provider: string; model: string }>;
+  /** The stage override when (and only when) it is confirmed free. */
+  stageOverride: { provider: string; model: string } | null;
+}
+
+/**
+ * Builds the STRICT FREE execution plan for one stage, given the user's
+ * catalog. Drops any stage override that is not confirmed free (legacy paid
+ * rows, hand-picked paid models under a Free setup) and returns the ordered
+ * free candidate pool for primary + fallback use. Pure — exported so tests
+ * can validate the plan without touching the database.
+ */
+export function prepareStrictFreeRun(
+  catalogModels: CatalogModel[],
+  task: string,
+  stageOverride: { provider: string; model: string } | null
+): StrictFreeRunPlan {
+  const stageKey: StageKey | null = Object.prototype.hasOwnProperty.call(STAGE_WEIGHTS, task)
+    ? (task as StageKey)
+    : null;
+  const freeCandidates = stageKey ? getFreeStageCandidates(catalogModels, stageKey) : [];
+
+  let override = stageOverride;
+  if (override && !isConfirmedFreeModel(catalogModels, override.provider, override.model)) {
+    console.warn(
+      `[stage-selection] STRICT FREE: ignoring stage override ${override.provider}/${override.model} for "${task}" — not confirmed free (price.isFree).`
+    );
+    override = null;
+  }
+
+  return { freeCandidates, stageOverride: override };
 }

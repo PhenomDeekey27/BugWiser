@@ -7,9 +7,9 @@ import { RepositorySelector } from '@/components/analysis/RepositorySelector';
 import { IssueSelector } from '@/components/analysis/IssueSelector';
 import { SelectedModelSummary } from '@/components/models/SelectedModelSummary';
 import { ModelPreflight } from '@/components/analysis/ModelPreflight';
-import { Button } from '@/components/ui/button';
 import { Repository, Issue, GitHubUser } from '@/types';
 import { createClient } from '@/lib/supabase/client';
+import { invalidateGitHubSession } from '@/lib/supabase/auth-session';
 import { toast } from 'sonner';
 import type { CatalogModel, CatalogProvider, Preference } from '@/app/models/page';
 
@@ -34,7 +34,6 @@ export default function NewAnalysisPage() {
   const [reposError, setReposError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
-  const [authExpired, setAuthExpired] = useState(false);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [showPreflight, setShowPreflight] = useState(false);
 
@@ -107,8 +106,9 @@ export default function NewAnalysisPage() {
       try {
         const response = await fetch('/api/github/repos');
         if (response.status === 401) {
-          setAuthExpired(true);
-          setReposError(null);
+          // Auth-expired response from the GitHub API route — one shared
+          // flow: clear global GitHub state and go to /auth/github.
+          await invalidateGitHubSession(router);
           return;
         }
         if (!response.ok) {
@@ -123,7 +123,7 @@ export default function NewAnalysisPage() {
       }
     }
     fetchRepos();
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (!selectedRepository) return;
@@ -138,6 +138,11 @@ export default function NewAnalysisPage() {
         const response = await fetch(
           `/api/github/issues?owner=${owner}&repo=${repo}&state=open`
         );
+        if (response.status === 401) {
+          // Auth-expired response — same shared invalidation flow as repos.
+          if (!cancelled) await invalidateGitHubSession(router);
+          return;
+        }
         if (!response.ok) {
           throw new Error('Failed to fetch issues');
         }
@@ -160,7 +165,7 @@ export default function NewAnalysisPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedRepository]);
+  }, [selectedRepository, router]);
 
   const handleRepositorySelect = useCallback((repo: Repository) => {
     setSelectedRepository(repo);
@@ -249,13 +254,6 @@ export default function NewAnalysisPage() {
     }
   };
 
-  const handleReLogin = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    localStorage.removeItem('analysis-selection');
-    router.push('/auth/github');
-  };
-
   return (
     <AppShell user={user} gradient="new-analysis">
       <div className="p-6 max-w-4xl mx-auto">
@@ -263,49 +261,35 @@ export default function NewAnalysisPage() {
           New Analysis
         </h1>
 
-        {authExpired ? (
-          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-surface border border-border">
-            <p className="text-sm text-bw-peach mb-4 text-center">
-              Your session has expired. Please sign in again to access your repositories.
-            </p>
-            <Button
-              className="btn-bw-primary font-medium"
-              onClick={handleReLogin}
-            >
-              Sign in with GitHub
-            </Button>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <RepositorySelector
+              selectedRepository={selectedRepository}
+              onSelect={handleRepositorySelect}
+              repositories={repositories}
+              loading={reposLoading}
+              error={reposError}
+            />
           </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div>
-              <RepositorySelector
-                selectedRepository={selectedRepository}
-                onSelect={handleRepositorySelect}
-                repositories={repositories}
-                loading={reposLoading}
-                error={reposError}
-              />
-            </div>
 
-            <div>
-              {selectedRepository ? (
-                <IssueSelector
-                  selectedIssue={selectedIssue}
-                  onSelect={setSelectedIssue}
-                  issues={issues}
-                  loading={issuesLoading}
-                  error={issuesError}
-                />
-              ) : (
+          <div>
+            {selectedRepository ? (
+              <IssueSelector
+                selectedIssue={selectedIssue}
+                onSelect={setSelectedIssue}
+                issues={issues}
+                loading={issuesLoading}
+                error={issuesError}
+              />
+            ) : (
 <div className="flex items-center justify-center h-64 rounded-lg bg-surface border border-border">
-                   <p className="text-sm text-bw-peach">
-                     Select a repository first
-                   </p>
-                 </div>
-              )}
-            </div>
+                 <p className="text-sm text-bw-peach">
+                   Select a repository first
+                 </p>
+               </div>
+            )}
           </div>
-        )}
+        </div>
 
         {selectedRepository && selectedIssue && (
           <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -1,11 +1,19 @@
 import { RunRequest } from './model-router';
 import { resolveUserCredentials } from './connection/service';
-import { getModelPreference } from './preferences';
+import { getModelPreference, type SelectedStrategy } from './preferences';
 import type { ProviderName } from './providers/registry';
 
 export interface ResolvedRouting {
   /** Args to pass to runWithFallback. */
   runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'stageOverrides'>;
+  /** The user's CURRENT strategy from user_model_preferences (live — not the analysis-row snapshot). */
+  selectedStrategy: SelectedStrategy;
+  /**
+   * Strict-Free unavailable marker for THIS stage: stage_overrides[task] =
+   * {provider: null, model: null, unavailable: true}. False in manual mode
+   * (manual ignores per-stage overrides entirely).
+   */
+  stageOverrideUnavailable: boolean;
   selection: {
     mode: 'auto' | 'manual';
     provider: ProviderName | null;
@@ -65,11 +73,21 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
     task && preference.selection_mode !== 'manual'
       ? resolveStageOverride(preference.stage_overrides, task)
       : null;
+  // Strict-Free unavailable marker (null/null + unavailable) — resolved here
+  // so the gateway can fail the stage structurally instead of falling through
+  // to an automatic (potentially paid) chain.
+  const stageOverrideUnavailable =
+    preference.selection_mode !== 'manual' &&
+    !!task &&
+    ANALYSIS_TASK_IDS.has(task) &&
+    preference.stage_overrides?.[task]?.unavailable === true;
 
   if (preference.selection_mode === 'manual' && preference.provider && preference.model) {
     if (!credentials[preference.provider]) {
       return {
         runArgs: { providerTokens },
+        selectedStrategy: preference.selected_strategy,
+        stageOverrideUnavailable: false,
         selection: {
           mode: 'manual',
           provider: null as ProviderName | null,
@@ -83,6 +101,8 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
         providerTokens,
         manualModel: { provider: preference.provider as ProviderName, model: preference.model },
       },
+      selectedStrategy: preference.selected_strategy,
+      stageOverrideUnavailable: false,
       selection: {
         mode: 'manual',
         provider: preference.provider as ProviderName,
@@ -94,6 +114,8 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
 
   return {
     runArgs: { providerTokens, stageOverrides: stageOverride },
+    selectedStrategy: preference.selected_strategy,
+    stageOverrideUnavailable,
     selection: {
       mode: 'auto',
       provider: null,

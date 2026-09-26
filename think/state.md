@@ -1381,3 +1381,294 @@ Delete `app/api/ai/models/route.ts` (consumerless endpoint) + update the stale r
 no import orphaning (all its imports are shared with live modules), no DB/schema touch, no
 behavior change for Models page, preflight, or runtime. Verify with `npx tsc --noEmit` +
 `npm run build`.
+
+---
+
+# AUDIT — /models selection → runtime provider calls, all 5 stages (READ-ONLY, Sept 26, 2026)
+
+**Status:** ✅ COMPLETE. No code changed (report-only entry). Validation: `npx tsc --noEmit` → 0
+errors. Ran against branch `feature/ui-redesign` working tree (commit `db6455e` + uncommitted
+UI edits — audit touched none of them).
+
+## A. Persisted model configuration (/models → DB) — VERIFIED
+- Setup click: `handleSetupSelect` (app/models/page.tsx:144) → `selectStageModels` → local rows →
+  `PUT /api/models/preference` `{selection_mode:'auto', selected_strategy, stage_overrides}` (:178-181);
+  strict-Free markers persisted as `{provider:null, model:null, unavailable:true}` (:170-173).
+  Manual save: `handleSavePreference` (:202) → same PUT, strategy `setupChoice ?? custom|auto` (:219).
+- Server: `saveModelPreference` (lib/ai/preferences.ts:59) upserts `user_model_preferences`;
+  `getModelPreference` (:32) is the runtime read. Reload restores overrides + markers and
+  `toSetupChoice(selected_strategy)` (page.tsx:99/112-116/138).
+
+## B. Analysis creation loads preference — VERIFIED
+- analysis/new `handleStartAnalysis:171` → `handleSaveModel` (:80, auto/manual pref) → preflight
+  modal (:179) → `startAnalysisWithStrategy` POSTs `/api/analyses` with `model_strategy` in body
+  (:199-203) — **`/api/analyses` IGNORES that body field** (route types only {repository, issue},
+  route.ts:18-28). Route instead reads `user_model_preferences.selected_strategy` (:47-51) and maps
+  `balanced|quality → 'custom'` (:55-56) — forced by `analyses.model_strategy` CHECK
+  ('free','free_paid','fully_paid','custom','auto' — migrations 006:5, 013). Concrete picks are NOT
+  copied onto the analysis row; they flow fresh per stage at runtime (C).
+- POST `/api/analyses/:id/run` → `runAnalysisInitialization` (runner.ts — GitHub/tree/fingerprint,
+  no AI calls).
+
+## C. Runtime resolution — VERIFIED (fresh per stage, per run)
+1. Stage route (auth + ownership + status gate) → `run*` — 5/5 wired (relevant-files:66,
+   root-cause:51, evidence:51, solution:51, patch:51) → `generate({task})` with exact keys
+   (relevant-files:171, root-cause:126, evidence:126, solution:131, patch:137).
+2. `gateway.generate` (gateway.ts:48) → `resolveAnalysisRouting(userId, task)` (routing.ts:51):
+   credentials (env-first, then DB decrypted keys — service.ts:115-151) + `getModelPreference` →
+   `resolveStageOverride` (:31-39); **null-guard :37 — unavailable markers → no override**.
+3. Gateway reads `analyses.model_strategy` per call (:56-61) → `runWithFallback` (model-router:204).
+   Chain built at :232-280: **stage-override > manual > strategy-assignment > autoChain** (deduped).
+4. Availability gate :292 (provider must be env-configured or hold a user token, :191-202); error
+   loop :291-389 — auth/invalid-request THROW (no silent swap, :343/:353), model-not-found,
+   context-too-large, rate-limit, server errors fall through; chain exhausted → lastError or clean
+   "No configured providers available" (:391-396).
+5. `provider.generate` (:310) → `providers/registry.createProviderInstanceWithApiKey`.
+6. Bookkeeping both sides: `recordStageAssignment` → `analyses.model_selection` (gateway:95) and
+   `recordModelExecution` (actual provider/model/tokens/fallbackCount — e.g. root-cause.ts:162).
+
+## D. Five-stage end-to-end — VERIFIED
+Task keys identical at every layer: routing `ANALYSIS_TASK_IDS` (:22-28) == config `TASK_TYPE_MAP`
+(:27-33) == /models STAGES == the 5 stage-file literals (grep 5/5). Each stage resolves its own
+override and executes through the same gateway path.
+
+## E. Free-unavailable marker at runtime — VERIFIED (never executes; engine re-picks)
+- Marker → routing:37 null → chain = strategy assignment + autoChain.
+- `analyses.model_strategy='free'` (Free passes the B-map) → engine free build
+  (strategy-selection:45-78) skips a stage ONLY when no registry-free model is on an available
+  provider (:56-62). **The engine has no stage context gate** — it can assign the 128K opencode
+  free model to the 200K evidence stage (the gate that created the marker in /models selection).
+- Runtime fallback tail is NOT free-gated: `rankModels` sorts free-first (config.ts:97), but the
+  Chutes-preferred PAID list heads autoChain whenever chutes is available (config.ts:195-217).
+  → strict-Free is enforced at selection + chain-head; NOT during runtime error-fallback
+  (engine-parity debt, scope note 4 — re-confirmed here).
+
+## F. Provider disconnect at runtime — VERIFIED
+- Env asymmetry re-confirmed: env key alone keeps a provider executable (service.ts:117-121;
+  buildAvailableProviders counts env) while UI shows Disconnected.
+- Override whose provider disconnected: routing still returns it (no credential check in routing),
+  model-router skips at :292 → next candidate runs; /api/models reconcile drops it from the UI.
+- Nothing executable → clean "No configured providers available" (:391).
+- Revoked/expired key at call time → `auth` category throws immediately (:343-351): stage
+  hard-fails rather than silently switching models (by design).
+
+## G. Manual configuration — VERIFIED, ONE DISCREPANCY (Finding 1)
+- Manual set via analysis/new `handleSaveModel:80` (selection_mode manual + provider/model);
+  runtime routing.ts:69-92: provider connected → `manualModel` heads the chain, fallback only on
+  recoverable failures.
+- **Finding 1 — intent ≠ behavior: manual + provider DISCONNECTED returns `runArgs:{providerTokens}`
+  (no manualModel) with reason "No fallback to a different model" (:77), yet runWithFallback then
+  takes the strategy+autoChain branch (model-router:251-280) and RUNS OTHER MODELS.
+  `manualFallbackOccurred` cannot fire (selected=null → gateway:84-85 false), so it is silent.**
+
+## H. Competing/dead resolvers — VERIFIED gone/contained
+- `lib/ai/model-catalog/*`, `lib/ai/orchestration/*`, `app/api/debug/selection` — deleted (globs 0).
+- Preflight (`app/api/analysis/preflight/route.ts pickForStage`) is LIVE as a modal but its tier
+  pick is display-only (body ignored — B; `selectedStrategy` state in analysis/new is write-only).
+- `/api/ai/models` still consumerless (deletion candidate, §G above).
+
+## I. Verified findings (report-only; nothing changed)
+1. **Manual+disconnected fallback discrepancy** (G) — message promises no fallback; code falls
+   back silently to the strategy chain. Decide intent, then align message or behavior.
+2. **Strict-Free not enforced in runtime fallback tail / engine context gates** (E) — known
+   parity debt (scope note 4), re-confirmed with the chutes-first autoChain detail.
+3. **Preflight tier pick cosmetic** (B/H) — wire deliberately or drop from the flow's mental model.
+4. **Chutes-preferred PAID models head autoChain** whenever chutes is connected (config.ts:195-217)
+   — affects fallback order for every non-overridden/marker stage (by design, Free-relevant).
+5. **Late enum validation**: direct PUT with an out-of-enum `selected_strategy` is rejected only at
+   analysis insert (DB CHECK → 500), not at the preference API — robustness gap, pre-existing.
+**Overall verdict: the /models → preference → analysis → task → gateway → routing → model-router →
+provider chain is INTACT and end-to-end for all five stages; every selection and actual execution
+is persisted (`user_model_preferences`, `analyses.model_strategy`, `analyses.model_selection`,
+per-attempt execution rows).** Findings 1–5 are the only deltas; none blocks the flow.
+
+---
+
+# STRICT FREE RUNTIME ENFORCEMENT — IMPLEMENTED + VALIDATED (2026-09-26)
+
+## Design (as implemented)
+
+- `strictFree = routing.selectedStrategy === 'free' && routing.selection.mode === 'auto'`
+  (LIVE preference, not `analyses.model_strategy` — because analysis starts used to reset the
+  stored strategy; see PUT fix below). Manual mode intentionally outside strict Free.
+- Enforcement boundaries: gateway (`prepareStrictFreeRun` drops paid/unknown stage overrides)
+  + `buildRunChain` (strict branch ignores autoChain/strategy assignments) + availability gate
+  at model-router:292 (unchanged). Single canonical free source = `price.isFree`
+  (`isConfirmedFreeModel`); candidates = canonical `buildAutomaticPool` + `STAGE_CONTEXT_MIN` →
+  `scoreOrderedPool` → free filter (`getFreeStageCandidates`).
+- Marker (null/null + `unavailable`) + strictFree → structured `noFreeModelError`:
+  "No free model is available for this stage (task: X) — detail. The Free strategy never falls
+  back to paid models." Chain exhaustion → "All eligible free models failed … Last error: …".
+  Auth errors still throw immediately (no paid escape). Non-strict paths byte-for-byte unchanged.
+
+## Files changed
+
+- `lib/ai/catalog/stageSelection.ts` — extracted `scoreOrderedPool()` (shared with
+  `selectForStage`); added `getFreeStageCandidates`, `isConfirmedFreeModel`,
+  `prepareStrictFreeRun` + `StrictFreeRunPlan`.
+- `lib/ai/catalog/toCatalogModel.ts` — NEW shared `ClassifiedModel → CatalogModel` mapping.
+- `app/api/models/route.ts` — uses shared mapper.
+- `lib/ai/routing.ts` — `ResolvedRouting` += `selectedStrategy`, `stageOverrideUnavailable`;
+  marker filled (auto mode only) in both return branches.
+- `lib/ai/gateway.ts` — strictFree gate; marker skips catalog; `prepareStrictFreeRun` plan;
+  passes `strategy:'free'`, `strictFree`, `freeCandidates`, `stageOverrideUnavailable`.
+- `lib/ai/model-router/index.ts` — `RunRequest` += strict-free fields; exported pure
+  `buildRunChain` (strict branch + verbatim non-strict logic); `noFreeModelError`; strict
+  end-of-loop errors; log line adds `(STRICT FREE)`.
+- `app/api/models/preference/route.ts` — **PUT now preserves stored `selected_strategy` when the
+  body omits it** (`body.selected_strategy ?? (await getModelPreference(user.id)).selected_strategy`).
+  Required: `handleSaveModel` (analysis/new) PUTs without the field, and old code reset it to
+  `'auto'` — the live row proved it (`selected_strategy:'auto'` + free overrides + evidence
+  marker, updated 06:18). Without this fix strict Free would never engage.
+
+## Validation (all recorded 2026-09-26)
+
+- `npx tsc --noEmit` → **0 errors** (with and without probe files present).
+- `npm run build` → ✓ Compiled, TypeScript pass, 16/16 pages.
+- `npm run lint` → 12 errors / 28 warnings; ALL 12 in untouched files
+  (analyses/route.ts ×4, models/page.tsx ×7, model-intelligence/index.ts ×1) — zero new
+  (baseline 15 → 12; old inline `any` mapping removed with toCatalogModel).
+- Fixture probe `scripts/probe-strict-free.ts` (temp, deleted after this record):
+  **28/28 PASS** — A1–A5 candidate pool (evidence 200K gate → free-only / [] when none;
+  first candidate === `selectForStage('free')` pick), B1–B4 canonical free check
+  (paid/unknown/missing → false), C1–C4 plan (free override kept; paid & unknown override
+  DROPPED; unknown task safe), D1–D9 chain composition (TEST1 override-first + whole strict
+  chain free + autoChain never present; TEST2 marker → structured throw, empty pool → throw;
+  TEST3 remaining candidates all free; TEST4 disconnected provider skipped, no paid
+  substitution, paid override dropped; TEST5/6 non-strict override/strategy chains unchanged;
+  TEST7 non-strict manual chain unchanged; PART6 marker without strictFree unchanged),
+  E1 global invariant (every entry of every strict chain is confirmed-free).
+- Live read-only probe on the REAL preference row + freshly built catalog:
+  discovery/root-cause/solution/patch → 4-entry chains, override first, **all opencode free
+  models**; evidence (marker) → STRUCTURED FAILURE with the exact no-free-model message;
+  `LIVE RESULT: 4 free chains (all-free: true), 1 structured unavailable`.
+- Probe files deleted after recording (scripts/ left empty); post-deletion tsc + build re-run clean.
+
+## Runtime behavior summary (strict free)
+
+- free + valid override → chain = [free override, …free candidates], autoChain/engine skipped.
+- free + marker → immediate structured stage failure (relevant-files/root-cause/evidence/
+  solution/patch all catch → `status:'failed'` + `error_message` — verified at
+  relevant-files.ts:283-291, evidence.ts, root-cause.ts, solution.ts, patch.ts).
+- free + primary failure → next free candidate only; exhaustion → structured
+  "All eligible free models failed …"; disconnect → skipped (no paid replacement);
+  auth → immediate throw. Balanced/Quality/manual → byte-for-byte unchanged chains.
+
+## Remaining issues (post-implementation)
+
+1. Existing wiped rows (`selected_strategy:'auto'` + free overrides): re-apply Free on /models
+   once; recurrence prevented by the PUT fix. Self-heal migration deliberately NOT added.
+2. Manual + disconnected (audit Finding 1) unchanged — out of scope.
+3. Auth-error short-circuit under free throws (no paid escape) — by design, documented.
+4. Strict Free overrides are not re-gated by stage context (Configure design); overflow →
+   error loop → next free candidate.
+5. Late enum validation at preference API (audit Finding 5) unchanged.
+
+---
+
+# GITHUB SESSION-EXPIRATION CONSISTENCY FIX — IMPLEMENTED + VALIDATED (2026-09-26)
+
+## PART 1 — Source of truth (audit result)
+
+- Canonical auth: Supabase session via `@supabase/ssr` (`lib/supabase/{client,server}.ts`,
+  cookie-based). `proxy.ts` middleware = route protection (`supabase.auth.getUser()`).
+- Canonical GitHub-session condition (already used by repos route:19, issues route:32,
+  dashboard:81, old SessionExpiryCheck): **session exists && `session.provider_token` present**.
+  Verified in `@supabase/auth-js` source: `provider_token` is set only in
+  `_getSessionFromURL` (OAuth sign-in); refresh (`_callRefreshToken` → `_sessionResponse`)
+  never carries it — so after a Supabase token refresh the GitHub connection is unusable and
+  the app's existing answer is "sign in again".
+- Stale UI sources (root cause): (a) Sidebar "GITHUB CONNECTED" was HARDCODED (Sidebar.tsx:88,
+  always rendered); (b) header/sidebar received `user` from one-shot page state derived from
+  `user.user_metadata`, which outlives `provider_token`; (c) no global detector — expiry was
+  handled piecemeal (/analysis/new inline card, dashboard `redirect('/')`, home-only
+  SessionExpiryCheck); (d) no auth-event subscription anywhere (nothing reacted to
+  TOKEN_REFRESHED/SIGNED_OUT).
+
+## Implementation (files changed)
+
+- NEW `lib/supabase/auth-session.ts` — single module: `isGitHubSessionValid()` (canonical
+  predicate), `invalidateGitHubSession(router)` (the ONE flow: signOut + remove
+  `analysis-selection` + `router.replace('/auth/github?error=…')`; guard: never redirects when
+  already on /auth/github; in-flight dedupe), `useGitHubAuthValidity()` hook (initial `true` to
+  avoid hydration flash; `getSession` + `onAuthStateChange`; SIGNED_OUT → false, TOKEN_REFRESHED
+  re-evaluated).
+- `components/landing/SessionExpiryCheck.tsx` — rewritten as GLOBAL detector: mounts in root
+  layout, initial check + auth-event subscription; triggers only when `session &&
+  !provider_token` (null session = signed-out, NOT expiry); SIGNED_OUT skipped (own sign-out /
+  invalidation in progress).
+- `app/layout.tsx` — mounts `<SessionExpiryCheck />` for every page; `app/page.tsx` — local
+  instance removed (was home-only).
+- `proxy.ts` — existing protection extended: protected paths + `session && !provider_token` →
+  307 `/auth/github?error=…` BEFORE page render (no stale flash). `!user` → bare
+  `/auth/github` (unchanged). No signOut in middleware (client clears on the auth page).
+- `components/layout/Sidebar.tsx` — status row gated on `useGitHubAuthValidity()`; invalid →
+  existing unauthenticated pattern ("Continue with GitHub" button, HomepageHeader style);
+  avatar/@login row only when connected + user present.
+- `components/layout/TopBar.tsx` — same gate: valid → existing avatar/dropdown/@login; invalid
+  → "Continue with GitHub" (no stale avatar/username; dropdown unmounts).
+- `components/landing/HomepageHeader.tsx` — `displayUser = authValid ? user : null` (home header
+  reacts too).
+- `app/analysis/new/page.tsx` — repos 401 and issues 401 → `invalidateGitHubSession(router)`
+  (shared flow); inline `authExpired` card + `handleReLogin` + Button import removed; effect
+  deps += `router`.
+- `app/dashboard/page.tsx` — `tokenExpired` → `/auth/github?error=…` (was `/`); `!user`
+  fallback → `/auth/github` (was `/`).
+
+## Validation (2026-09-26)
+
+- `npx tsc --noEmit` → 0 errors. `npm run build` → exit 0 (compile + TS + 16/16 pages).
+- `npm run lint` → 12 errors / 28 warnings = EXACT baseline (zero new; +2 warnings during
+  work were fixed by adding `router` deps).
+- **Live probe (temp script, deleted; temp Supabase user, deleted): 10/10 PASS** against dev
+  server with crafted cookies (`sb-<ref>-auth-token` = `base64-`+base64url(session JSON)):
+  1. no session: /dashboard → 307 /auth/github (bare) [existing behavior kept]
+  2-4. session WITHOUT provider_token: /dashboard, /analysis/new, /analysis/[id] →
+     307 /auth/github?error=Your+GitHub+session+has+expired… (TEST 3 prompt, pre-render)
+  5. same session on /auth/github → 200 (no loop, TEST 7)
+  6-7. same session on public / and /models → 200 (middleware untouched there)
+  8. session WITH provider_token: /analysis/new → 200 (TEST 1 server-side)
+  9. GitHub rejects token (api.github.com 401 from dummy token): /dashboard →
+     307 /auth/github?error=… (GitHub-API-401 detection path)
+  10. /models with valid-looking session → 200 (no false redirect)
+- Manual (browser) tests — client-side flows, documented for verification: TEST 2/4 (header +
+  sidebar clear on expiry: SessionExpiryCheck signOut → useGitHubAuthValidity false →
+  connected row/avatar replaced by Continue-with-GitHub → redirect), TEST 5 (re-auth:
+  SIGNED_IN with provider_token → hooks true + fresh server render), TEST 6 (repos/issues 404/
+  403/500/network → generic error only; code branches on `status === 401` exclusively).
+
+## Flow (as implemented)
+
+session expired (provider_token gone, incl. after token refresh)
+→ detected by: middleware (protected paths, pre-render) | SessionExpiryCheck (global, mount +
+  TOKEN_REFRESHED) | GitHub API route 401 handlers (/analysis/new) | dashboard GitHub /user 401
+→ `invalidateGitHubSession`: signOut (Supabase session only — model prefs, AI providers,
+  user data untouched) + remove `analysis-selection` + validity hook flips false (sidebar/
+  header clear instantly, same tab)
+→ `router.replace('/auth/github?error=…')` (AuthCard shows the message via its existing
+  `?error=` mechanism; no Sonner needed on the auth page)
+→ loop-safe: /auth/github never redirected (middleware doesn't protect it; client clears but
+  returns early); after signOut no session → predicates false; SIGNED_OUT never re-triggers.
+
+## Diff safety (this task)
+
+- AI model selection/routing/Free-Balanced/Quality, stage selection, provider connections,
+  pricing/catalog, runtime fallback, local LLM: NOT touched (lib/ai/* and app/api/models/*
+  diffs in the tree are the previous strict-Free task's uncommitted work).
+- No new auth library (still only @supabase/ssr + @supabase/supabase-js); OAuth flow
+  (`AuthCard`, `auth/callback`) unchanged; no UI redesign — reused `btn-bw-primary` and the
+  existing HomepageHeader unauthenticated pattern.
+- Route-protection SCOPE unchanged (same protectedPaths; /models still not middleware-
+  protected — pre-existing).
+
+## Known limitations / notes
+
+1. Client-side flows (SessionExpiryCheck redirect, sidebar/header clearing) require a real
+   browser session — verified by code-path review + build; server matrix probe-verified.
+2. GitHub-revoked token WHILE cookie still holds provider_token: dashboard server check
+   catches it → /auth/github (cookie cleared only after re-auth there) — rare edge, re-auth
+   resolves; no stale page ever renders (server redirect is pre-render).
+3. Hourly-ish expiry cadence (provider_token dropped on Supabase refresh) is the app's
+   pre-existing auth semantics — deliberately NOT redesigned per task constraints.
+4. Background analysis runners hitting GitHub 401 mid-run record stage errors (existing
+   architecture); they do not trigger global logout — navigation/middleware catches it next.

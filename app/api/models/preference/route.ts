@@ -45,11 +45,18 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: 'selection_mode must be "auto" or "manual"' }, { status: 400 });
     }
 
+    // selected_strategy omitted → keep the STORED strategy. Callers that only
+    // update mode/model (analysis/new handleSaveModel) must not reset the
+    // user's /models strategy choice — strict-Free runtime enforcement keys
+    // off selected_strategy === 'free'.
+    const selectedStrategy =
+      body.selected_strategy ?? (await getModelPreference(user.id)).selected_strategy;
+
     const result = await saveModelPreference(user.id, {
       selection_mode: body.selection_mode,
       provider: body.provider || null,
       model: body.model || null,
-      selected_strategy: body.selected_strategy || 'auto',
+      selected_strategy: selectedStrategy,
       stage_overrides: body.stage_overrides,
     });
 

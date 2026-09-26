@@ -40,6 +40,26 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // GitHub session expired: the Supabase user is still valid but the session
+  // no longer carries the GitHub provider_token (same condition the GitHub
+  // API routes answer 401 with). Redirect BEFORE the protected page renders
+  // so no stale profile ever appears, using the auth page's existing
+  // `error` message mechanism.
+  if (isProtected && user) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session && !session.provider_token) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/auth/github';
+      url.searchParams.set(
+        'error',
+        'Your GitHub session has expired. Please sign in again.'
+      );
+      return NextResponse.redirect(url);
+    }
+  }
+
   return supabaseResponse;
 }
 

@@ -6,6 +6,10 @@ import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback, RunResponse } from './model-router';
 import { resolveAnalysisRouting } from './routing';
 import { recordStageAssignment } from './analysis-selection';
+import { getOrBuildCatalog } from './model-intelligence';
+import { toCatalogModel } from './catalog/toCatalogModel';
+import { prepareStrictFreeRun } from './catalog/stageSelection';
+import type { TaskModelEntry } from './config';
 import type { ProviderName } from './providers/registry';
 import type { AICompletionRequest } from './providers/base';
 
@@ -60,6 +64,39 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     .single();
   const strategyMode = (analysis?.model_strategy || 'auto') as 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'auto';
 
+  // STRICT FREE: the user's LIVE selected strategy ('free') in auto mode is
+  // the contract gate — only confirmed-free models may execute for this
+  // analysis stage (primary, overrides, strategy picks, and every fallback
+  // hop). It reads the live preference (not the analysis-row snapshot, which
+  // is only a creation-time copy) so "selected strategy = free" is enforced
+  // exactly as the user last set it. Manual mode intentionally sits OUTSIDE
+  // strict Free: the user's explicit single model wins (existing design).
+  const strictFree = routing.selectedStrategy === 'free' && routing.selection.mode === 'auto';
+
+  let stageOverride = routing.runArgs.stageOverrides;
+  let freeCandidates: TaskModelEntry[] | undefined;
+  if (strictFree) {
+    if (routing.stageOverrideUnavailable) {
+      // Marker stage: runWithFallback fails fast with the structured
+      // no-free-model error — no catalog load, no candidate, no paid chain.
+      stageOverride = undefined;
+    } else {
+      const catalog = await getOrBuildCatalog(userId);
+      const plan = prepareStrictFreeRun(
+        catalog.models.map(toCatalogModel),
+        params.task,
+        stageOverride ?? null
+      );
+      freeCandidates = plan.freeCandidates.map((c) => ({
+        provider: c.provider as ProviderName,
+        model: c.model,
+      }));
+      stageOverride = plan.stageOverride
+        ? { provider: plan.stageOverride.provider as ProviderName, model: plan.stageOverride.model }
+        : undefined;
+    }
+  }
+
   const routed: RunResponse = await runWithFallback({
     task: params.task,
     messages: params.messages,
@@ -68,8 +105,11 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     responseFormat: params.responseFormat,
     providerTokens: routing.runArgs.providerTokens,
     manualModel: routing.runArgs.manualModel,
-    stageOverrides: routing.runArgs.stageOverrides,
-    strategy: strategyMode,
+    stageOverrides: stageOverride,
+    strategy: strictFree ? 'free' : strategyMode,
+    strictFree,
+    freeCandidates,
+    stageOverrideUnavailable: strictFree && routing.stageOverrideUnavailable,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on
