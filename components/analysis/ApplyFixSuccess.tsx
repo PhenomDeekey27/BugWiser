@@ -60,8 +60,8 @@ export function ApplyFixSuccess({
               Files Changed
             </span>
             <div className="text-sm font-mono text-bw-peach-light">
-              {filesChanged.map((f) => (
-                <div key={f}>{f}</div>
+              {filesChanged.map((f, fIdx) => (
+                <div key={`${fIdx}-${f}`}>{f}</div>
               ))}
             </div>
           </div>

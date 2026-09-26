@@ -154,6 +154,60 @@ Goal: fix 5 UI/UX bugs without changing model selection algorithms, provider log
 - `npm run lint`: Pre-existing errors only; no new lint errors introduced ✓
 - Zero `bg-bw-surface` or `border-bw-surface` references remain in any code file ✓
 
+### Round 2 Fixes (Sept 25, 2026) — Dark Mode, Responsiveness, Session
+
+**Issue A: #87898a gray backgrounds in dark mode**
+- **Root cause:** `@theme inline` inlined literal light values (e.g. `--color-surface: #FFFFFF`) into utilities. `bg-surface/50` generated `color-mix(in oklab, #FFFFFF 50%, transparent)` — always white-translucent regardless of theme. Over dark `#0B0D0F` background this rendered ≈ `#87898a`.
+- **Fix:** Changed all surface + brand color definitions in `@theme inline` from literal hex values to dynamic `var(--bw-*)` references (e.g. `--color-surface: var(--bw-surface)`). Since `--bw-surface` is overridden in `.dark`, opacity modifiers like `bg-surface/50` now resolve correctly per theme. Also fixed `--color-bw-*`, `--color-on-surface*`, `--color-outline*`, `--color-primary-*`, `--color-secondary-*`, `--color-tertiary*`, `--color-error-*`.
+- **Affects:** `bg-surface/30|50|60|70|80`, `text-bw-peach/50|60|70|80`, and all other opacity-modified theme colors across the app.
+
+**Issue B: Tip section awful colors in dark mode**
+- Changed `bg-surface/50 border border-border` → `bg-primary-container/5 border border-primary-container/20` (subtle warm brand-tinted callout that works in both themes).
+
+**Issue C: Mobile dropdown behind hero text + dark mode dropdown looks bad**
+- Header z-index: `z-20` → `z-50` (dropdown now stacks above hero content on mobile).
+- Dropdown background: `bg-bw-surface border border-border` (invalid class = transparent) → `glass-strong` (proper glassmorphism: `rgba(255,255,255,0.85)` + blur in light, `rgba(33,30,26,0.78)` + blur in dark).
+
+**Issue D: Session expired but profile pic still shows in header**
+- `SessionExpiryCheck` now calls `supabase.auth.signOut()` + `router.refresh()` immediately on detecting expired GitHub session. This clears the Supabase session so the server-rendered header re-renders with the "Continue with GitHub" button instead of the avatar. Toast with "Sign in" action preserved.
+
+**Issue E: Choose Your Model Strategy modal not responsive on mobile**
+- Modal wrapper: added `p-4` outer padding, `max-h-[90vh] overflow-y-auto` inner scroll, responsive padding `p-4 sm:p-6`.
+- Strategy cards: added `min-w-0` + `shrink-0` + `truncate` on provider/model spans so long model IDs truncate instead of overflowing. Reason text gets `break-words`.
+- Footer buttons: `flex gap-3 justify-end` → `flex flex-col-reverse sm:flex-row gap-3 sm:justify-end` (stack on mobile, inline on desktop).
+
+**Issue F: "No free model" badge overlaps other columns**
+- **Root cause:** Grid columns totaled 14 in a `grid-cols-12` grid (4+4+3+1+2), causing Status and Action cells to overflow into implicit rows/overlap.
+- **Fix:** Rebalanced to exactly 12: Stage(3) + Model(3) + Provider(2) + Status(2) + Action(2). Status now has adequate width for "No free model" badge. Added `min-w-0` to status cell.
+
+### Validation (Round 2)
+- `npx next build`: ✓ Compiled successfully
+- `npx eslint`: Pre-existing errors only; no new errors ✓
+- Zero `bg-bw-surface` references remain ✓
+
+### Round 3 Fixes (Sept 26, 2026) — Duplicate React Keys
+
+**Issue:** Console warnings: "Encountered two children with the same key, `gpt-5.4`" — 30+ duplicate-key warnings from model lists and other data-driven arrays.
+
+**Root cause:** Same `modelId` appears from multiple providers (e.g. `gpt-5.4` from both provider A and provider B), so `key={model.modelId}` collided. Similarly, string arrays (labels, languages, tags, capabilities, file paths) could contain duplicate values from API data.
+
+**Fixes applied (19 key sites across 11 files):**
+1. `app/models/page.tsx` (6 sites): `key={model.modelId}` → `key={`${model.providerId}/${model.modelId}`}` — composite provider+model key, the main gpt-5.4 fix
+2. `components/analysis/ModelTierBadge.tsx`: `key={model}` → `key={`${idx}-${model}`}`
+3. `components/models/ModelCard.tsx` (2 sites): tags + capabilities → `${tagIdx}-${tag}`, `${capIdx}-${c}`
+4. `components/analysis/AnalysisOverview.tsx` (3 sites): labels, languages, sourceDirectories → indexed composite keys
+5. `components/analysis/IssueSelector.tsx`: labels → `${labelIdx}-${label}`
+6. `components/analysis/RootCausePanel.tsx`: affectedFiles → `${fileIdx}-${file}`
+7. `components/analysis/ApplyFixSuccess.tsx`: filesChanged → `${fIdx}-${f}`
+8. `components/analysis/ApplyFixModal.tsx`: patch files → `${fIdx}-${f.path}`
+9. `components/analysis/PatchViewer.tsx`: patch files → `${fileIdx}-${file.path}`
+10. `components/analysis/RelevantFilesPanel.tsx`: files → `${fileIdx}-${file.path}`
+11. `components/analysis/AnalysisStepper.tsx`: stages → `${index}-${stage.stage}`
+
+**Keys verified safe (no fix needed):** `stage.id`, `providerId`, `issue.id`, `repo.id`, `analysis.id`, `strategy.tier`, `setup.id`, `stat.label`, `item.href`, `step.title`, `permission`, `tab`, STAGE_ORDER values, tree `node.path`/`child.path` (structurally unique in tree), `dot.x-dot.y` coordinates.
+
+**Validation:** `npx next build` ✓; `npx eslint` on changed files: 0 errors ✓
+
 ### Diff Safety Confirmation
 - ✅ **Model selection unchanged:** Free/Balanced/Quality formulas, `stageSelection.ts`, `cost.ts`, `stageTokenProfiles.ts` untouched
 - ✅ **Provider logic unchanged:** `live.ts`, `normalizers.ts`, `model-intelligence/index.ts` untouched

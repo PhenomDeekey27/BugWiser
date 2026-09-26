@@ -167,7 +167,7 @@ export function ModelTierPipeline({
 
           return (
             <div
-              key={model}
+              key={`${idx}-${model}`}
               className={cn(
                 'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-mono transition-all duration-300',
                 isCurrent && 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_12px_rgba(34,197,94,0.15)]',

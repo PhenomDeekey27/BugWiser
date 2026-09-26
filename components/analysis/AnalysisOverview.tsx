@@ -42,8 +42,8 @@ export function AnalysisOverview({
           </div>
           {issue.labels.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-2">
-              {issue.labels.map((label) => (
-                <Badge key={label} variant="secondary" className="text-[10px]">
+              {issue.labels.map((label, labelIdx) => (
+                <Badge key={`${labelIdx}-${label}`} variant="secondary" className="text-[10px]">
                   {label}
                 </Badge>
               ))}
@@ -94,8 +94,8 @@ export function AnalysisOverview({
             <div className="mt-3">
               <p className="text-[10px] font-mono text-bw-peach mb-1">Languages</p>
               <div className="flex flex-wrap gap-1">
-                {fingerprint.languages.slice(0, 8).map((lang) => (
-                  <Badge key={lang} variant="outline" className="text-[10px]">
+                {fingerprint.languages.slice(0, 8).map((lang, langIdx) => (
+                  <Badge key={`${langIdx}-${lang}`} variant="outline" className="text-[10px]">
                     {lang}
                   </Badge>
                 ))}
@@ -107,8 +107,8 @@ export function AnalysisOverview({
             <div className="mt-3">
               <p className="text-[10px] font-mono text-bw-peach mb-1">Source Directories</p>
               <div className="flex flex-wrap gap-1">
-                {fingerprint.sourceDirectories.map((dir) => (
-                  <span key={dir} className="text-[10px] font-mono text-primary-default">
+                {fingerprint.sourceDirectories.map((dir, dirIdx) => (
+                  <span key={`${dirIdx}-${dir}`} className="text-[10px] font-mono text-primary-default">
                     {dir}/
                   </span>
                 ))}

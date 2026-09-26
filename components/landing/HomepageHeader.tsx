@@ -40,7 +40,7 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
   };
 
   return (
-    <header className="flex items-center justify-between px-5 md:px-8 py-3.5 bg-bw-surface/60 backdrop-blur-lg border-b border-border relative z-20">
+    <header className="flex items-center justify-between px-5 md:px-8 py-3.5 bg-bw-surface/60 backdrop-blur-lg border-b border-border relative z-50">
       <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
         <BugWiserLogo className="h-8 w-auto" />
       </Link>
@@ -75,8 +75,8 @@ className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden
 
               {dropdownOpen && (
 <div
-className="absolute right-0 top-full mt-2 w-60 rounded-xl shadow-xl z-50 overflow-hidden bg-bw-surface border border-border"
-                 >
+                   className="absolute right-0 top-full mt-2 w-60 rounded-xl shadow-xl z-50 overflow-hidden glass-strong"
+                >
                   <div className="px-4 py-3.5 border-b border-border">
                     <p className="text-sm font-semibold text-bw-peach-light">{user.name || user.login}</p>
                     <p className="text-xs font-mono text-bw-dusty-rose mt-0.5">@{user.login}</p>

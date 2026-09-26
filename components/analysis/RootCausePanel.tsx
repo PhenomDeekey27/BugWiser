@@ -37,9 +37,9 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
             Affected Files
           </h3>
           <div className="space-y-1">
-            {rootCause.affectedFiles.map((file) => (
+            {rootCause.affectedFiles.map((file, fileIdx) => (
               <div
-                key={file}
+                key={`${fileIdx}-${file}`}
                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface"
               >
                 <span className="text-sm font-mono text-primary-default">

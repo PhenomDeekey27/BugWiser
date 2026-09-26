@@ -166,13 +166,13 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
                       </Badge>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mb-1.5 font-mono">
+                  <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mb-1.5 font-mono min-w-0">
                     {strategy.tier === 'auto' && strategy.perStage ? (
-                      <span>{[...new Set(strategy.perStage.map((s) => s.provider))].join(' + ')} — {strategy.perStage.length} stages, {[...new Set(strategy.perStage.map((s) => `${s.provider}/${s.model}`))].length} models</span>
+                      <span className="truncate">{[...new Set(strategy.perStage.map((s) => s.provider))].join(' + ')} — {strategy.perStage.length} stages, {[...new Set(strategy.perStage.map((s) => `${s.provider}/${s.model}`))].length} models</span>
                     ) : (
                       <>
-                        <span>{strategy.provider}</span>
-                        <span className="text-gray-300 dark:text-gray-600">/</span>
+                        <span className="shrink-0">{strategy.provider}</span>
+                        <span className="text-gray-300 dark:text-gray-600 shrink-0">/</span>
                         <span className="truncate">{strategy.model}</span>
                       </>
                     )}
@@ -187,7 +187,7 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
                       {SPEED_LABELS[strategy.speed]}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5">{strategy.reason}</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1.5 break-words">{strategy.reason}</p>
                 </div>
               </div>
             </button>
@@ -238,7 +238,7 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
         </div>
       )}
 
-      <div className="flex gap-3 justify-end">
+      <div className="flex flex-col-reverse sm:flex-row gap-3 sm:justify-end">
         <Button
           variant="outline"
           onClick={onCancel}

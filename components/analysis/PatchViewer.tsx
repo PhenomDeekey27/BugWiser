@@ -252,8 +252,8 @@ export function PatchViewer({
       </div>
 
       <div className="space-y-4">
-        {patch.files.map((file) => (
-          <FileCard key={file.path} file={file} patchSummary={patch.summary} />
+        {patch.files.map((file, fileIdx) => (
+          <FileCard key={`${fileIdx}-${file.path}`} file={file} patchSummary={patch.summary} />
         ))}
       </div>
 

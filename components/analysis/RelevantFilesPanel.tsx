@@ -12,9 +12,9 @@ export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
       </h2>
 
       <div className="space-y-2">
-        {files.map((file) => (
+        {files.map((file, fileIdx) => (
           <div
-            key={file.path}
+            key={`${fileIdx}-${file.path}`}
             className="p-3 rounded-lg bg-surface border border-border"
           >
             <div className="flex items-center justify-between mb-1">

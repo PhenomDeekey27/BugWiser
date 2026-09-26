@@ -47,56 +47,56 @@
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
 
-  /* BugWiser Brand Colors — Light Theme */
-  --color-bw-burgundy: #8F2428;
-  --color-bw-burgundy-dark: #6E1B1E;
-  --color-bw-wine: #A63A3E;
-  --color-bw-terracotta: #B85C4A;
-  --color-bw-dusty-rose: #8A7D76;
-  --color-bw-peach: #625D58;
-  --color-bw-peach-light: #171514;
-  --color-bw-cream: #FAF8F5;
+  /* BugWiser Brand Colors — reference dynamic vars so opacity modifiers work in dark mode */
+  --color-bw-burgundy: var(--bw-burgundy);
+  --color-bw-burgundy-dark: var(--bw-burgundy-dark);
+  --color-bw-wine: var(--bw-wine);
+  --color-bw-terracotta: var(--bw-terracotta);
+  --color-bw-dusty-rose: var(--bw-dusty-rose);
+  --color-bw-peach: var(--bw-peach);
+  --color-bw-peach-light: var(--bw-peach-light);
+  --color-bw-cream: var(--bw-cream);
 
-  /* Surfaces — Light Theme */
-  --color-surface: #FFFFFF;
-  --color-surface-dim: #F5F0EB;
-  --color-surface-bright: #FAF8F5;
-  --color-surface-container-lowest: #FFFFFF;
-  --color-surface-container-low: #FAF8F5;
-  --color-surface-container: #F5F0EB;
-  --color-surface-container-high: #EDE6DF;
-  --color-surface-container-highest: #E8E0DA;
+  /* Surfaces — reference dynamic vars so opacity modifiers work in dark mode */
+  --color-surface: var(--bw-surface);
+  --color-surface-dim: var(--bw-surface-dim);
+  --color-surface-bright: var(--bw-surface-bright);
+  --color-surface-container-lowest: var(--bw-surface-container-lowest);
+  --color-surface-container-low: var(--bw-surface-container-low);
+  --color-surface-container: var(--bw-surface-container);
+  --color-surface-container-high: var(--bw-surface-container-high);
+  --color-surface-container-highest: var(--bw-surface-container-highest);
 
   /* Text on light surfaces */
-  --color-on-surface: #171514;
-  --color-on-surface-variant: #625D58;
-  --color-on-surface-muted: #8A7D76;
+  --color-on-surface: var(--bw-on-surface);
+  --color-on-surface-variant: var(--bw-on-surface-variant);
+  --color-on-surface-muted: var(--bw-on-surface-muted);
 
   /* Text on dark surfaces */
   --color-on-light: #FAF8F5;
   --color-on-light-muted: #E8E0DA;
 
-  /* Borders — Light Theme */
-  --color-outline: #D4C8BF;
-  --color-outline-variant: #E8E0DA;
+  /* Borders — reference dynamic vars */
+  --color-outline: var(--bw-outline);
+  --color-outline-variant: var(--bw-outline-variant);
 
   /* Primary — BugWiser Deep Crimson */
-  --color-primary-default: #8F2428;
-  --color-on-primary: #FFFFFF;
-  --color-primary-container: #E85030;
-  --color-on-primary-container: #FFFFFF;
+  --color-primary-default: var(--bw-primary-default);
+  --color-on-primary: var(--bw-on-primary);
+  --color-primary-container: var(--bw-primary-container);
+  --color-on-primary-container: var(--bw-on-primary-container);
 
   /* Secondary */
-  --color-secondary-default: #625D58;
-  --color-secondary-container: #EDE6DF;
+  --color-secondary-default: var(--bw-secondary-default);
+  --color-secondary-container: var(--bw-secondary-container);
 
   /* Tertiary */
-  --color-tertiary: #8A7D76;
-  --color-tertiary-container: #E8E0DA;
+  --color-tertiary: var(--bw-tertiary);
+  --color-tertiary-container: var(--bw-tertiary-container);
 
   /* Error */
-  --color-error-default: #B3261E;
-  --color-error-container: #F9DEDC;
+  --color-error-default: var(--bw-error-default);
+  --color-error-container: var(--bw-error-container);
 }
 
 :root {

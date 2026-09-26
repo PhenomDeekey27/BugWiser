@@ -330,8 +330,8 @@ export default function NewAnalysisPage() {
         )}
 
         {showPreflight && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="w-full max-w-lg mx-4 p-6 rounded-xl bg-surface border border-border shadow-2xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6 rounded-xl bg-surface border border-border shadow-2xl">
               <ModelPreflight
                 onSelect={handlePreflightSelect}
                 onCancel={() => {

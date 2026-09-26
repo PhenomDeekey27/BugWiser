@@ -120,10 +120,10 @@ export function ModelCard({
       </div>
 
       <div className="flex flex-wrap gap-1.5">
-        {tags.slice(0, 4).map((tag) => {
+        {tags.slice(0, 4).map((tag, tagIdx) => {
           const b = badgeForTag(tag);
           return (
-            <Badge key={tag} variant={b.variant}>
+            <Badge key={`${tagIdx}-${tag}`} variant={b.variant}>
               {b.label}
             </Badge>
           );
@@ -132,8 +132,8 @@ export function ModelCard({
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-bw-peach">
         <span className="font-mono">{formatContext(model.contextWindow)} context</span>
-        {(model.capabilities || []).slice(0, 3).map((c) => CAPABILITY_ICONS[c] || c).filter(Boolean).map((c) => (
-          <span key={c}>{c}</span>
+        {(model.capabilities || []).slice(0, 3).map((c) => CAPABILITY_ICONS[c] || c).filter(Boolean).map((c, capIdx) => (
+          <span key={`${capIdx}-${c}`}>{c}</span>
         ))}
       </div>
 

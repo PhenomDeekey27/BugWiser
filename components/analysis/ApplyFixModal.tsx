@@ -112,8 +112,8 @@ export function ApplyFixModal({
               Files
             </span>
             <div className="text-sm font-mono text-bw-peach-light">
-              {patch.files.map((f) => (
-                <div key={f.path} className="flex items-center gap-1">
+              {patch.files.map((f, fIdx) => (
+                <div key={`${fIdx}-${f.path}`} className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />
                   <span>{f.path}</span>
                 </div>

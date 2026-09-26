@@ -71,8 +71,8 @@ export function IssueSelector({
                   #{issue.number}
                 </span>
                 <div className="flex gap-1">
-                  {issue.labels.slice(0, 2).map((label) => (
-                    <Badge key={label} variant="secondary" className="text-xs font-mono">
+                  {issue.labels.slice(0, 2).map((label, labelIdx) => (
+                    <Badge key={`${labelIdx}-${label}`} variant="secondary" className="text-xs font-mono">
                       {label}
                     </Badge>
                   ))}

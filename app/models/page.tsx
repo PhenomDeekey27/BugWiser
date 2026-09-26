@@ -363,13 +363,13 @@ export default function ModelsPage() {
 
                <div className="overflow-x-auto -mx-1 sm:-mx-2 lg:-mx-4">
                  <div className="bg-surface border border-border rounded-xl min-w-max sm:min-w-0">
-                   <div className="grid grid-cols-12 gap-2 p-3 text-[10px] lg:text-xs font-semibold text-bw-peach-light border-b border-border">
-                     <div className="col-span-4">Stage</div>
-                     <div className="col-span-4">Current Model</div>
-                     <div className="col-span-3">Provider</div>
-                     <div className="col-span-1 text-center">Status</div>
-                     <div className="col-span-2 text-center">Action</div>
-                   </div>
+<div className="grid grid-cols-12 gap-2 p-3 text-[10px] lg:text-xs font-semibold text-bw-peach-light border-b border-border">
+                      <div className="col-span-3">Stage</div>
+                      <div className="col-span-3">Current Model</div>
+                      <div className="col-span-2">Provider</div>
+                      <div className="col-span-2 text-center">Status</div>
+                      <div className="col-span-2 text-center">Action</div>
+                    </div>
                    <div className="divide-y divide-border">
                      {STAGES.map((stage) => {
                        const sm = stageModels[stage.id];
@@ -431,31 +431,31 @@ export default function ModelsPage() {
 
                        return (
                          <div key={stage.id} className="p-3 lg:p-4 hover:bg-surface-dim transition-colors">
-                           <div className="grid grid-cols-12 gap-2 lg:gap-4 items-center">
-                             <div className="col-span-4 flex items-center gap-2 min-w-0">
-                               <stage.icon className="h-3.5 w-3.5 lg:h-4 lg:w-4 text-bw-peach/80 shrink-0" aria-hidden="true" />
-                               <span className="text-sm font-medium text-bw-peach-light truncate">{stage.label}</span>
-                               {sm.isOverride && !sm.unavailable && (
-                                 <Badge variant="outline" className="text-[10px] text-blue-500 border-blue-500 whitespace-nowrap shrink-0">
-                                   Custom Override
-                                 </Badge>
-                               )}
-                             </div>
-                             <div className="col-span-4 min-w-0">
-                               <div className="text-sm text-bw-peach-light truncate text-xs lg:text-sm">
-                                 {getModelDisplay()}
-                               </div>
-                               <div className="text-[10px] lg:text-xs text-bw-peach/60 mt-0.5 truncate">
-                                 {modelSubline}
-                               </div>
-                             </div>
-                             <div className="col-span-3 text-[10px] lg:text-xs text-bw-peach truncate">
-                               {getProviderDisplay()}
-                             </div>
-                             <div className="col-span-1 flex justify-center">
-                               <Badge className={status.className}>{status.text}</Badge>
-                             </div>
-                             <div className="col-span-2">
+<div className="grid grid-cols-12 gap-2 lg:gap-4 items-center">
+                              <div className="col-span-3 flex items-center gap-2 min-w-0">
+                                <stage.icon className="h-3.5 w-3.5 lg:h-4 lg:w-4 text-bw-peach/80 shrink-0" aria-hidden="true" />
+                                <span className="text-sm font-medium text-bw-peach-light truncate">{stage.label}</span>
+                                {sm.isOverride && !sm.unavailable && (
+                                  <Badge variant="outline" className="text-[10px] text-blue-500 border-blue-500 whitespace-nowrap shrink-0">
+                                    Custom Override
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="col-span-3 min-w-0">
+                                <div className="text-sm text-bw-peach-light truncate text-xs lg:text-sm">
+                                  {getModelDisplay()}
+                                </div>
+                                <div className="text-[10px] lg:text-xs text-bw-peach/60 mt-0.5 truncate">
+                                  {modelSubline}
+                                </div>
+                              </div>
+                              <div className="col-span-2 text-[10px] lg:text-xs text-bw-peach truncate">
+                                {getProviderDisplay()}
+                              </div>
+                              <div className="col-span-2 flex justify-center min-w-0">
+                                <Badge className={status.className}>{status.text}</Badge>
+                              </div>
+                              <div className="col-span-2">
                                <Button
                                  variant="outline"
                                  size="sm"
@@ -480,11 +480,11 @@ export default function ModelsPage() {
                  </div>
                </div>
 
-               <div className="mt-3 lg:mt-4 p-3 bg-surface/50 border border-border rounded-lg">
-                 <p className="text-xs text-bw-peach">
-                   <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Preference" below.
-                 </p>
-               </div>
+<div className="mt-3 lg:mt-4 p-3 bg-primary-container/5 border border-primary-container/20 rounded-lg">
+                  <p className="text-xs text-bw-peach">
+                    <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Preference" below.
+                  </p>
+                </div>
              </section>
 
             <section>
@@ -707,7 +707,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                   {recommendedModels.map((model) => {
                     const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                     return (
-                       <button key={model.modelId} onClick={() => {
+                       <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                          setLocalProvider(model.providerId);
                          setLocalModel(model.modelId);
                          setLocalReason('Best value model');
@@ -730,7 +730,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <div className="space-y-2">
                   {freeModels.map((model) => {
                     return (
-                       <button key={model.modelId} onClick={() => {
+                       <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                          setLocalProvider(model.providerId);
                          setLocalModel(model.modelId);
                          setLocalReason('Free model');
@@ -753,7 +753,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <div className="space-y-2">
                   {paidModels.map((model) => {
                     return (
-                       <button key={model.modelId} onClick={() => {
+                       <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                          setLocalProvider(model.providerId);
                          setLocalModel(model.modelId);
                          setLocalReason('Paid model');
@@ -793,7 +793,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                       {recommendedModels.map((model) => {
                         const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                         return (
-                           <button key={model.modelId} onClick={() => {
+                           <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                              setLocalProvider(model.providerId);
                              setLocalModel(model.modelId);
                              setLocalReason('Best value model');
@@ -816,7 +816,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                      <div className="space-y-2">
                        {freeModels.map((model) => {
                          return (
-                           <button key={model.modelId} onClick={() => {
+                           <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                              setLocalProvider(model.providerId);
                              setLocalModel(model.modelId);
                              setLocalReason('Free model');
@@ -839,7 +839,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                      <div className="space-y-2">
                        {paidModels.map((model) => {
                          return (
-                           <button key={model.modelId} onClick={() => {
+                           <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                              setLocalProvider(model.providerId);
                              setLocalModel(model.modelId);
                              setLocalReason('Paid model');

@@ -17,7 +17,7 @@ export function AnalysisStepper({ stages, onStageClick }: AnalysisStepperProps) 
         const isClickable = stage.status === 'completed' && onStageClick;
 
         return (
-          <div key={stage.stage} className="relative">
+          <div key={`${index}-${stage.stage}`} className="relative">
             <button
               onClick={isClickable ? () => onStageClick(stage) : undefined}
               disabled={!isClickable}
