@@ -37,7 +37,6 @@ export default function NewAnalysisPage() {
   const [authExpired, setAuthExpired] = useState(false);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [showPreflight, setShowPreflight] = useState(false);
-  const [selectedStrategy, setSelectedStrategy] = useState<PreflightStrategy | null>(null);
 
   const [providers, setProviders] = useState<CatalogProvider[]>([]);
   const [models, setModels] = useState<CatalogModel[]>([]);
@@ -181,7 +180,6 @@ export default function NewAnalysisPage() {
   };
 
   const handlePreflightSelect = async (strategy: PreflightStrategy) => {
-    setSelectedStrategy(strategy);
     setShowPreflight(false);
     await startAnalysisWithStrategy(strategy);
   };
@@ -266,7 +264,7 @@ export default function NewAnalysisPage() {
         </h1>
 
         {authExpired ? (
-          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-bw-surface border border-border">
+          <div className="flex flex-col items-center justify-center py-16 rounded-lg bg-surface border border-border">
             <p className="text-sm text-bw-peach mb-4 text-center">
               Your session has expired. Please sign in again to access your repositories.
             </p>
@@ -299,11 +297,11 @@ export default function NewAnalysisPage() {
                   error={issuesError}
                 />
               ) : (
-                <div className="flex items-center justify-center h-64 rounded-lg bg-bw-surface border border-border">
-                  <p className="text-sm text-bw-peach">
-                    Select a repository first
-                  </p>
-                </div>
+<div className="flex items-center justify-center h-64 rounded-lg bg-surface border border-border">
+                   <p className="text-sm text-bw-peach">
+                     Select a repository first
+                   </p>
+                 </div>
               )}
             </div>
           </div>
@@ -333,7 +331,7 @@ export default function NewAnalysisPage() {
 
         {showPreflight && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-            <div className="w-full max-w-lg mx-4 p-6 rounded-xl bg-bw-surface border border-border shadow-2xl">
+            <div className="w-full max-w-lg mx-4 p-6 rounded-xl bg-surface border border-border shadow-2xl">
               <ModelPreflight
                 onSelect={handlePreflightSelect}
                 onCancel={() => {

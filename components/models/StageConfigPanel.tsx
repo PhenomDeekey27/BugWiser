@@ -23,8 +23,8 @@ interface StageConfigPanelProps {
 export function StageConfigPanel({ selected, pending, disabled = false, onSelect }: StageConfigPanelProps) {
   return (
     <section>
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-2xl font-semibold text-bw-peach-light">BugWiser Model Setup</h2>
+<div className="flex items-center justify-between mb-2">
+         <h2 className="text-xl lg:text-2xl font-semibold text-bw-peach-light">BugWiser Model Setup</h2>
         {selected && (
           <Badge variant="outline" className="text-xs text-bw-peach">
             {SETUP_TITLES[selected]} selected
@@ -36,26 +36,26 @@ export function StageConfigPanel({ selected, pending, disabled = false, onSelect
         individual stages below.
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {SETUP_META.map((setup) => {
-          const isSelected = selected === setup.id;
-          const isPending = pending === setup.id;
-          const Icon = setup.icon;
-          return (
-            <div
-              key={setup.id}
-              className={`p-5 rounded-xl border bg-bw-surface/50 flex flex-col transition-colors ${
-                isSelected ? 'border-primary-container/60' : 'border-bw-surface hover:border-bw-surface-bright/60'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Icon className="h-4 w-4 text-bw-peach/80" aria-hidden="true" />
-                  <h3 className="text-base font-semibold text-bw-peach-light">{SETUP_TITLES[setup.id]}</h3>
-                </div>
-                {isSelected && <Badge className="text-xs text-green-500 bg-green-500/10 border-green-500">Selected</Badge>}
-              </div>
-              <p className="text-xs text-bw-peach mt-2 flex-1">{setup.description}</p>
+               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+         {SETUP_META.map((setup) => {
+           const isSelected = selected === setup.id;
+           const isPending = pending === setup.id;
+           const Icon = setup.icon;
+           return (
+             <div
+               key={setup.id}
+               className={`p-4 sm:p-5 rounded-xl border border-border bg-surface flex flex-col transition-colors ${
+                 isSelected ? 'border-primary-container/60' : 'hover:border-outline hover:bg-surface-dim'
+               }`}
+             >
+               <div className="flex items-center justify-between">
+                 <div className="flex items-center gap-2">
+                   <Icon className="h-4 w-4 text-bw-peach/80 shrink-0" aria-hidden="true" />
+                   <h3 className="text-sm sm:text-base font-semibold text-bw-peach-light">{SETUP_TITLES[setup.id]}</h3>
+                 </div>
+                 {isSelected && <Badge className="text-[10px] sm:text-xs text-green-500 bg-green-500/10 border-green-500">Selected</Badge>}
+               </div>
+               <p className="text-xs sm:text-sm text-bw-peach mt-2 flex-1">{setup.description}</p>
               <Button
                 size="sm"
                 variant={isSelected ? 'default' : 'outline'}

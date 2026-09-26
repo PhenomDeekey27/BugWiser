@@ -40,26 +40,6 @@ const STAGES = [
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; /** Strict Free: no confirmed-free model available for this stage. */ unavailable?: boolean; };
 
-type LibraryFilter = 'all' | 'free' | 'paid' | 'coding' | 'reasoning' | 'long_context' | 'fast';
-
-const LIBRARY_FILTERS: { id: LibraryFilter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'free', label: 'Free' },
-  { id: 'paid', label: 'Paid' },
-  { id: 'coding', label: 'Coding' },
-  { id: 'reasoning', label: 'Reasoning' },
-  { id: 'long_context', label: 'Long Context' },
-  { id: 'fast', label: 'Fast' },
-];
-
-const CAPABILITY_LABELS: Record<string, string> = {
-  coding: 'Coding',
-  reasoning: 'Reasoning',
-  vision: 'Vision',
-  tool_calling: 'Tool Calling',
-  structured_output: 'Structured Output',
-};
-
 export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
@@ -82,8 +62,6 @@ export default function ModelsPage() {
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
   const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
   const [applyingSetup, setApplyingSetup] = useState<SetupChoice | null>(null);
-  const [filter, setFilter] = useState<LibraryFilter>('all');
-  const [search, setSearch] = useState('');
 
   const connectedProviders = useMemo(() => providers.filter((p) => p.status === 'connected'), [providers]);
   const connectedProviderIds = useMemo(() => new Set(connectedProviders.map((p) => p.providerId)), [connectedProviders]);
@@ -278,25 +256,6 @@ export default function ModelsPage() {
     }
   };
 
-  const libraryModels = useMemo(() => {
-    let list = libraryBaseModels;
-    if (filter === 'free') list = list.filter((m) => m.price.isFree);
-    else if (filter === 'paid') list = list.filter((m) => !m.price.isFree);
-    else if (filter === 'coding') list = list.filter((m) => m.capabilities.includes('coding'));
-    else if (filter === 'reasoning') list = list.filter((m) => m.capabilities.includes('reasoning'));
-    else if (filter === 'long_context') list = list.filter((m) => m.contextWindow >= 100000);
-    else if (filter === 'fast') list = list.filter((m) => m.scores.speed >= 60);
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((m) =>
-        m.displayName.toLowerCase().includes(q) ||
-        m.modelId.toLowerCase().includes(q) ||
-        m.providerId.toLowerCase().includes(q)
-      );
-    }
-    return [...list].sort((a, b) => b.valueScore - a.valueScore);
-  }, [libraryBaseModels, filter, search]);
-
   const getStageCostEstimate = (model: CatalogModel | null, stageId: string): string => {
     if (!model) return 'Unknown';
     const label = formatCostUsd(stageCostEstimateUsd(model, stageId));
@@ -363,11 +322,11 @@ export default function ModelsPage() {
 
   return (
     <AppShell user={user} gradient="dashboard">
-      <div className="p-6 lg:p-8 max-w-4xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-bw-peach-light mb-2">AI Models</h1>
-          <p className="text-bw-peach">Connect providers, choose a model setup, and configure which model handles each bug-fixing stage.</p>
-        </div>
+       <div className="p-4 lg:p-8 max-w-4xl mx-auto w-full">
+         <div className="mb-6 lg:mb-8">
+           <h1 className="text-2xl lg:text-3xl font-bold text-bw-peach-light mb-2">AI Models</h1>
+           <p className="text-bw-peach text-sm lg:text-base">Connect providers, choose a model setup, and configure which model handles each bug-fixing stage.</p>
+         </div>
 
         {error && (
           <div className="mb-6 p-4 rounded-lg border border-error-container bg-error-container/20 text-sm text-error-default">{error}</div>
@@ -396,137 +355,137 @@ export default function ModelsPage() {
               onSelect={handleSetupSelect}
             />
 
-            <section>
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-semibold text-bw-peach-light">Model Configuration</h2>
-                <Badge variant="outline" className="text-xs text-bw-peach">Compact View</Badge>
-              </div>
+             <section>
+               <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
+                 <h2 className="text-xl lg:text-2xl font-semibold text-bw-peach-light">Model Configuration</h2>
+                 <Badge variant="outline" className="text-xs text-bw-peach w-fit">Compact View</Badge>
+               </div>
 
-              <div className="overflow-x-auto">
-                <div className="bg-bw-surface/50 border border-bw-surface rounded-xl">
-                  <div className="grid grid-cols-12 gap-4 p-4 text-xs font-semibold text-bw-peach-light border-b border-bw-surface">
-                    <div className="col-span-4">Stage</div>
-                    <div className="col-span-4">Current Model</div>
-                    <div className="col-span-3">Provider</div>
-                    <div className="col-span-1 text-center">Status</div>
-                    <div className="col-span-2 text-center">Action</div>
-                  </div>
-                  <div className="divide-y divide-bw-surface">
-                    {STAGES.map((stage) => {
-                      const sm = stageModels[stage.id];
-                      const selectedProvider = sm?.selectedProvider || '';
-                      const providerModels = getSelectedProviderModels(selectedProvider);
-                      const configuredModel = getConfiguredStageModel(sm);
-                      const bestModel = configuredModel || getBestModelForStage(sm);
-                      const stageCost = getStageCostEstimate(configuredModel, stage.id);
-                      const capability = configuredModel ? getStageCapability(configuredModel) : 'unknown';
-                      const modelSubline = sm?.unavailable
-                        ? 'Connect a provider offering a free model for this stage, or configure it manually.'
-                        : configuredModel
-                          ? `${stageCost} / analysis · ${capability}`
-                          : 'Not configured';
+               <div className="overflow-x-auto -mx-1 sm:-mx-2 lg:-mx-4">
+                 <div className="bg-surface border border-border rounded-xl min-w-max sm:min-w-0">
+                   <div className="grid grid-cols-12 gap-2 p-3 text-[10px] lg:text-xs font-semibold text-bw-peach-light border-b border-border">
+                     <div className="col-span-4">Stage</div>
+                     <div className="col-span-4">Current Model</div>
+                     <div className="col-span-3">Provider</div>
+                     <div className="col-span-1 text-center">Status</div>
+                     <div className="col-span-2 text-center">Action</div>
+                   </div>
+                   <div className="divide-y divide-border">
+                     {STAGES.map((stage) => {
+                       const sm = stageModels[stage.id];
+                       const selectedProvider = sm?.selectedProvider || '';
+                       const providerModels = getSelectedProviderModels(selectedProvider);
+                       const configuredModel = getConfiguredStageModel(sm);
+                       const bestModel = configuredModel || getBestModelForStage(sm);
+                       const stageCost = getStageCostEstimate(configuredModel, stage.id);
+                       const capability = configuredModel ? getStageCapability(configuredModel) : 'unknown';
+                       const modelSubline = sm?.unavailable
+                         ? 'Connect a provider offering a free model for this stage, or configure it manually.'
+                         : configuredModel
+                           ? `${stageCost} / analysis · ${capability}`
+                           : 'Not configured';
 
-                      const getModelDisplay = () => {
-                        if (sm.unavailable) return 'No free model available';
-                        if (configuredModel) return configuredModel.displayName;
-                        if (sm.selectedModel && sm.selectedProvider) {
-                          const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
-                          return matchingModel ? matchingModel.displayName : 'Not configured';
-                        }
-                        return bestModel ? bestModel.displayName : 'Not configured';
-                      };
+                       const getModelDisplay = () => {
+                         if (sm.unavailable) return 'No free model available';
+                         if (configuredModel) return configuredModel.displayName;
+                         if (sm.selectedModel && sm.selectedProvider) {
+                           const matchingModel = providerModels.find((m) => m.modelId === sm.selectedModel);
+                           return matchingModel ? matchingModel.displayName : 'Not configured';
+                         }
+                         return bestModel ? bestModel.displayName : 'Not configured';
+                       };
 
-                      const getProviderDisplay = () => {
-                        if (sm.unavailable) return '—';
-                        if (sm.selectedProvider) {
-                          const provider = providers.find((p) => p.providerId === sm.selectedProvider);
-                          return provider ? provider.displayName : sm.selectedProvider;
-                        }
-                        return 'Not configured';
-                      };
+                       const getProviderDisplay = () => {
+                         if (sm.unavailable) return '—';
+                         if (sm.selectedProvider) {
+                           const provider = providers.find((p) => p.providerId === sm.selectedProvider);
+                           return provider ? provider.displayName : sm.selectedProvider;
+                         }
+                         return 'Not configured';
+                       };
 
-                      const getStatusDisplay = () => {
-                        if (sm?.unavailable) return {
-                          text: 'No free model',
-                          variant: 'outline',
-                          className: 'text-xs text-amber-500 bg-amber-500/10 border-amber-500',
-                        };
-                        if (!sm || (!sm.selectedProvider && !sm.selectedModel)) return {
-                          text: 'No config',
-                          variant: 'outline',
-                          className: 'text-xs text-bw-peach bg-bw-surface/50',
-                        };
-                        if (sm.isOverride) return {
-                          text: 'Custom',
-                          variant: 'outline',
-                          className: 'text-xs text-blue-500 bg-blue-500/10 border-blue-500',
-                        };
-                        return {
-                          text: 'Active',
-                          variant: 'default',
-                          className: 'text-xs text-green-500 bg-green-500/10 border-green-500',
-                        };
-                      };
+                       const getStatusDisplay = () => {
+                         if (sm?.unavailable) return {
+                           text: 'No free model',
+                           variant: 'outline',
+                           className: 'text-[10px] lg:text-xs text-amber-500 bg-amber-500/10 border-amber-500 whitespace-nowrap',
+                         };
+                         if (!sm || (!sm.selectedProvider && !sm.selectedModel)) return {
+                           text: 'No config',
+                           variant: 'outline',
+                           className: 'text-[10px] lg:text-xs text-bw-peach bg-surface whitespace-nowrap',
+                         };
+                         if (sm.isOverride) return {
+                           text: 'Custom',
+                           variant: 'outline',
+                           className: 'text-[10px] lg:text-xs text-blue-500 bg-blue-500/10 border-blue-500 whitespace-nowrap',
+                         };
+                         return {
+                           text: 'Active',
+                           variant: 'default',
+                           className: 'text-[10px] lg:text-xs text-green-500 bg-green-500/10 border-green-500 whitespace-nowrap',
+                         };
+                       };
 
-                      const status = getStatusDisplay();
+                       const status = getStatusDisplay();
 
-                      return (
-                        <div key={stage.id} className="p-4 hover:bg-bw-surface/80 transition-colors">
-                          <div className="grid grid-cols-12 gap-4 items-center">
-                            <div className="col-span-4 flex items-center gap-3">
-                              <stage.icon className="h-4 w-4 text-bw-peach/80" aria-hidden="true" />
-                              <span className="text-sm font-medium text-bw-peach-light">{stage.label}</span>
-                              {sm.isOverride && !sm.unavailable && (
-                                <Badge variant="outline" className="text-xs text-blue-500 border-blue-500">
-                                  Custom Override
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="col-span-4">
-                              <div className="text-sm text-bw-peach-light truncate">
-                                {getModelDisplay()}
-                              </div>
-                               <div className="text-xs text-bw-peach/60 mt-0.5">
+                       return (
+                         <div key={stage.id} className="p-3 lg:p-4 hover:bg-surface-dim transition-colors">
+                           <div className="grid grid-cols-12 gap-2 lg:gap-4 items-center">
+                             <div className="col-span-4 flex items-center gap-2 min-w-0">
+                               <stage.icon className="h-3.5 w-3.5 lg:h-4 lg:w-4 text-bw-peach/80 shrink-0" aria-hidden="true" />
+                               <span className="text-sm font-medium text-bw-peach-light truncate">{stage.label}</span>
+                               {sm.isOverride && !sm.unavailable && (
+                                 <Badge variant="outline" className="text-[10px] text-blue-500 border-blue-500 whitespace-nowrap shrink-0">
+                                   Custom Override
+                                 </Badge>
+                               )}
+                             </div>
+                             <div className="col-span-4 min-w-0">
+                               <div className="text-sm text-bw-peach-light truncate text-xs lg:text-sm">
+                                 {getModelDisplay()}
+                               </div>
+                               <div className="text-[10px] lg:text-xs text-bw-peach/60 mt-0.5 truncate">
                                  {modelSubline}
                                </div>
-                            </div>
-                            <div className="col-span-3 text-xs text-bw-peach">
-                              {getProviderDisplay()}
-                            </div>
-                            <div className="col-span-1">
-                              <Badge className={status.className}>{status.text}</Badge>
-                            </div>
-                            <div className="col-span-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="w-full h-8 text-xs border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80 cursor-pointer"
-                                onClick={() => {
-                                  setShowStageModal(stage.id);
-                                  setSelectedStageProvider(selectedProvider);
-                                  setSelectedStageModel(sm.selectedModel || '');
-                                  setSelectedStageReason(capability || 'unknown');
-                                  setSelectedStageIsOverride(sm.isOverride);
-                                }}
-                              >
-                                <Settings2Icon className="h-3 w-3 mr-1" />
-                                Configure
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
+                             </div>
+                             <div className="col-span-3 text-[10px] lg:text-xs text-bw-peach truncate">
+                               {getProviderDisplay()}
+                             </div>
+                             <div className="col-span-1 flex justify-center">
+                               <Badge className={status.className}>{status.text}</Badge>
+                             </div>
+                             <div className="col-span-2">
+                               <Button
+                                 variant="outline"
+                                 size="sm"
+                                 className="w-full h-7 lg:h-8 text-[10px] lg:text-xs border-border bg-surface hover:bg-surface-dim cursor-pointer"
+                                 onClick={() => {
+                                   setShowStageModal(stage.id);
+                                   setSelectedStageProvider(selectedProvider);
+                                   setSelectedStageModel(sm.selectedModel || '');
+                                   setSelectedStageReason(capability || 'unknown');
+                                   setSelectedStageIsOverride(sm.isOverride);
+                                 }}
+                               >
+                                 <Settings2Icon className="h-3 w-3 lg:h-3.5 lg:w-3.5 mr-1" />
+                                 Configure
+                               </Button>
+                             </div>
+                           </div>
+                         </div>
+                       );
+                     })}
+                   </div>
+                 </div>
+               </div>
 
-              <div className="mt-4 p-3 bg-bw-surface/30 border border-bw-surface rounded-lg">
-                <p className="text-xs text-bw-peach">
-                  <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Preference" below.
-                </p>
-              </div>
-            </section>
+               <div className="mt-3 lg:mt-4 p-3 bg-surface/50 border border-border rounded-lg">
+                 <p className="text-xs text-bw-peach">
+                   <span className="font-semibold text-bw-peach-light">Tip:</span> Click "Configure" to customize any stage. Changes are saved when you click "Save Preference" below.
+                 </p>
+               </div>
+             </section>
 
             <section>
               <Card className="p-6">
@@ -568,8 +527,8 @@ export default function ModelsPage() {
 }
 
 function Card({ children, className, onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) {
-  return <div className={`p-5 rounded-xl border border-bw-surface bg-bw-surface/50 ${className}`} onClick={onClick}>{children}</div>;
-}
+   return <div className={`p-4 sm:p-5 rounded-xl border border-border bg-surface ${className}`} onClick={onClick}>{children}</div>;
+ }
 
 
 /** Maps the persisted strategy to the UI setup; legacy strategies → null. */
@@ -606,45 +565,23 @@ function getStageTokenProfile(stageId: string): StageTokenProfile {
   return STAGE_TOKEN_PROFILES[stageId as StageKey] ?? STAGE_TOKEN_PROFILES.relevant_file_discovery;
 }
 
-function formatContext(tokens: number): string {
-  if (!tokens || tokens <= 0) return 'Unknown';
-  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`;
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
-  return `${tokens}`;
-}
-
-function getCostLabel(model: CatalogModel): string {
-  if (model.price.isFree) return 'Free';
-  if (model.price.input === null || model.price.input === undefined || model.price.output === null || model.price.output === undefined) {
-    return 'Pricing unavailable';
-  }
-  return `$${model.price.input.toFixed(2)} in · $${model.price.output.toFixed(2)} out per 1M`;
-}
-
-function getCapabilityLabel(model: CatalogModel): string {
-  const labels = model.capabilities.map((c) => CAPABILITY_LABELS[c] || c);
-  if (labels.length > 0) return labels.join(' · ');
-  if (model.tags.length > 0) return model.tags.map((t) => t.split('-').join(' ')).join(' · ');
-  return '';
-}
-
 function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect }: { providers: CatalogProvider[]; models: CatalogModel[]; onConnect: (providerId: string, apiKey: string) => Promise<void>; onDisconnect: (providerId: string) => Promise<void>; }) {
   const [showConnectPanel, setShowConnectPanel] = useState(false);
   const connected = providers.filter((p) => p.status === 'connected');
   const available = providers.filter((p) => p.status !== 'connected');
 
   return (
-    <section>
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <h2 className="text-2xl font-semibold text-bw-peach-light">Connected Providers</h2>
-          <Badge variant="outline" className="text-xs text-bw-peach">{connected.length} connected</Badge>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setShowConnectPanel((v) => !v)} disabled={available.length === 0}>
-          <PlusIcon className="h-3 w-3 mr-1" />
-          Connect Provider
-        </Button>
-      </div>
+<section>
+       <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
+         <div className="flex items-center gap-2">
+           <h2 className="text-xl lg:text-2xl font-semibold text-bw-peach-light">Connected Providers</h2>
+           <Badge variant="outline" className="text-xs text-bw-peach">{connected.length} connected</Badge>
+         </div>
+         <Button variant="outline" size="sm" onClick={() => setShowConnectPanel((v) => !v)} disabled={available.length === 0} className="w-fit self-start sm:self-auto">
+           <PlusIcon className="h-3 w-3 mr-1" />
+           Connect Provider
+         </Button>
+       </div>
 
       {connected.length === 0 ? (
         <Card className="p-8 text-center">
@@ -676,89 +613,6 @@ function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect 
         </div>
       )}
     </section>
-  );
-}
-
-function ModelLibrary({ models, providers, baseCount, filter, onFilterChange, search, onSearchChange }: { models: CatalogModel[]; providers: CatalogProvider[]; baseCount: number; filter: LibraryFilter; onFilterChange: (filter: LibraryFilter) => void; search: string; onSearchChange: (search: string) => void; }) {
-  return (
-    <section>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-bw-peach-light">Model Library</h2>
-        <Badge variant="outline" className="text-xs text-bw-peach">{models.length} of {baseCount} models</Badge>
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-4">
-        {LIBRARY_FILTERS.map((f) => (
-          <button
-            key={f.id}
-            onClick={() => onFilterChange(f.id)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-              filter === f.id
-                ? 'bg-primary-container text-on-primary-container border-primary-container'
-                : 'border-bw-surface bg-bw-surface/50 text-bw-peach hover:bg-bw-surface/80'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      <input
-        type="text"
-        placeholder="Search models by name, ID, or provider..."
-        value={search}
-        onChange={(e) => onSearchChange(e.target.value)}
-        className="w-full px-4 py-2 rounded-lg border border-bw-surface bg-bw-surface/50 text-sm text-bw-peach-light placeholder-bw-peach/60 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all mb-4"
-      />
-
-      {baseCount === 0 ? (
-        <Card className="p-8 text-center">
-          <p className="text-sm font-medium text-bw-peach-light">No models available</p>
-          <p className="text-xs text-bw-peach mt-1">Models from your connected providers will appear here.</p>
-        </Card>
-      ) : models.length === 0 ? (
-        <Card className="p-8 text-center">
-          <p className="text-sm font-medium text-bw-peach-light">No models match</p>
-          <p className="text-xs text-bw-peach mt-1">Try a different filter or search term.</p>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {models.map((model) => (
-            <ModelCard key={`${model.providerId}-${model.modelId}`} model={model} providers={providers} />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ModelCard({ model, providers }: { model: CatalogModel; providers: CatalogProvider[] }) {
-  const provider = providers.find((p) => p.providerId === model.providerId);
-  const capabilities = getCapabilityLabel(model);
-
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-bw-peach-light truncate">{model.displayName}</div>
-          <div className="text-xs text-bw-peach mt-1">{provider ? provider.displayName : model.providerId}</div>
-        </div>
-        <Badge className={
-          model.price.isFree
-            ? 'text-xs text-green-500 bg-green-500/10 border-green-500'
-            : model.price.input == null || model.price.output == null
-              ? 'text-xs text-bw-peach bg-bw-surface/50 border-bw-surface-bright'
-              : 'text-xs text-purple-500 bg-purple-500/10 border-purple-500'
-        }>
-          {model.price.isFree ? 'Free' : model.price.input == null || model.price.output == null ? 'Pricing unavailable' : 'Paid'}
-        </Badge>
-      </div>
-      <div className="mt-3 space-y-1 text-xs text-bw-peach">
-        <div><span className="font-semibold text-bw-peach-light">Cost:</span> {getCostLabel(model)}</div>
-        <div><span className="font-semibold text-bw-peach-light">Context:</span> <span className="font-mono">{formatContext(model.contextWindow)}</span></div>
-        {capabilities && <div><span className="font-semibold text-bw-peach-light">Capabilities:</span> {capabilities}</div>}
-      </div>
-    </Card>
   );
 }
 
@@ -806,32 +660,32 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
   const searchEmpty = modelSearch.trim() && filteredModels.length === 0;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-bw-surface border border-bw-surface rounded-xl p-6 w-full max-w-lg max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold text-bw-peach-light">Change Model for {stage.label}</h3>
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Close"
-            className="rounded p-1 text-bw-peach outline-none transition-colors hover:bg-bw-surface/80 hover:text-bw-peach-light cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            <XIcon className="h-4 w-4" />
-          </button>
-        </div>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+        <div className="bg-surface border border-border rounded-xl p-4 sm:p-6 w-full max-w-[90vw] lg:max-w-lg max-h-[85vh] flex flex-col shadow-lg overflow-hidden">
+         <div className="flex items-center justify-between mb-4">
+           <h3 className="text-xl font-semibold text-bw-peach-light">Change Model for {stage.label}</h3>
+           <button
+             type="button"
+             onClick={onCancel}
+             aria-label="Close"
+             className="rounded p-1 text-bw-peach outline-none transition-colors hover:bg-surface-dim hover:text-bw-peach-light cursor-pointer focus-visible:ring-2 focus-visible:ring-ring/50"
+           >
+             <XIcon className="h-4 w-4" />
+           </button>
+         </div>
 
-        <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-          <div className="mb-4">
-            <div className="relative">
-              <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-bw-peach/50" aria-hidden="true" />
-              <input
-                type="text"
-                placeholder="Search models…"
-                value={modelSearch}
-                onChange={(e) => setModelSearch(e.target.value)}
-                aria-label="Search models"
-                className="h-8 w-full cursor-text rounded-lg border border-bw-surface bg-bw-surface/50 pl-8 pr-8 text-sm text-bw-peach-light outline-none transition-colors placeholder:text-bw-peach/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-              />
+         <div className="flex-1 overflow-y-auto pr-2 -mr-2">
+           <div className="mb-4">
+             <div className="relative">
+               <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-bw-peach/50" aria-hidden="true" />
+               <input
+                 type="text"
+                 placeholder="Search models…"
+                 value={modelSearch}
+                 onChange={(e) => setModelSearch(e.target.value)}
+                 aria-label="Search models"
+                 className="h-8 w-full cursor-text rounded-lg border border-border bg-surface pl-8 pr-8 text-sm text-bw-peach-light outline-none transition-colors placeholder:text-bw-peach/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+               />
               {modelSearch && (
                 <button
                   type="button"
@@ -853,11 +707,11 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                   {recommendedModels.map((model) => {
                     const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                     return (
-                      <button key={model.modelId} onClick={() => {
-                        setLocalProvider(model.providerId);
-                        setLocalModel(model.modelId);
-                        setLocalReason('Best value model');
-                      }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                       <button key={model.modelId} onClick={() => {
+                         setLocalProvider(model.providerId);
+                         setLocalModel(model.modelId);
+                         setLocalReason('Best value model');
+                       }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-border bg-surface hover:bg-surface-dim'} ${!model.available ? 'opacity-55 cursor-not-allowed' : ''}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light font-medium">{model.displayName}</span>
                           {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
@@ -876,11 +730,11 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <div className="space-y-2">
                   {freeModels.map((model) => {
                     return (
-                      <button key={model.modelId} onClick={() => {
-                        setLocalProvider(model.providerId);
-                        setLocalModel(model.modelId);
-                        setLocalReason('Free model');
-                      }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                       <button key={model.modelId} onClick={() => {
+                         setLocalProvider(model.providerId);
+                         setLocalModel(model.modelId);
+                         setLocalReason('Free model');
+                       }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-border bg-surface hover:bg-surface-dim'} ${!model.available ? 'opacity-55 cursor-not-allowed' : ''}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light">{model.displayName}</span>
                           {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
@@ -899,11 +753,11 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <div className="space-y-2">
                   {paidModels.map((model) => {
                     return (
-                      <button key={model.modelId} onClick={() => {
-                        setLocalProvider(model.providerId);
-                        setLocalModel(model.modelId);
-                        setLocalReason('Paid model');
-                      }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
+                       <button key={model.modelId} onClick={() => {
+                         setLocalProvider(model.providerId);
+                         setLocalModel(model.modelId);
+                         setLocalReason('Paid model');
+                       }} className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-border bg-surface hover:bg-surface-dim'}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-bw-peach-light">{model.displayName}</span>
                           {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
@@ -939,74 +793,74 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                       {recommendedModels.map((model) => {
                         const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
                         return (
-                          <button key={model.modelId} onClick={() => {
-                            setLocalProvider(model.providerId);
-                            setLocalModel(model.modelId);
-                            setLocalReason('Best value model');
-                          }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <div className="flex items-center justify-between">
-                              <span className="text-bw-peach-light font-medium">{model.displayName}</span>
-                              {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
-                            </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                           <button key={model.modelId} onClick={() => {
+                             setLocalProvider(model.providerId);
+                             setLocalModel(model.modelId);
+                             setLocalReason('Best value model');
+                           }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-border bg-surface hover:bg-surface-dim'} ${!model.available ? 'opacity-55 cursor-not-allowed' : ''}`}>
+                             <div className="flex items-center justify-between">
+                               <span className="text-bw-peach-light font-medium">{model.displayName}</span>
+                               {isBest && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Best Value</span>}
+                             </div>
+                             <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
+                           </button>
+                         );
+                       })}
+                     </div>
+                   </div>
 
-                  <Separator />
+                   <Separator />
 
-                  <div>
-                    <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
-                    <div className="space-y-2">
-                      {freeModels.map((model) => {
-                        return (
-                          <button key={model.modelId} onClick={() => {
-                            setLocalProvider(model.providerId);
-                            setLocalModel(model.modelId);
-                            setLocalReason('Free model');
-                          }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'} ${!model.available ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                            <div className="flex items-center justify-between">
-                              <span className="text-bw-peach-light">{model.displayName}</span>
-                              {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                            </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                   <div>
+                     <h4 className="text-sm font-semibold text-green-500 mb-3">Free Alternatives</h4>
+                     <div className="space-y-2">
+                       {freeModels.map((model) => {
+                         return (
+                           <button key={model.modelId} onClick={() => {
+                             setLocalProvider(model.providerId);
+                             setLocalModel(model.modelId);
+                             setLocalReason('Free model');
+                           }} disabled={!model.available} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-green-500 bg-green-500/10' : 'border-border bg-surface hover:bg-surface-dim'} ${!model.available ? 'opacity-55 cursor-not-allowed' : ''}`}>
+                             <div className="flex items-center justify-between">
+                               <span className="text-bw-peach-light">{model.displayName}</span>
+                               {localModel === model.modelId && <span className="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                             </div>
+                             <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
+                           </button>
+                         );
+                       })}
+                     </div>
+                   </div>
 
-                  <Separator />
+                   <Separator />
 
-                  <div>
-                    <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
-                    <div className="space-y-2">
-                      {paidModels.map((model) => {
-                        return (
-                          <button key={model.modelId} onClick={() => {
-                            setLocalProvider(model.providerId);
-                            setLocalModel(model.modelId);
-                            setLocalReason('Paid model');
-                          }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80'}`}>
-                            <div className="flex items-center justify-between">
-                              <span className="text-bw-peach-light">{model.displayName}</span>
-                              {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
-                            </div>
-                            <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
+                   <div>
+                     <h4 className="text-sm font-semibold text-purple-500 mb-3">Paid Alternatives</h4>
+                     <div className="space-y-2">
+                       {paidModels.map((model) => {
+                         return (
+                           <button key={model.modelId} onClick={() => {
+                             setLocalProvider(model.providerId);
+                             setLocalModel(model.modelId);
+                             setLocalReason('Paid model');
+                           }} className={`w-full text-left p-3 rounded-lg border transition-colors ${localModel === model.modelId ? 'border-purple-500 bg-purple-500/10' : 'border-border bg-surface hover:bg-surface-dim'}`}>
+                             <div className="flex items-center justify-between">
+                               <span className="text-bw-peach-light">{model.displayName}</span>
+                               {localModel === model.modelId && <span className="text-xs bg-purple-500 text-white px-2 py-0.5 rounded-full">Selected</span>}
+                             </div>
+                             <div className="text-xs text-bw-peach mt-1">{model.providerId} • {formatCostUsd(stageCostEstimateUsd(model, stage.id))} • {getStageCapability(model)}</div>
+                           </button>
+                         );
+                       })}
+                     </div>
+                   </div>
+                 </>
+               )}
+             </>
+           )}
+         </div>
 
-        <div className="pt-4 border-t border-bw-surface mt-auto">
+         <div className="pt-4 border-t border-outline-variant mt-auto">
           <div className="text-sm text-bw-peach">
             <div className="flex items-center gap-2 mb-2">
               <input type="checkbox" id={`override-${stageId}`} checked={localIsOverride} onChange={(e) => setLocalIsOverride(e.target.checked)} />

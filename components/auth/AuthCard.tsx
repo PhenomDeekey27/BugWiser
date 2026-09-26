@@ -55,7 +55,7 @@ export function AuthCard() {
             BugWiser needs GitHub access to inspect repositories and issues. We only request read permissions.
           </p>
 
-          <div className="mb-6 p-4 rounded-xl bg-bw-surface/50 border border-[rgba(70,50,40,0.08)]">
+          <div className="mb-6 p-4 rounded-xl bg-surface/50 border border-[rgba(70,50,40,0.08)]">
             <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
               Requested Permissions
             </p>

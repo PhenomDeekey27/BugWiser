@@ -40,7 +40,7 @@ export function TopBar({ className, user }: TopBarProps) {
 
   return (
     <header
-      className={`flex items-center justify-between h-12 px-4 bg-bw-surface border-b border-border ${className}`}
+      className={`flex items-center justify-between h-12 px-4 bg-surface border-b border-border ${className}`}
     >
       <div className="flex-1" />
 
@@ -74,7 +74,7 @@ export function TopBar({ className, user }: TopBarProps) {
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 top-full mt-2 w-56 bg-bw-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+            <div className="absolute right-0 top-full mt-2 w-56 bg-surface border border-border rounded-lg shadow-lg z-50 overflow-hidden">
               {user && (
                 <div className="px-4 py-3 border-b border-border">
                   <p className="text-sm font-medium text-bw-peach-light">{user.name || user.login}</p>

@@ -16,7 +16,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
           Evidence Analysis
         </h2>
 
-        <div className="p-4 rounded-lg bg-bw-surface border border-yellow-500/30 bg-yellow-500/5 mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-yellow-500/30 bg-yellow-500/5 mb-4">
           <div className="flex items-center gap-2 mb-2">
             <div className="w-2 h-2 rounded-full bg-yellow-400" />
             <span className="text-sm font-semibold text-yellow-400">
@@ -38,7 +38,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
           )}
         </div>
 
-        <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-border mb-4">
           <p className="text-xs text-bw-peach leading-relaxed">
             The analysis could not identify specific code locations that independently support the proposed root cause. This is common for styling, layout, or responsive design issues where the problem is in CSS behavior rather than code logic.
           </p>
@@ -48,7 +48,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
           {onRerun && (
             <button
               onClick={onRerun}
-              className="px-3 py-1.5 text-xs font-mono rounded bg-bw-surface border border-border text-bw-peach hover:text-bw-peach-light hover:border-primary/20 transition-colors"
+              className="px-3 py-1.5 text-xs font-mono rounded bg-surface border border-border text-bw-peach hover:text-bw-peach-light hover:border-primary/20 transition-colors"
             >
               Re-run Evidence
             </button>
@@ -72,7 +72,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
         Evidence
       </h2>
 
-      <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+      <div className="p-4 rounded-lg bg-surface border border-border mb-4">
         <p className="text-sm text-bw-peach-light leading-relaxed">
           {evidence.description}
         </p>
@@ -84,7 +84,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
             key={index}
             className="rounded-lg border border-border bg-surface-dim overflow-hidden"
           >
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-bw-surface">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-surface">
               <span className="text-xs font-mono text-bw-peach">
                 {ref.file}
               </span>
@@ -117,7 +117,7 @@ export function EvidencePanel({ evidence, onRerun, onContinueToSolution }: Evide
         <div className="mt-4">
           <button
             onClick={onRerun}
-            className="px-3 py-1.5 text-xs font-mono rounded bg-bw-surface border border-border text-bw-peach hover:text-bw-peach-light hover:border-primary/20 transition-colors"
+            className="px-3 py-1.5 text-xs font-mono rounded bg-surface border border-border text-bw-peach hover:text-bw-peach-light hover:border-primary/20 transition-colors"
           >
             Re-run Evidence
           </button>

@@ -235,10 +235,6 @@ export function selectModelsForTask(
   return ranked.map((r) => ({ provider: r.entry.provider, model: r.entry.model }));
 }
 
-export function getTaskModelChain(task: string): TaskModelEntry[] {
-  return selectModelsForTask(task);
-}
-
 export function getTestFailProvider(): string | null {
   return process.env.AI_TEST_FAIL_PROVIDER || null;
 }

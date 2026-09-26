@@ -54,7 +54,7 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
   };
 
   return (
-    <div className="glass-card p-5 flex flex-col gap-3">
+    <div className="glass-card p-4 sm:p-5 flex flex-col gap-3">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h3 className="font-medium text-bw-peach-light">{provider.displayName}</h3>
@@ -80,13 +80,13 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
       {connected ? (
         <div className="flex items-center justify-between">
           <span className="text-xs text-bw-peach">{provider.serverConfigured ? 'Configured via server' : 'Your key'}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDisconnect}
-            disabled={busyDisconnect}
-            className="border-border cursor-pointer bg-slate-300 text-black"
-          >
+<Button
+             variant="outline"
+             size="sm"
+             onClick={handleDisconnect}
+             disabled={busyDisconnect}
+             className="border-border cursor-pointer"
+           >
             {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
           </Button>
         </div>

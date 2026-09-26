@@ -1,5 +1,171 @@
 # think/state.md — Implementation State
 
+## TASK — UI/UX Bug Fixes (Sept 25, 2026)
+
+**Status:** ✅ FIXES APPLIED + VALIDATED
+
+### 6. Responsive UI Fixes (Sept 25, 2026)
+
+**Status:** ✅ FIXED
+
+Goal: fix responsive layout issues across all pages, especially the models page where status labels were overlapping and content was cramped on mobile.
+
+#### Models Page (`app/models/page.tsx`)
+- **Root cause:** 12-column grid table didn't collapse on mobile; `bg-bw-surface` was not a valid Tailwind class causing invisible backgrounds/borders in light mode; modal was too wide (`max-w-lg`) on mobile; status badges overlapped
+- **Fixes:**
+  - Table cells: reduced padding (`p-3 lg:p-4`), smaller gaps (`gap-2 lg:gap-4`), smaller text sizes (`text-[10px] lg:text-xs`), proper `whitespace-nowrap` on status badges to prevent overlap
+  - Added `min-w-0` on truncating cells to allow proper text overflow
+  - Added `shrink-0` on icons and badges to prevent them from squishing
+  - Modal: changed `max-w-lg` to `max-w-[90vw] lg:max-w-lg` with responsive padding (`p-2 sm:p-4` and `p-4 sm:p-6`)
+  - Container: changed `p-6 lg:p-8 max-w-4xl mx-auto` to `p-4 lg:p-8 max-w-4xl mx-auto w-full`
+  - Section headers: `flex flex-col sm:flex-row sm:items-center justify-between` for responsive alignment
+  - Card component: `p-4 sm:p-5` instead of `p-5`
+  - Badge font sizes: `text-[10px] lg:text-xs` to prevent overflow
+  - Button height: `h-7 lg:h-8` to fit mobile
+  - `bg-bw-surface` → `bg-surface`, `border-bw-surface` → `border-border`, `bg-bw-surface/50` → `bg-surface`, `bg-bw-surface/80` → `bg-surface-dim` throughout
+
+#### StageConfigPanel (`components/models/StageConfigPanel.tsx`)
+- Grid: `grid grid-cols-1 md:grid-cols-3` → `grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3` for better tablet layout
+- Padding: `p-5` → `p-4 sm:p-5`
+- Heading: `text-2xl` → `text-xl lg:text-2xl`
+- `bg-bw-surface/50` → `bg-surface`, `border-bw-surface` → `border-border`
+- `hover:border-bw-surface-bright/60` → `hover:border-outline hover:bg-surface-dim`
+
+#### Hero (`components/landing/Hero.tsx`)
+- `hover:bg-bw-surface/60` → `hover:bg-surface-dim` (fixes invisible hover state in light mode)
+
+#### ProductPreview (`components/landing/ProductPreview.tsx`)
+- All `bg-bw-surface/*` → `bg-surface/*` for proper light mode visibility
+- `bg-bw-surface/40` → `bg-surface/70`, `bg-bw-surface/50` → `bg-surface/80`, `bg-bw-surface/30` → `bg-surface/60`, `bg-bw-surface/60` → `bg-surface`, `bg-bw-surface/20` → `bg-surface/50`, `bg-bw-surface/10` → `bg-surface/30`
+- Sidebar padding: `p-5` → `p-4 lg:p-5`
+- Responsive window header and progress items
+
+#### FeatureSteps (`components/landing/FeatureSteps.tsx`)
+- `glass-card p-10 md:p-14` → `glass-card p-6 md:p-10`
+- Heading: `text-[2rem]` → `text-xl md:text-[2.5rem]`
+- Grid gaps: `gap-6` → `gap-4 md:gap-6`
+- Step icons: `w-16 h-16 mb-5` → `w-12 h-12 md:w-16 md:h-16 mb-4 md:mb-5`
+- Step text: `text-base` → `text-sm md:text-base`, `text-sm` → `text-xs md:text-sm`
+- `bg-bw-surface` references replaced with `bg-surface`
+
+#### HomepageHeader (`components/landing/HomepageHeader.tsx`)
+- `bg-bw-surface/60` → `bg-surface/70`
+- `bg-bw-surface` → `bg-surface` (dropdown)
+- Hardcoded `style={{ background: '#F0EBE6' }}` → `bg-surface-dim` class
+
+#### ProviderCard (`components/models/ProviderCard.tsx`)
+- `p-5` → `p-4 sm:p-5`
+- Removed hardcoded `bg-slate-300 text-black` on disconnect button
+
+#### AppShell (`components/layout/AppShell.tsx`)
+- `bg-bw-surface` → `bg-surface` (sidebar toggle button)
+
+#### Sidebar (`components/layout/Sidebar.tsx`)
+- `bg-bw-surface` → `bg-surface`
+
+#### TopBar (`components/layout/TopBar.tsx`)
+- `bg-bw-surface` → `bg-surface` (header background and dropdown)
+
+#### Analysis/New Page (`app/analysis/new/page.tsx`)
+- `bg-bw-surface` → `bg-surface` on modal, empty states, and preflight overlay
+
+#### DotField (removed)
+- Removed `components/DotField.tsx` usage from `app/page.tsx`, eliminating cursor-following background effect
+
+#### Root Cause for `bg-bw-surface` Issues
+`bg-bw-surface` was NOT a valid Tailwind class — it was not generated from `@theme inline` in `globals.css`. The `--color-bw-surface` variable doesn't exist in the `@theme` block; only `--color-surface` is defined. This meant all `bg-bw-surface` classes rendered as invisible/transparent backgrounds, causing the light mode visibility failures. All references were replaced with `bg-surface` (which uses `var(--bw-surface)` = `#FFFFFF` in light mode, `#111416` in dark mode).
+
+#### Validation
+- `npx tsc --noEmit`: 0 errors ✓
+- `npm run build`: Compiled successfully ✓
+- `npm run lint`: No new errors ✓
+- Responsive: Mobile layout properly stacks content, status labels no longer overlap
+
+Goal: fix 5 UI/UX bugs without changing model selection algorithms, provider logic, pricing, catalog, or authentication architecture.
+
+### 1. Cursor/Background Fix (Bugs 1 & 2)
+- **Root cause:** `components/DotField.tsx` rendered a full-canvas animation with `requestAnimationFrame`, `mousemove` listener, and `setInterval(20ms)` for mouse-speed tracking. This ran continuously on the home page, causing visual noise and scrolling lag.
+- **Files changed:** `app/page.tsx`
+- **What was removed:** `<DotField />` component and its import from `app/page.tsx`. The `landing-radial-fade` div remains for subtle gradient depth.
+- **Performance impact:** Eliminated continuous canvas rendering loop, mousemove handler, and setInterval. Scrolling now uses native browser behavior.
+
+### 2. Scrolling Performance
+- **Root cause:** The `DotField` component's `requestAnimationFrame` loop, `mousemove` listener, and `setInterval` for mouse-speed calculation were the primary sources of layout thrashing and scroll lag.
+- **Optimization:** Removing the DotField component eliminated all per-frame/per-mousemove work. No CSS `scroll-behavior: smooth` was added (would mask the real issue).
+- **Result:** Native, smooth scrolling with no continuous CPU/rendering activity from the removed effect.
+
+### 3. Button Interaction (Bug 3)
+- **Shared component changed:** `components/ui/button.tsx`
+- **Changes:**
+  - Added `cursor-pointer` to base `buttonVariants` class
+  - Added `disabled:cursor-not-allowed` for disabled state
+  - Added `hover:shadow-md` to `default` variant
+  - Added `hover:border-outline` + `hover:shadow-sm` to `outline` variant
+  - Added `hover:shadow-sm` to `secondary` variant
+  - Added `hover:shadow-sm` to `destructive` variant
+  - Added `cursor-pointer` to `link` variant (explicit, though base already has it)
+- **CSS changes:** `app/globals.css` — `.btn-bw-primary` and `.dark .btn-bw-primary` now have `cursor: pointer` and `.btn-bw-primary:disabled` / `.dark .btn-bw-primary:disabled` have `cursor: not-allowed` + `opacity: 0.5`.
+- **Light/dark behavior:** All hover states use existing theme tokens via `hover:bg-muted`, `hover:shadow-md`, etc. No new colors introduced.
+
+### 4. GitHub Session Expiration Redirect (Bug 4)
+- **Root cause:** `components/landing/SessionExpiryCheck.tsx` called `router.refresh()` immediately after detecting an expired session, causing a redirect loop/delay. It also called `signOut()` and `router.push('/auth/github')` automatically, creating race conditions.
+- **Fix:** Removed `router.refresh()`, removed automatic `signOut()`, and `localStorage.removeItem()`. Now only shows a toast with a "Sign in" action button. The toast's `onClick` handler calls `signOut()` + `localStorage.removeItem()` + `router.replace('/auth/github')`. Duration increased from 6000ms to 8000ms.
+- **Redirect destination:** `/auth/github`
+- **Unrelated errors:** Normal API failures do NOT trigger redirects — only `!session?.provider_token` (missing GitHub token) triggers the toast. The middleware (`proxy.ts`) still handles protected route redirects separately.
+- **No redirect loops:** `router.replace` avoids adding to history; no automatic refresh prevents re-triggering the check.
+
+### 5. Model Configure Visibility in Light Mode (Bug 5)
+- **Root cause:** The `StageChangeModal` and model configuration table in `app/models/page.tsx` used `bg-bw-surface` and `border-bw-surface` which are both `#FFFFFF` in light mode, making borders invisible. Hover states like `bg-bw-surface/50` and `bg-bw-surface/80` blended with the page background.
+- **Files changed:** `app/models/page.tsx`, `app/globals.css`
+- **Changes:**
+  - Modal container: `bg-bw-surface border border-bw-surface` → `bg-surface border border-border` + `shadow-lg`
+  - Modal close button hover: `hover:bg-bw-surface/80` → `hover:bg-surface-dim`
+  - Search input: `border-bw-surface bg-bw-surface/50` → `border-border bg-surface`
+  - Model list items (Recommended/Free/Paid): `border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80` → `border-border bg-surface hover:bg-surface-dim`
+  - Status badge: `bg-bw-surface/50` → `bg-surface`
+  - Table rows: `hover:bg-bw-surface/80` → `hover:bg-surface-dim`
+  - Table dividers: `divide-bw-surface` → `divide-border`
+  - Table container: `bg-bw-surface/50 border border-bw-surface` → `bg-surface border border-border`
+  - Table Configure button: `border-bw-surface bg-bw-surface/50 hover:bg-bw-surface/80` → `border-border bg-surface hover:bg-surface-dim`
+  - Tip section: `bg-bw-surface/30 border border-bw-surface` → `bg-surface/50 border border-border`
+  - `Card` component: `border-bw-surface bg-bw-surface/50` → `border-border bg-surface`
+  - Modal bottom border: `border-bw-surface` → `border-outline-variant`
+  - Added `shadow-lg` to modal for proper elevation separation
+- **Light mode result:** All modal borders, hover states, and backgrounds now properly separate from the page background. Model names, provider names, descriptions, and actions are fully readable.
+- **Dark mode preserved:** Existing dark-mode CSS in `globals.css` continues to work correctly.
+
+### Additional Bulk Fix (Sept 25, 2026)
+
+**Issue:** `bg-bw-surface` was NOT a valid Tailwind class — it was not generated from `@theme inline` in `globals.css`. The `--color-bw-surface` variable doesn't exist in the `@theme` block. This meant all `bg-bw-surface` classes rendered as invisible/transparent backgrounds, causing light mode visibility failures across the entire application.
+
+**Fixes:**
+- Bulk replaced all `bg-bw-surface` → `bg-surface` and `border-bw-surface` → `border-border` across all analysis components (`AnalysisOverview`, `ApplyFixModal`, `ApplyFixSuccess`, `EvidencePanel`, `IssueSelector`, `ModelTierBadge`, `PatchViewer`, `ProgressOverlay`, `RelevantFilesPanel`, `RepositoryFileTree`, `RepositorySelector`, `RootCausePanel`, `SolutionPanel`)
+- Fixed `app/analysis/[id]/page.tsx` remaining `bg-bw-surface` reference
+- Removed dead CSS rules from `app/globals.css`: `.dark header.bg-bw-surface/60`, `header .absolute.bg-bw-surface`, `.dark .bg-bw-surface`
+- Fixed `TopBar.tsx`, `Sidebar.tsx`, `AppShell.tsx` remaining `bg-bw-surface` references
+- Fixed `HomepageHeader.tsx` `bg-bw-surface/60` → `bg-surface/70`, `bg-bw-surface` → `bg-surface`, and hardcoded `#F0EBE6` inline style → `bg-surface-dim`
+- Fixed `DotField.tsx` — removed unused component
+
+**Root cause summary:** `bg-bw-surface` was never a valid Tailwind class name. The `@theme inline` block defines `--color-surface` (not `--color-bw-surface`). The `--bw-surface` CSS variable exists but is only used by the custom `.bg-surface` utility class in `@layer utilities`. All `bg-bw-surface` references were replaced with `bg-surface`.
+
+### Validation
+- `npx tsc --noEmit`: **0 errors** ✓
+- `npm run build`: **✓ Compiled successfully** (18 routes) ✓
+- `npm run lint`: Pre-existing errors only; no new lint errors introduced ✓
+- Zero `bg-bw-surface` or `border-bw-surface` references remain in any code file ✓
+
+### Diff Safety Confirmation
+- ✅ **Model selection unchanged:** Free/Balanced/Quality formulas, `stageSelection.ts`, `cost.ts`, `stageTokenProfiles.ts` untouched
+- ✅ **Provider logic unchanged:** `live.ts`, `normalizers.ts`, `model-intelligence/index.ts` untouched
+- ✅ **Pricing unchanged:** `cost.ts` pricing logic untouched
+- ✅ **Catalog unchanged:** `stageSelection.ts` catalog logic untouched
+- ✅ **No new colors introduced:** All changes use existing theme tokens (`bg-surface`, `border-border`, `bg-surface-dim`, etc.)
+- ✅ **No new packages introduced**
+- ✅ **No authentication architecture rewrite:** `SessionExpiryCheck` uses same Supabase auth flow; `proxy.ts` middleware unchanged
+- ✅ **No unnecessary UI redesign:** Existing visual identity preserved; only interaction feedback and visibility improved
+
+---
+
 ## TASK 4 — Catalog persistence/refresh failure fix + live-model metadata audit (+ connect/disconnect fix)
 
 **Status:** ✅ INVESTIGATION COMPLETE, FIXES APPLIED (September 25, 2026)
@@ -970,3 +1136,194 @@ KEPT (audit proved live):
 **Next recommended task:** unchanged — surface provenance (price source / capability confidence) in
 the /models UI; optional follow-ups: strict-free-ify `free_paid` free stages (scope note 1), clear
 unavailable markers on free-pool recovery (scope note 2).
+
+---
+
+# Architecture Audit — remaining model system (READ-ONLY, post strict-Free + cleanup)
+
+Repo state: work committed (`a213062`), tree clean; audit ran against HEAD. No code changed.
+Validations: `npx tsc --noEmit` → 0 errors. Whole-repo string searches via ripgrep (all files,
+incl. md/json; `.next`/`node_modules`/`.git` excluded). No test suite exists in the repo.
+
+## A. `/api/ai/models` — CONSUMERLESS (deletion candidate)
+
+- Search results for `api/ai/models` across the entire repo: only COMMENTS
+  (`lib/ai/strategy-selection.ts:13`, `lib/ai/catalog/stageSelection.ts:31`) + historical
+  `think/state.md` lines. Zero fetch/axios (axios unused in repo), zero imports of the route,
+  zero `<Link>`/router/redirect/form/middleware references (`next.config.ts` has no
+  redirects/rewrites), zero tests/scripts.
+- Former sole consumer `components/analysis/ModelSelector.tsx` deleted in the cleanup task.
+- Not called by Models page (`/api/models`), not during analysis (preflight uses
+  `/api/analysis/preflight`), not by gateway/routing/model-router (runtime reads DB directly),
+  not by any server-side code.
+- All its imports (`getOrBuildCatalog`, `getModelPreference`, `getProviderConnections`,
+  `buildStageAssignments`, `STAGE_WEIGHTS`, `reconcileStageOverrides`) are shared with live
+  modules — deleting the route orphans nothing. Runtime consequence of deletion: none.
+- Housekeeping on deletion: `stageSelection.ts:31` comment references the route; state.md
+  references stay historical.
+
+## B. `free_paid` — LIVE-BUT-DORMANT / COMPATIBILITY (retain)
+
+- Code surfaces: engine mode `strategy-selection.ts:82-144`; `gateway.ts:61` reads
+  `analyses.model_strategy`; `model-router` strategy union; `preferences.ts:13`,
+  `page.tsx:67` type unions; `/api/ai/models:125` strategies list; migrations 006/006b/013
+  CHECK constraints; `types/index.ts:257`.
+- A. Reachable from current UI? NO — /models setups = free/balanced/quality only
+  (`toSetupChoice`, `handleSetupSelect` sends `selected_strategy: setup`); no UI writes
+  `free_paid`. B. Persisted by UI? NO.
+- C. Runtime routing? Only if a preference row has `selected_strategy='free_paid'` (direct PUT
+  to `/api/models/preference` — PUT does not validate enum membership — or legacy data) →
+  `/api/analyses:55-71` copies it into `analyses.model_strategy` (balanced/quality→custom) →
+  `gateway.ts:58-61` reads it → engine mode. Chain intact but UI-unreachable.
+  Note: `analysis/new` sends `model_strategy` in the POST body — `/api/analyses` IGNORES it
+  (reads preference instead). D. Tests: none (no test suite). E. Historical compatibility:
+  yes (DB enums are immutable schema).
+- F. Purpose: designed engine mode (discovery+evidence → free, rest → paid) + its free stages
+  still carry the old paid fallback (`strategy-selection.ts:111-127`, scope note 1).
+- Verdict: COMPATIBILITY — cannot be deleted without touching DB CHECK constraints + 5 type
+  surfaces; keep. It is distinct from the `free-paid` filter key in `ModelControls.tsx`
+  (different concept; that component is dead anyway).
+
+## C. Canonical production flow (file → function → next)
+
+1. Provider connection: `ProviderCard` → `app/models/page.tsx handleConnect:256` →
+   `app/api/models/connect/route.ts POST` → `connection/service.ts saveUserConnection:160`
+   (upsert `provider_connections`, credential-cache clear) → background
+   `model-intelligence.rebuildCatalogOnce` (fire-and-forget). Disconnect:
+   `connections/[provider]/route.ts DELETE` → `removeUserConnection:193` → same rebuild.
+2. Live provider fetch: `model-intelligence/index.ts discoverModels:95` →
+   `catalog/live.ts fetchLiveModels:121` (`resolveUserCredentials` → parallel
+   `PROVIDER_FETCHERS` → per-provider failure isolated).
+3. Normalization: `catalog/normalizers.ts normalizeProviderModel` — SINGLE boundary
+   (`isExplicitlyFree:62`, `applyStaticFallback:113`, `finalize:178`).
+4. Catalog discovery/classification: `discoverModels` merges STATIC_MODEL_REGISTRY
+   (`catalog/registry.ts`) ∩ connected + live ∩ connected → `aiClassify` (a connected free
+   model scores the catalog) or `deterministicRank`.
+5. Catalog persistence/freshness: `storeCatalog:462` → Supabase `model_catalog` +
+   `model_catalog_meta` (provider_fingerprint, last_analyzed_at);
+   `getOrBuildCatalog:593` = load → fingerprint mismatch → SYNC `rebuildCatalogOnce:582`
+   (single-flight) → TTL `CATALOG_TTL_MS` 1h → serve stale + BACKGROUND rebuild; empty/failed
+   rebuild serves last-known catalog (not stored).
+6. `/api/models GET` (`app/api/models/route.ts:10`): Promise.all(catalog, preference,
+   connections) → `PROVIDER_DEFINITIONS` ∩ connected → `reconcileStageOverrides` → self-heal
+   persist on drops → payload.
+7. Models page: `loadData:95` → `applyData:107` → setModels/setProviders +
+   `loadStageModels(reconciled incl. unavailable markers)`; `libraryBaseModels:90` =
+   models ∩ connectedProviderIds.
+8. Candidate pool: `stageSelection.ts buildAutomaticPool:219` (family grouping →
+   `STAGE_CONTEXT_MIN` gate → per-provider top-N).
+9. Stage selection: `selectStageModels/selectForStage:354/363` — free strict branch:409;
+   balanced `pickBalanced:280`; quality `pickQuality:322`.
+10. Preference persistence: `handleSetupSelect:166` / `handleSavePreference:224` →
+    `PUT /api/models/preference` → `preferences.ts saveModelPreference:59` (upsert
+    `user_model_preferences`, stage_overrides incl. `unavailable`).
+11. Runtime routing: `lib/analysis/*` → `gateway.ts generate:48` →
+    `routing.ts resolveAnalysisRouting:51` (credentials + preference +
+    `resolveStageOverride:31` null-guard) + `analyses.model_strategy` read.
+12. Gateway → `model-router/index.ts runWithFallback:204`: `buildAvailableProviders:191`
+    (env ∪ tokens) → `strategy-selection.buildStageAssignments:379` + autoChain
+    `config.ts selectModelsForTask:172` → chain [stage-override > manual > strategy-assignment
+    > autoChain, deduped] → availability/error-aware fallback loop.
+13. Execution: `getOrCreateProvider:180` → `providers/registry.ts
+    createProviderInstanceWithApiKey:93` → `providers/<p>/client.generate`.
+
+Competing implementations (informational only, none feeds persistence/runtime):
+`app/api/analysis/preflight/route.ts pickForStage:40` (display scorer; LIVE via analysis/new
+modal; its tier pick is display-only — `body.model_strategy` ignored by `/api/analyses`,
+`selectedStrategy` state in analysis/new is write-only); `/api/ai/models` fit display (dead);
+`config.rankModels` = runtime autoChain layer (different concern, not a duplicate).
+
+## D. Duplicate/dead modules (no deletions performed)
+
+| File | Classification | Evidence | Action |
+|------|----------------|----------|--------|
+| `app/api/ai/models/route.ts` | DEAD (consumerless endpoint) | zero callers repo-wide; sole caller deleted; no redirects/rewrites | deletion candidate (safest) |
+| `app/api/model-intelligence/refresh/route.ts` | DEAD (callerless endpoint) | zero fetch refs; duplicates connect/disconnect force-rebuild path | deletion candidate |
+| `lib/ai/presets.ts` | DEAD | zero importers; `selection_mode:'preset'` is type-only (nothing writes it) | deletion candidate |
+| `components/models/ModelControls.tsx` | DEAD | zero importers/JSX | deletion candidate |
+| `components/models/CategorySection.tsx` | DEAD | zero importers/JSX | deletion candidate |
+| `components/models/ModelComparison.tsx` | DEAD | zero importers/JSX | deletion candidate |
+| `app/models/page.tsx:682 ModelLibrary` + `libraryModels:281`/`recommendedModels:788` + `filter`/`search` state | DEAD (in-file island) | lint "defined but never used"; no `<ModelLibrary>` JSX anywhere | cleanup candidate (surgical) |
+| `free_paid` engine mode + DB enums + type unions | COMPATIBILITY | schema CHECKs (006/006b/013); UI never writes; runtime only via direct PUT | RETAIN |
+| `strategy-selection.ts:111-127` free→paid fallback in `free_paid` | COMPATIBILITY (scope note 1) | unreachable-from-UI as above | RETAIN (follow-up: strict-free-ify) |
+| `preferences.ts:8 'preset'` + `/api/ai/models:199` preset branch | DEAD branch | type-only, unreachable | fold into presets cleanup |
+| `model-intelligence:665 refreshCatalogIfNeeded` | DEAD export | zero callers | minor cleanup |
+| `config.ts:238 getTaskModelChain` | DEAD export | zero callers | minor cleanup |
+| `model-router:401 getModels` | DEAD export | zero callers | minor cleanup |
+| `catalog/types.ts:138 StageAssignment`, `:38 ProviderConnection` | DEAD types | zero importers (engine's StageAssignment is strategy-selection's) | minor cleanup |
+| `analysis/new:40 selectedStrategy` state | DEAD state | assigned (:184), never read | minor cleanup |
+| `ProviderName` union defined twice (`providers/registry.ts:10`, `catalog/types.ts:4`) | COMPATIBILITY (structural duplicate) | identical literal unions, mutually assignable, both heavily used | consolidate later (low priority) |
+| `components/analysis/ModelPreflight.tsx` + preflight route | LIVE | `analysis/new:180/337` gates analysis start; POSTs route | RETAIN (old state.md notes calling preflight "dead" are WRONG for current code) |
+| `lib/ai/model-registry.ts` / `config.ts` / `cost.ts` / `stageTokenProfiles.ts` / `modelSignals.ts` / `normalizers.ts` / `live.ts` / `registry.ts` / `overrideReconcile.ts` / `stageSelection.ts` / `preferences.ts` / `routing.ts` / `gateway.ts` / `model-router` / `strategy-selection` / `model-intelligence` / `connection/*` / `providers/*` / `validation/*` / `context/*` / `analysis-selection` / `model-execution-tracker` | LIVE | importers verified | RETAIN |
+
+Doc discrepancies found in this state.md's older entries: (1) "env-provider disconnect 409" never
+existed in `connections/[provider]/route.ts` (git log -S '409' empty for all history) — the DELETE
+route has NO env guard today; (2) preflight route listed as dead in older entries — it is LIVE.
+
+## E. Free verification — all strict-Free invariants hold at HEAD
+
+1. Free cannot select paid: `stageSelection.ts:409` filters `pool.filter(m => m.price.isFree)`;
+   `:413` takes first. No paid-fallback branch exists (removed by strict-Free task).
+2. Unknown pricing ≠ free: `normalizers.ts isExplicitlyFree:62` = pricing EXISTS ∧ input===0 ∧
+   output===0; live payloads without pricing → `isFree:false`, `priceSource:'unknown'`.
+3. Null pricing ≠ free: same guard (`input != null && output != null`); static null/null rows
+   never stamped registry (applyStaticFallback:133-152); only exact static `isFree:true` rows
+   grant `freeAuthority:'registry-confirmed'` (curated authority, not inference).
+4. No suitable free model → unavailable: two markers — empty autoPool `:381` and empty freePool
+   `:411` → `{provider:null, model:null, unavailable:true}`.
+5. Markers persist: `page.tsx:192-195` (setup apply) + `:230-231` (save) write the marker;
+   `overrideReconcile.ts:71-73` keeps markers verbatim; `/api/models` self-heal (`changed` =
+   dropped real entries only) never strips them.
+6. Reload preserves: `loadStageModels:138` reads `override?.unavailable === true`; `applyData`
+   runs on mount and after connect/disconnect refresh.
+7. Manual Configure clears: `handleApplyStageChange:354` sets `unavailable:false`, then Save
+   persists the concrete provider/model entry.
+8. Runtime never executes a marker: `routing.ts:37` returns null for null/missing
+   provider|model; `runWithFallback` therefore receives `stageOverrides:null`;
+   `applyStageOverrides:307` also null-guards (engine path).
+   Nuance (pre-existing, documented): a marker stage falls through to the strategy/auto chain
+   exactly like an unconfigured stage — autoChain is free-agnostic; under a saved Free strategy
+   the engine assigns a registry-free model first when one is connected. AutoChain's lack of
+   free gating is the engine-parity debt (scope note 4), not a marker execution.
+
+## F. Provider add/remove dynamics
+
+- Fingerprint: `buildProviderFingerprint:65` = sorted SET of DB-connected providers (not model
+  contents). DB-only by design (`service.ts:76-79` — env must not keep a provider "connected").
+- A/B connect: mutation → background `rebuildCatalogOnce` (single-flight) → UI `refresh()` →
+  `/api/models` GET; if background rebuild hasn't landed, GET's fingerprint check triggers the
+  SAME deduped rebuild synchronously → catalog reflects new set before response.
+  Saved overrides/markers are NOT re-evaluated (no new staleness — catalog only grew).
+- C disconnect: same rebuild path → model rows for A removed (storeCatalog deletes
+  by-fingerprint rows) → `reconcileStageOverrides` drops overrides pointing at A's models →
+  self-heal persists kept set → UI toast lists dropped stages. Markers kept (modelless).
+- D reconnect: dropped overrides do NOT resurrect (correct — stages return to automatic until
+  the user re-applies a setup); new catalog includes A again.
+- E all disconnected: `discoverModels` returns [] → rebuild result empty → NOT stored →
+  `getOrBuildCatalog` serves the LAST-KNOWN catalog (deliberate: keeps working when provider
+  APIs fail); every GET retries the rebuild. Providers list = all disconnected (from
+  `provider_connections`); `libraryBaseModels` = ∅ (page filters by connected ids) → setup
+  apply blocked with toast. Overrides reconcile against the stale-served catalog → KEPT until
+  a rebuild succeeds. Runtime: override provider lacks credentials → `runWithFallback:292`
+  skips it → falls through the chain; if no provider at all is executable → clean error
+  ("No configured providers available").
+- F catalog/model drift: upstream model removals inside the 1h TTL stay in the served catalog
+  (reconcile can't drop what catalog still lists; runtime execute fails → normal fallback).
+  Live fetch has HTTP `revalidate: 3600` too. Provider-set changes bypass TTL (fingerprint).
+- Env asymmetry (documented design, not a bug): env keys execute at runtime
+  (`resolveUserCredentials` env-first, `buildAvailableProviders` env counts) and feed live
+  fetch, but an env-only provider shows Disconnected in the catalog/UI. Mixed env+DB
+  disconnect: DB row deleted → catalog drops provider while env key still executes at runtime.
+- Where stale persisted overrides can remain: (1) `unavailable` markers after a free-capable
+  provider connects — DELIBERATE (scope note 2; re-run Free to clear); (2) real overrides while
+  a failed/empty rebuild serves the last-known catalog (cleared by the next successful
+  rebuild's reconcile); (3) ≤1h against upstream model-level removals. Stages without
+  overrides are never stale at runtime (resolved fresh per run).
+
+## G. Next safest cleanup task (ONLY)
+
+Delete `app/api/ai/models/route.ts` (consumerless endpoint) + update the stale reference in
+`lib/ai/catalog/stageSelection.ts:31`'s comment. Single file, zero callers verified repo-wide,
+no import orphaning (all its imports are shared with live modules), no DB/schema touch, no
+behavior change for Models page, preflight, or runtime. Verify with `npx tsc --noEmit` +
+`npm run build`.

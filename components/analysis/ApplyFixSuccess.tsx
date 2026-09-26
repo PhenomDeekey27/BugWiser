@@ -23,7 +23,7 @@ export function ApplyFixSuccess({
   const shortSha = commitSha.substring(0, 7);
 
   return (
-    <div className="p-6 rounded-xl bg-bw-surface border border-green-500/30 bg-green-500/5 card-depth-lg">
+    <div className="p-6 rounded-xl bg-surface border border-green-500/30 bg-green-500/5 card-depth-lg">
       <div className="flex items-center gap-2 mb-4">
         <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center">
           <span className="text-green-400 text-lg">✓</span>

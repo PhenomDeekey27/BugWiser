@@ -655,23 +655,3 @@ export async function getOrBuildCatalog(userId: string, forceRefresh = false): P
   try { await storeCatalog(userId, result); } catch (err) { console.error('[model-intelligence] Failed to store catalog:', err); }
   return result;
 }
-
-/**
- * Kept as the documented fingerprint/staleness entry point (single refresh
- * mechanism — getOrBuildCatalog owns all freshness logic).
- * Returns the persisted catalog when it is fresh AND matches the current
- * provider set; otherwise rebuilds (deduped).
- */
-export async function refreshCatalogIfNeeded(userId: string): Promise<ModelIntelligenceResult> {
-  const connected = await getProviderConnections(userId);
-  const currentFingerprint = buildProviderFingerprint(connected);
-  const existing = await loadCatalog(userId);
-  if (
-    existing &&
-    existing.providerFingerprint === currentFingerprint &&
-    !isCatalogStale(existing.analyzedAt)
-  ) {
-    return existing;
-  }
-  return rebuildCatalogOnce(userId);
-}

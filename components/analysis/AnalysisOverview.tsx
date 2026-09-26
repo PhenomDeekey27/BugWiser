@@ -24,7 +24,7 @@ export function AnalysisOverview({
 }: AnalysisOverviewProps) {
   return (
     <div className={`space-y-6 ${className || ''}`}>
-      <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
+      <div className="rounded-lg bg-surface border border-border p-4 card-depth">
         <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
           Issue Summary
         </h3>
@@ -59,7 +59,7 @@ export function AnalysisOverview({
       </div>
 
       {fingerprint && (
-        <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
+        <div className="rounded-lg bg-surface border border-border p-4 card-depth">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
             Repository Fingerprint
           </h3>
@@ -118,7 +118,7 @@ export function AnalysisOverview({
         </div>
       )}
 
-      <div className="rounded-lg bg-bw-surface border border-border p-4 card-depth">
+      <div className="rounded-lg bg-surface border border-border p-4 card-depth">
         <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-3">
           Repository
         </h3>

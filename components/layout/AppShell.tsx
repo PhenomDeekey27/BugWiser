@@ -44,7 +44,7 @@ export function AppShell({ children, user, gradient = 'dashboard' }: AppShellPro
       <Button
         variant="ghost"
         size="icon"
-        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 bg-bw-surface border border-border text-bw-peach-light cursor-pointer"
+        className="fixed top-3 left-3 z-50 md:hidden w-8 h-8 bg-surface border border-border text-bw-peach-light cursor-pointer"
         onClick={() => setSidebarOpen(!sidebarOpen)}
         aria-label="Toggle sidebar"
       >

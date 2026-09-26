@@ -5,7 +5,7 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
 import type { ProviderName } from '@/lib/ai/providers/registry';
 
-export type SelectionMode = 'auto' | 'manual' | 'preset';
+export type SelectionMode = 'auto' | 'manual';
 
 /** Engine strategies plus the /models page UI setups (balanced/quality).
  * The runtime engine (strategy-selection.ts) only consumes the engine set;

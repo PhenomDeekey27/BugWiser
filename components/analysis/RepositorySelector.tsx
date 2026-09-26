@@ -29,7 +29,7 @@ export function RepositorySelector({
           {Array.from({ length: 5 }).map((_, i) => (
             <div
               key={i}
-              className="w-full p-4 rounded-lg bg-bw-surface border border-border animate-pulse"
+              className="w-full p-4 rounded-lg bg-surface border border-border animate-pulse"
             >
               <div className="h-4 bg-surface-dim rounded w-1/3 mb-2" />
               <div className="h-3 bg-surface-dim rounded w-2/3" />
@@ -45,7 +45,7 @@ export function RepositorySelector({
       )}
 
       {!loading && !error && repositories.length === 0 && (
-        <div className="p-8 rounded-lg bg-bw-surface border border-border text-center">
+        <div className="p-8 rounded-lg bg-surface border border-border text-center">
           <p className="text-sm text-bw-peach">
             No repositories found. Make sure your GitHub account has access to repositories.
           </p>
@@ -62,7 +62,7 @@ export function RepositorySelector({
                 'w-full p-4 rounded-lg border text-left transition-all cursor-pointer card-depth-hover',
                 selectedRepository?.id === repo.id
                   ? 'border-primary bg-primary/5 glow-primary-sm'
-                  : 'border-border bg-bw-surface hover:border-primary/20'
+                  : 'border-border bg-surface hover:border-primary/20'
               )}
             >
               <div className="flex items-start justify-between gap-2">

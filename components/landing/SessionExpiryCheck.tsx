@@ -17,23 +17,17 @@ export function SessionExpiryCheck() {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session?.provider_token) {
-        // User is logged in but GitHub token is missing — session expired
         toast.error('Your GitHub session has expired. Please sign in again.', {
-          duration: 6000,
+          duration: 8000,
           action: {
             label: 'Sign in',
             onClick: async () => {
               await supabase.auth.signOut();
               localStorage.removeItem('analysis-selection');
-              router.push('/auth/github');
+              router.replace('/auth/github');
             },
           },
         });
-        // Sign out so the header doesn't show user info
-        await supabase.auth.signOut();
-        localStorage.removeItem('analysis-selection');
-        // Force refresh to clear user state
-        router.refresh();
       }
       setChecked(true);
     }

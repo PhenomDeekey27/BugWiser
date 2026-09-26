@@ -28,9 +28,9 @@ export type StageKey =
   | 'patch_generation';
 
 // SINGLE SOURCE OF TRUTH for automatic-setup stage weights (stage-keyed).
-// app/api/ai/models/route.ts imports this export — do NOT define a second
-// copy there or elsewhere. (config.ts TASK_WEIGHTS is a different, TaskType-
-// keyed system used by runtime routing and is intentionally untouched.)
+// Do NOT define a second copy elsewhere. (config.ts TASK_WEIGHTS is a
+// different, TaskType-keyed system used by runtime routing and is
+// intentionally untouched.)
 // Evidence extraction is context/extraction-heavy (not discovery-like), hence
 // its reasoning/longContext weights differ from the older discovery profile.
 export const STAGE_WEIGHTS: Record<StageKey, { coding: number; reasoning: number; speed: number; longContext: number }> = {

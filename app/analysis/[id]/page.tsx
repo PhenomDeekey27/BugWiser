@@ -575,7 +575,7 @@ export default function InvestigationPage() {
               <AnalysisHeader analysis={analysis} />
 
               {(isComplete || record.status === 'ready_for_analysis' || record.status === 'relevant_files_ready' || isDiscoveryRunning) && (
-                <div className="mb-6 p-4 rounded-lg bg-bw-surface border border-green-500/30 bg-green-500/5">
+                <div className="mb-6 p-4 rounded-lg bg-surface border border-green-500/30 bg-green-500/5">
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-2 h-2 rounded-full bg-green-500" />
                     <span className="text-sm font-semibold text-bw-peach-light">

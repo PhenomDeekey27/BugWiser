@@ -397,8 +397,3 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
 
   throw lastError;
 }
-
-export function getModels(): string[] {
-  const chain = selectModelsForTask('relevant_file_discovery');
-  return chain.map((e) => `${e.provider}/${e.model}`);
-}

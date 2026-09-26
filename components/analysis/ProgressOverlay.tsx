@@ -100,7 +100,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
 
   return (
     <div className="flex flex-col items-center justify-center py-16">
-      <div className="w-full max-w-md bg-bw-surface rounded-xl border border-border p-8 card-depth-lg">
+      <div className="w-full max-w-md bg-surface rounded-xl border border-border p-8 card-depth-lg">
         <div className="flex items-center gap-3 mb-6">
           {isActive && (
             <div className="w-5 h-5 border-2 border-primary-container/30 border-t-primary-container rounded-full animate-spin" />
@@ -136,7 +136,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
             </div>
 
             {subLabels.length > 0 && (
-              <div className="mb-4 p-3 rounded-lg bg-bw-surface border border-border">
+              <div className="mb-4 p-3 rounded-lg bg-surface border border-border">
                 <div className="space-y-1">
                   {subLabels.map((label, idx) => (
                     <div key={idx} className="flex items-center gap-2 text-[11px] font-mono text-bw-peach/70">

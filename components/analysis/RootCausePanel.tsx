@@ -18,14 +18,14 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
       </div>
 
       {rootCause.summary && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4 card-depth">
+        <div className="p-4 rounded-lg bg-surface border border-border mb-4 card-depth">
           <p className="text-sm text-bw-peach-light font-medium">
             {rootCause.summary}
           </p>
         </div>
       )}
 
-      <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4 card-depth">
+      <div className="p-4 rounded-lg bg-surface border border-border mb-4 card-depth">
         <p className="text-sm text-bw-peach leading-relaxed">
           {rootCause.description}
         </p>
@@ -40,7 +40,7 @@ export function RootCausePanel({ rootCause }: RootCausePanelProps) {
             {rootCause.affectedFiles.map((file) => (
               <div
                 key={file}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bw-surface"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface"
               >
                 <span className="text-sm font-mono text-primary-default">
                   {file}

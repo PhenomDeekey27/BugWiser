@@ -35,8 +35,6 @@ export interface ProviderDefinition {
   exposesCatalogApi: boolean;
 }
 
-export type ProviderConnection = ProviderDefinition;
-
 export type ModelAvailability = 'available' | 'unavailable' | 'unknown';
 
 export type ModelCapability =
@@ -133,14 +131,6 @@ export interface ModelDefinition {
 export interface ModelCatalog {
   providers: ProviderDefinition[];
   models: ModelDefinition[];
-}
-
-export interface StageAssignment {
-  provider: ProviderName;
-  model: string;
-  /** BugWiser Fit (0–100) for this stage. */
-  fit: number;
-  reason?: string;
 }
 
 export type AnalysisStageKey =

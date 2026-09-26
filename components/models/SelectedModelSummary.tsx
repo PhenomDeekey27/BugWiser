@@ -92,7 +92,7 @@ export function SelectedModelSummary({
                 setSelectedProvider(e.target.value);
                 setSelectedModel('');
               }}
-              className="h-9 w-full rounded-lg border border-input bg-bw-surface px-2 text-sm text-bw-peach-light outline-none focus:border-ring"
+              className="h-9 w-full rounded-lg border border-input bg-surface px-2 text-sm text-bw-peach-light outline-none focus:border-ring"
             >
               <option value="" disabled>Select a provider</option>
               {providers.filter((p) => p.status === 'connected').map((p) => (
@@ -106,7 +106,7 @@ export function SelectedModelSummary({
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               disabled={!selectedProvider}
-              className="h-9 w-full rounded-lg border border-input bg-bw-surface px-2 text-sm text-bw-peach-light outline-none focus:border-ring disabled:opacity-50"
+              className="h-9 w-full rounded-lg border border-input bg-surface px-2 text-sm text-bw-peach-light outline-none focus:border-ring disabled:opacity-50"
             >
               <option value="" disabled>Select a model</option>
               {providerModels.map((m) => (
@@ -118,7 +118,7 @@ export function SelectedModelSummary({
       )}
 
       {selected && (
-        <div className="mb-5 p-4 rounded-lg border border-outline-variant bg-bw-surface">
+        <div className="mb-5 p-4 rounded-lg border border-outline-variant bg-surface">
           <div className="flex items-center justify-between gap-2">
             <div>
               <p className="font-medium text-bw-peach-light">
@@ -142,7 +142,7 @@ export function SelectedModelSummary({
       )}
 
       {mode === 'manual' && !selected && (
-        <div className="mb-5 p-4 rounded-lg border border-outline-variant bg-bw-surface text-sm text-bw-peach">
+        <div className="mb-5 p-4 rounded-lg border border-outline-variant bg-surface text-sm text-bw-peach">
           Select a connected provider and model above. BugWiser will use this exact model for all AI stages; it won&apos;t silently switch models.
         </div>
       )}
@@ -214,7 +214,7 @@ function ModeOption({ active, title, subtitle, onClick }: { active: boolean; tit
         'text-left p-3 rounded-lg border transition-all cursor-pointer',
         active
           ? 'border-primary bg-primary/5'
-          : 'border-outline-variant hover:border-outline bg-bw-surface'
+          : 'border-outline-variant hover:border-outline bg-surface'
       )}
     >
       <div className="flex items-center gap-2">

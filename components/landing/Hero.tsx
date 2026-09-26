@@ -55,14 +55,14 @@ export function Hero({ user }: HeroProps) {
               </Button>
             </Link>
           )}
-          <Button
-            variant="outline"
-            size="lg"
-            className="h-12 cursor-pointer rounded-lg border-border text-bw-peach hover:bg-bw-surface/60 hover:text-bw-peach-light transition-all"
-            onClick={scrollToHowItWorks}
-          >
-            See how it works
-          </Button>
+           <Button
+             variant="outline"
+             size="lg"
+             className="h-12 cursor-pointer rounded-lg border-border text-bw-peach hover:bg-surface-dim hover:text-bw-peach-light transition-all"
+             onClick={scrollToHowItWorks}
+           >
+             See how it works
+           </Button>
         </div>
       </div>
     </section>

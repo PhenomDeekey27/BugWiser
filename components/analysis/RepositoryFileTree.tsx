@@ -263,7 +263,7 @@ export function RepositoryFileTree({
   const relevantCount = relevantFiles.length;
 
   return (
-    <div className={cn('rounded-lg bg-bw-surface border border-border overflow-hidden card-depth', className)}>
+    <div className={cn('rounded-lg bg-surface border border-border overflow-hidden card-depth', className)}>
       <div className="p-3 border-b border-border">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach">

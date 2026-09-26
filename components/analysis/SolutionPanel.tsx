@@ -19,7 +19,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
       </div>
 
       {rootCause && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-red-500/30 bg-red-500/5 mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-red-500/30 bg-red-500/5 mb-4">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
             What is wrong
           </h3>
@@ -36,7 +36,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
       )}
 
       {!rootCause && solution.summary && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-border mb-4">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
             Summary
           </h3>
@@ -46,7 +46,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
         </div>
       )}
 
-      <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+      <div className="p-4 rounded-lg bg-surface border border-border mb-4">
         <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
           What will be changed
         </h3>
@@ -56,7 +56,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
       </div>
 
       {solution.affectedFiles && solution.affectedFiles.length > 0 && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-border mb-4">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
             Affected Files
           </h3>
@@ -76,7 +76,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
       )}
 
       {solution.steps && solution.steps.length > 0 && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4">
+        <div className="p-4 rounded-lg bg-surface border border-border mb-4">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
             Implementation Steps
           </h3>
@@ -94,7 +94,7 @@ export function SolutionPanel({ solution, rootCause }: SolutionPanelProps) {
       )}
 
       {solution.risks && solution.risks.length > 0 && (
-        <div className="p-4 rounded-lg bg-bw-surface border border-yellow-500/30 bg-yellow-500/5">
+        <div className="p-4 rounded-lg bg-surface border border-yellow-500/30 bg-yellow-500/5">
           <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
             Risks & Considerations
           </h3>

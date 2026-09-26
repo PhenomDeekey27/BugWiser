@@ -15,7 +15,7 @@ export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
         {files.map((file) => (
           <div
             key={file.path}
-            className="p-3 rounded-lg bg-bw-surface border border-border"
+            className="p-3 rounded-lg bg-surface border border-border"
           >
             <div className="flex items-center justify-between mb-1">
               <span className="text-sm font-mono text-primary-default">

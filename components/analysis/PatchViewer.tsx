@@ -93,7 +93,7 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
 
   return (
     <div className="rounded-lg border border-border bg-surface-code overflow-hidden card-depth">
-      <div className="px-3 py-2 border-b border-border bg-bw-surface">
+      <div className="px-3 py-2 border-b border-border bg-surface">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-bw-peach-light">{file.path}</span>
@@ -235,7 +235,7 @@ export function PatchViewer({
         </div>
       </div>
 
-      <div className="p-4 rounded-lg bg-bw-surface border border-border mb-4 card-depth">
+      <div className="p-4 rounded-lg bg-surface border border-border mb-4 card-depth">
         <p className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-1">
           Summary
         </p>

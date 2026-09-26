@@ -55,8 +55,8 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-primary/15"
-                style={{ background: '#F0EBE6' }}
+className="flex items-center justify-center w-8 h-8 rounded-full overflow-hidden cursor-pointer transition-all hover:ring-2 hover:ring-primary/15"
+                 style={{ background: '#F0EBE6' }}
               >
                 {user.avatarUrl ? (
                   <img
@@ -74,9 +74,9 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
               </button>
 
               {dropdownOpen && (
-                <div
-                  className="absolute right-0 top-full mt-2 w-60 rounded-xl shadow-xl z-50 overflow-hidden bg-bw-surface border border-border"
-                >
+<div
+className="absolute right-0 top-full mt-2 w-60 rounded-xl shadow-xl z-50 overflow-hidden bg-bw-surface border border-border"
+                 >
                   <div className="px-4 py-3.5 border-b border-border">
                     <p className="text-sm font-semibold text-bw-peach-light">{user.name || user.login}</p>
                     <p className="text-xs font-mono text-bw-dusty-rose mt-0.5">@{user.login}</p>

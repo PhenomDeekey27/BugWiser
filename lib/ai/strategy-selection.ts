@@ -10,10 +10,9 @@
 // Uses the existing MODEL_REGISTRY scoring system.
 //
 // Persisted stage_overrides (the concrete picks saved by the /models page
-// setups) are honored by EVERY mode via applyStageOverrides — so /api/ai/models
-// reports the same assignments the UI and runtime use, and an automatic setup
-// plus manual per-stage customization stay consistent. Manual model selection
-// is unaffected (it flows through selection_mode/manualModel, not here).
+// setups) are honored by EVERY mode via applyStageOverrides — so an automatic
+// setup plus manual per-stage customization stay consistent. Manual model
+// selection is unaffected (it flows through selection_mode/manualModel, not here).
 
 import type { ProviderName } from './providers/registry';
 import { MODEL_REGISTRY } from './model-registry';
