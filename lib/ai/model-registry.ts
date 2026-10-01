@@ -18,10 +18,12 @@ export interface ModelEntry {
 
 function s(level: ScoreLevel): ScoreLevel { return level; }
 
-// Runtime routing registry (task weights, fallbacks). `free` means ONLY
-// explicitly confirmed zero cost — it must agree with the pricing authority
-// (STATIC_MODEL_REGISTRY in lib/ai/catalog/registry.ts); prices are not
-// duplicated here.
+// Runtime routing registry (task weights, fallbacks). FREE STATUS IS NOT
+// DEFINED HERE: the single canonical source of "free" is the catalog's
+// price.isFree (lib/ai/catalog — stamped by the pricing normalizers). The
+// `free` flag below is verified metadata that must agree with that catalog;
+// runtime selection never consults it (the gateway threads a confirmed-free
+// set derived from price.isFree through config/strategy-selection instead).
 export const MODEL_REGISTRY: ModelEntry[] = [
   // ── OpenCode Zen Free Models ──
   {
@@ -80,7 +82,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     id: 'opencode/ling-3.0-flash-fin-free',
     provider: 'opencode',
     model: 'ling-3.0-flash-fin-free',
-    free: true,
+    // Pricing unknown in the catalog (null/null, priceSource unknown) — not
+    // confirmed free; free ⇔ catalog price.isFree.
+    free: false,
     codingScore: s(3),
     reasoningScore: s(3),
     speedScore: s(4),
@@ -106,7 +110,8 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     id: 'opencode/muse-spark-1.2-contributor-free',
     provider: 'opencode',
     model: 'muse-spark-1.2-contributor-free',
-    free: true,
+    // Pricing unknown in the catalog — not confirmed free (see above).
+    free: false,
     codingScore: s(3),
     reasoningScore: s(3),
     speedScore: s(3),
@@ -145,11 +150,11 @@ export const MODEL_REGISTRY: ModelEntry[] = [
   },
 
 // ── Chutes Models (Testing) ──
-// NOTE: `free: false` for TEE models. STATIC_MODEL_REGISTRY (the pricing
-// authority, lib/ai/catalog/registry.ts) prices these 0.08–0.60 USD/1M — they
-// are paid. `free` here must agree with pricing provenance; these entries were
-// previously marked free while carrying paid prices, which made runtime
-// routing and catalog selection disagree about what is free.
+// NOTE: All TEE models are PAID — STATIC_MODEL_REGISTRY (pricing authority,
+// lib/ai/catalog/registry.ts) prices them 0.08–0.60 USD/1M and the live Chutes
+// catalog agrees (Qwen3-32B-TEE: $0.104/$0.416 live). `free` here is verified
+// metadata only; runtime free status comes exclusively from the catalog's
+// price.isFree.
 {
   id: 'chutes/Qwen/Qwen3.5-397B-A17B-TEE',
   provider: 'chutes',
@@ -193,7 +198,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     id: 'chutes/Qwen/Qwen3-32B-TEE',
     provider: 'chutes',
     model: 'Qwen/Qwen3-32B-TEE',
-    free: true,
+    // Paid: static 0.08/0.24 and live $0.104/$0.416 — never free (catalog
+    // price.isFree is authoritative; this flag merely agrees with it).
+    free: false,
     codingScore: s(4),
     reasoningScore: s(4),
     speedScore: s(4),
@@ -457,7 +464,9 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     id: 'zai/glm-4.7-flash',
     provider: 'zai',
     model: process.env.ZAI_MODEL || 'glm-4.7-flash',
-    free: true,
+    // Pricing unknown in the catalog (static row is null/null) — not
+    // confirmed free; free ⇔ catalog price.isFree.
+    free: false,
     codingScore: s(4),
     reasoningScore: s(4),
     speedScore: s(4),
@@ -483,7 +492,8 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     id: 'zai/glm-4.7',
     provider: 'zai',
     model: 'glm-4.7',
-    free: true,
+    // Pricing unknown in the catalog — not confirmed free (see above).
+    free: false,
     codingScore: s(4),
     reasoningScore: s(4),
     speedScore: s(3),
@@ -556,8 +566,4 @@ export function getModelById(id: string): ModelEntry | undefined {
 
 export function getModelsByProvider(provider: ProviderName): ModelEntry[] {
   return MODEL_REGISTRY.filter((m) => m.provider === provider);
-}
-
-export function getFreeModels(): ModelEntry[] {
-  return MODEL_REGISTRY.filter((m) => m.free);
 }

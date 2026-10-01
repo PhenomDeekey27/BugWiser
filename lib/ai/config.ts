@@ -84,17 +84,25 @@ function rankModels(
   taskType: TaskType,
   requiredContext: number,
   excludeModels: Set<string> = new Set(),
-  availableProviders?: Set<ProviderName>
+  availableProviders?: Set<ProviderName>,
+  confirmedFreeIds?: Set<string>
 ): Array<{ entry: ModelEntry; score: number }> {
   const weights = TASK_WEIGHTS[taskType];
   const available = getAvailableModels(requiredContext, availableProviders);
 
   const scored = available
     .filter((m) => !excludeModels.has(m.id))
-    .map((m) => ({ entry: m, score: scoreModel(m, weights, requiredContext) }))
+    .map((m) => ({
+      entry: m,
+      score: scoreModel(m, weights, requiredContext),
+      // Canonical free status: `provider/model` keys derived by the gateway
+      // from the catalog's price.isFree. No set ⇒ nothing gets the free-first
+      // preference — MODEL_REGISTRY.free is never consulted here.
+      free: confirmedFreeIds?.has(`${m.provider}/${m.model}`) ?? false,
+    }))
     .filter((m) => m.score >= 0)
     .sort((a, b) => {
-      if (a.entry.free !== b.entry.free) return a.entry.free ? -1 : 1;
+      if (a.free !== b.free) return a.free ? -1 : 1;
       return b.score - a.score;
     });
 
@@ -173,7 +181,8 @@ export function selectModelsForTask(
   task: string,
   estimatedTokens: number = 0,
   excludeModels: Set<string> = new Set(),
-  availableProviders?: Set<ProviderName>
+  availableProviders?: Set<ProviderName>,
+  confirmedFreeIds?: Set<string>
 ): TaskModelEntry[] {
   // BENCHMARK MODE: Use DeepSeek models if BENCHMARK_DEEPSEEK=true
   if (process.env.BENCHMARK_DEEPSEEK === 'true') {
@@ -201,7 +210,7 @@ export function selectModelsForTask(
       const primaryModel = chutesPreferred[0]?.model || 'unknown';
       const taskType = TASK_TYPE_MAP[task as AnalysisTask] || 'general';
       const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-      const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders);
+      const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders, confirmedFreeIds);
       const remaining = ranked.filter(
         (r) => !chutesPreferred.some(
           (p) => p.provider === r.entry.provider && p.model === r.entry.model
@@ -219,7 +228,7 @@ export function selectModelsForTask(
   // Default: use ranked models
   const taskType = TASK_TYPE_MAP[task as AnalysisTask] || 'general';
   const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-  const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders);
+  const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders, confirmedFreeIds);
 
   if (ranked.length === 0) {
     console.warn(`[config] No models available for task ${task} (context: ${requiredContext}), falling back to all configured models`);

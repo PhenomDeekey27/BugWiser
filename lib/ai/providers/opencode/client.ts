@@ -67,6 +67,18 @@ export class OpenCodeZenProvider implements AIProvider {
     };
   }
 
+  /**
+   * Reachability check ONLY — deliberately NOT a generation-capability check.
+   * GET /models returns 200 even with an empty/absent Bearer credential, and
+   * server-side free-tier generation is rejected with 403 FreeTierError
+   * ("OpenCode's free tier can only be used from within OpenCode" — measured;
+   * see think/state.md). A generation-tier probe is intentionally not
+   * performed here: a free-tier request is always rejected, which would fail
+   * connection validation and drop OpenCode from user-facing model discovery,
+   * and paid inference must never be consumed by health validation.
+   * LIMITATION (documented, unchanged behavior): healthy=true proves endpoint
+   * reachability only, not generation access.
+   */
   async healthCheck(): Promise<boolean> {
     try {
       const response = await fetch(`${this.config.baseUrl}/models`, {

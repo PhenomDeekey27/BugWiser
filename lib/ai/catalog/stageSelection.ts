@@ -70,7 +70,7 @@ export interface StagePick {
   isFree: boolean;
   /**
    * Free setup only: no confirmed-free model survived the stage's automatic
-   * pool (family grouping → context gate → provider cap). The stage is
+   * pool (context gate → family grouping → provider cap). The stage is
    * explicitly unavailable — Free NEVER falls back to a paid model.
    */
   unavailable?: boolean;
@@ -114,7 +114,7 @@ function stageEstimatedCostUsd(model: CatalogModel, stageId: StageKey): number |
   return estimate.status === 'unknown' ? null : estimate.usd;
 }
 
-// ── Automatic-selection pool: family grouping → context gate → provider top-N ──
+// ── Automatic-selection pool: context gate → family grouping → provider top-N ──
 // All of the following apply ONLY to the derived pool used by Free/Balanced/
 // Quality setup selection. The full catalog always remains available to the
 // Model Library and the manual Configure/Change Model selector.
@@ -210,31 +210,38 @@ function betterFamilyRepresentative(a: CatalogModel, b: CatalogModel): CatalogMo
 
 /**
  * Builds the derived automatic-selection pool from the FULL catalog:
- *   1. family grouping (one representative per near-duplicate family)
- *   2. per-stage context sufficiency gate (STAGE_CONTEXT_MIN)
+ *   1. per-stage context sufficiency gate (STAGE_CONTEXT_MIN) — eligibility
+ *      FIRST, so an ineligible family representative can never make an
+ *      eligible sibling disappear
+ *   2. family grouping among ELIGIBLE models (one representative per
+ *      near-duplicate family)
  *   3. per-provider top-N cap (MAX_CANDIDATES_PER_PROVIDER), ranked by the
  *      existing StageScore so catalog size cannot buy extra lottery tickets
  * The input array is never mutated; manual selection keeps the full catalog.
+ * Exported (pure) so pool composition can be validated directly.
  */
-function buildAutomaticPool(
+export function buildAutomaticPool(
   availableModels: CatalogModel[],
   stageId: StageKey,
   weights: { coding: number; reasoning: number; speed: number; longContext: number }
 ): CatalogModel[] {
-  // 1. Family grouping — keep one representative per near-duplicate family.
+  // 1. Context sufficiency gate FIRST (CatalogModel.contextWindow is always a
+  //    number: live API → static registry → 128K default, applied at discovery
+  //    time — so there is no null case to reinterpret here). Eligibility
+  //    precedes dedup so an ineligible family representative can never make an
+  //    eligible sibling disappear.
+  const contextMin = STAGE_CONTEXT_MIN[stageId] ?? 0;
+  const eligible = availableModels.filter((m) => m.contextWindow >= contextMin);
+
+  // 2. Family grouping among ELIGIBLE models — keep one representative per
+  //    near-duplicate family (same key/priority rules as before).
   const families = new Map<string, CatalogModel>();
-  for (const m of availableModels) {
+  for (const m of eligible) {
     const key = modelFamilyKey(m.providerId, m.modelId);
     const existing = families.get(key);
     families.set(key, existing ? betterFamilyRepresentative(existing, m) : m);
   }
-  let pool = Array.from(families.values());
-
-  // 2. Context sufficiency gate (CatalogModel.contextWindow is always a number:
-  //    live API → static registry → 128K default, applied at discovery time —
-  //    so there is no null case to reinterpret here).
-  const contextMin = STAGE_CONTEXT_MIN[stageId] ?? 0;
-  pool = pool.filter((m) => m.contextWindow >= contextMin);
+  const pool = Array.from(families.values());
 
   // 3. Provider top-N cap. Rank each provider's candidates by StageScore with
   //    the existing stable tiebreaks, keep the top N, merge across providers.
@@ -388,7 +395,7 @@ export function selectForStage(
   if (availableModels.length === 0) return null;
   const w = weights || STAGE_WEIGHTS[stageId];
 
-  // Derived automatic-selection pool (family grouping → context gate →
+  // Derived automatic-selection pool (context gate → family grouping →
   // provider top-N). `availableModels` (the full connected catalog) is NOT
   // mutated — manual selection keeps seeing everything.
   const autoPool = buildAutomaticPool(availableModels, stageId, w);
@@ -440,7 +447,7 @@ export function selectForStage(
 
 // ── STRICT FREE runtime support (strategy === 'free') ──
 // Runtime Free enforcement reuses the exact same canonical logic above:
-// automatic pool gates (family grouping → STAGE_CONTEXT_MIN → provider
+// automatic pool gates (STAGE_CONTEXT_MIN → family grouping → provider
 // top-N), the same score ordering, and the same `price.isFree` filter.
 // Nothing here redefines "free" — price.isFree (explicit zero cost, stamped
 // by the normalizers) is the single source of truth.

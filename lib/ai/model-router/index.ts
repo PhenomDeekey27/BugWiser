@@ -65,6 +65,15 @@ export interface RunRequest {
    * it never falls through to an automatic chain.
    */
   stageOverrideUnavailable?: boolean;
+  /**
+   * Canonical confirmed-free model ids (`provider/model`) derived by the
+   * gateway from the catalog's price.isFree — the ONE free authority for
+   * non-strict runs (free-first autoChain ranking + strategy-engine free
+   * classification). Absent ⇒ nothing is treated as free; MODEL_REGISTRY.free
+   * is never consulted. Unused under strictFree (that chain comes entirely
+   * from freeCandidates).
+   */
+  confirmedFreeIds?: Set<string>;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -345,11 +354,12 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
         request.task,
         estimatedTokens,
         new Set(),
-        availableProviders
+        availableProviders,
+        request.confirmedFreeIds
       );
   const stageAssignments = request.strictFree
     ? []
-    : buildStageAssignments(strategy || 'auto', availableProviders);
+    : buildStageAssignments(strategy || 'auto', availableProviders, undefined, request.confirmedFreeIds);
 
   const chain = buildRunChain(request, autoChain, stageAssignments);
 

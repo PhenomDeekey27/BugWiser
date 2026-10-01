@@ -34,7 +34,12 @@ export interface NormalizedModel {
   supportsCoding: boolean;
   supportsVision: boolean;
   availability: 'available' | 'unavailable' | 'unknown';
-  source: 'registry' | 'live';
+  /**
+   * Entry provenance: where the ROW came from. Fresh discovery rows are always
+   * 'registry' | 'live'; 'ai_classified' appears only on legacy persisted rows
+   * written before per-row score origins existed (parsePersistedSource).
+   */
+  source: 'registry' | 'live' | 'ai_classified';
   registryScores?: { coding: number; reasoning: number; speed: number; longContext: number };
   /** Normalization provenance (passthrough from normalizeProviderModel; recomputed per build, not persisted). */
   contextSource?: ContextSource;
@@ -44,6 +49,13 @@ export interface NormalizedModel {
   modalities?: { input: string[]; output: string[] };
 }
 
+/**
+ * Where a row's SCORES came from — independent of entry provenance (`source`).
+ * Mirrors RelevantFile.source in types/index.ts. Persisted per-row through the
+ * existing `source` column via persistedSource()/parsePersistedSource().
+ */
+export type ScoreOrigin = 'ai' | 'deterministic';
+
 export interface ClassifiedModel extends NormalizedModel {
   codingScore: number;
   reasoningScore: number;
@@ -52,6 +64,8 @@ export interface ClassifiedModel extends NormalizedModel {
   valueScore: number;
   overallScore: number;
   recommendedCategories: string[];
+  /** Actual score origin for THIS row (never inferred from catalog-level flags). */
+  scoreOrigin: ScoreOrigin;
 }
 
 export interface ModelIntelligenceResult {
@@ -206,8 +220,32 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
   return result;
 }
 
-function selectFreeModelForClassification(models: NormalizedModel[]): NormalizedModel | null {
-  const freeModels = models.filter((m) => m.isFree && m.contextWindow >= 8000);
+/**
+ * Providers whose FREE-tier models reject server-side generation. OpenCode Zen
+ * answers POST /chat/completions with HTTP 403 FreeTierError ("OpenCode's free
+ * tier can only be used from within OpenCode") for every server-side caller —
+ * measured, see think/state.md. This restriction is scoped to the SERVER-SIDE
+ * CLASSIFIER's generation-model choice ONLY: user-facing Free selection,
+ * price.isFree, confirmedFreeIds, Free stage cards and strict-Free runtime keep
+ * seeing these models as confirmed free. Provider-aware by normalized provider
+ * identity (never model-ID hardcoding), no provider ranking, no replacement
+ * model preference.
+ */
+const CLASSIFIER_BLOCKED_PROVIDERS: ReadonlySet<ProviderName> = new Set(['opencode']);
+
+/**
+ * The classifier's generation model: confirmed-free (strict — a paid model can
+ * never be selected), context-capable, and eligible for server-side generation
+ * (CLASSIFIER_BLOCKED_PROVIDERS above). Score formula, stable-sort tie-break
+ * and input order are unchanged; no model is hardcoded as a replacement. Null
+ * when nothing qualifies — the caller uses the existing deterministic fallback
+ * (getOrBuildCatalog's null branch), never a paid model.
+ * Exported as a probe hook (tests exercise eligibility + fallback directly).
+ */
+export function selectFreeModelForClassification(models: NormalizedModel[]): NormalizedModel | null {
+  const freeModels = models.filter(
+    (m) => m.isFree && m.contextWindow >= 8000 && !CLASSIFIER_BLOCKED_PROVIDERS.has(m.provider)
+  );
   if (freeModels.length === 0) return null;
   const scored = freeModels.map((m) => ({
     model: m,
@@ -234,7 +272,7 @@ function deterministicRank(models: NormalizedModel[]): ClassifiedModel[] {
     if (longContextScore >= 60) categories.push('long-context');
     if (valueScore >= 60) categories.push('best-value');
     if (m.isFree) categories.push('free');
-    return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: categories };
+    return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: categories, scoreOrigin: 'deterministic' as const };
   }).sort((a, b) => b.overallScore - a.overallScore);
 }
 
@@ -349,12 +387,16 @@ function computeValueScore(m: NormalizedModel): number {
 }
 
 /**
- * Classification outcome. `applied: false` means the classifier's output was
- * unusable (HTTP failure, unparseable, skipped, or fewer scored entries than
- * models — the typical truncation case) and deterministic metadata scoring
- * was used. Callers MUST NOT report classified_by_ai=true for `applied: false`
- * results: stamping a failed classification misled the UI and meta stats while
- * hundreds of models carried identical constant scores.
+ * Classification outcome. `applied: false` means NO batch's output was usable
+ * (every batch: HTTP failure, unparseable, skipped, or fewer scored entries
+ * than the batch — the typical truncation case) and deterministic metadata
+ * scoring was used for the whole catalog. Callers MUST NOT report
+ * classified_by_ai=true for `applied: false` results: stamping a failed
+ * classification misled the UI and meta stats while hundreds of models carried
+ * identical constant scores. With batching, `applied: true` means at LEAST one
+ * batch's AI scores were accepted — batches that failed still carry their own
+ * deterministic scores (the same partial tolerance the per-entry gap fallback
+ * already had).
  */
 interface ClassificationOutcome {
   models: ClassifiedModel[];
@@ -362,21 +404,140 @@ interface ClassificationOutcome {
 }
 
 /**
- * Above this many models the classification call provably cannot succeed: each
- * scored entry costs ~40-50 output tokens and max_tokens is 4096, so anything
- * beyond ~80 models is ALWAYS truncated (observed: 576-model catalog → partial
- * JSON → zip-fill assigned constant 50/50/50/50 scores to hundreds of models).
- * Skipping the doomed call removes ~5-15s of pure latency from every rebuild
- * AND removes the corruption source; deterministic metadata scoring is used
- * instead. Small catalogs still benefit from genuine AI classification.
+ * Maximum models per AI classification REQUEST. Each scored entry costs ~40-50
+ * output tokens and max_tokens is 8192 (raised from 4096 on 2026-09-30 after
+ * reasoning output hit finish_reason=length with null content), so requests far
+ * beyond this size are ALWAYS truncated (observed at 4096: 576-model catalog →
+ * partial JSON → zip-fill assigned constant 50/50/50/50 scores to hundreds of
+ * models). Catalogs larger than this are NOT skipped: they are split into
+ * bounded, sequential batches of at most this size, each independently
+ * validated and merged, so no single response can hit the output budget.
+ * Do NOT raise this to "fit" a catalog.
  */
 const AI_CLASSIFY_MAX_MODELS = 80;
 
-async function aiClassify(userId: string, models: NormalizedModel[], freeModel: NormalizedModel): Promise<ClassificationOutcome> {
-  if (models.length > AI_CLASSIFY_MAX_MODELS) {
-    return { models: deterministicRank(models), applied: false };
+/**
+ * Deterministic, order-preserving split of the catalog into chunks of at most
+ * AI_CLASSIFY_MAX_MODELS per request. Input order is untouched (the catalog is
+ * already deterministically ordered), boundaries are pure index arithmetic —
+ * same catalog → same batches, no randomization, no provider/model preference,
+ * and the batch index never enters any prompt or score.
+ */
+export function splitClassificationBatches<T>(models: T[]): T[][] {
+  const batches: T[][] = [];
+  for (let i = 0; i < models.length; i += AI_CLASSIFY_MAX_MODELS) {
+    batches.push(models.slice(i, i + AI_CLASSIFY_MAX_MODELS));
   }
-  const modelList = models.map((m, i) =>
+  return batches;
+}
+
+interface BatchScoreEntry {
+  codingScore: number;
+  reasoningScore: number;
+  speedScore: number;
+  longContextScore: number;
+  valueScore: number;
+  overallScore?: number;
+  recommendedCategories?: string[];
+}
+
+/**
+ * Maps ONE batch's raw model response onto its models (prompt order = array
+ * index = batch order, so identity association is positional and exact).
+ * Returns null when the batch output is unusable: non-string/empty content,
+ * no JSON array, unparseable JSON, non-array JSON, or fewer scored entries
+ * than the batch (the truncation case) — the caller then falls back to
+ * deterministic scoring for ALL models of THIS batch only. NEVER zip-fills: a
+ * response shorter than the batch is rejected outright. A response as long as
+ * the batch with a gap at some index gives THAT model its own deterministic
+ * score — never a fabricated constant (that constant fill is what
+ * historically flattened hundreds of distinct models into identical
+ * 50/50/50/50 scores).
+ *
+ * `onIssue` (optional) receives a SANTIZED diagnostic note — fixed category
+ * literals or plain counts only (e.g. `incomplete:12/80`,
+ * `schema:3-of-80-entries`), never response content, prompts, or scores — so
+ * callers can log WHY a batch was rejected without leaking model output.
+ */
+export function applyBatchScores(
+  batch: NormalizedModel[],
+  content: string,
+  onIssue?: (note: string) => void
+): ClassifiedModel[] | null {
+  const reject = (note: string): null => {
+    onIssue?.(note);
+    return null;
+  };
+  if (typeof content !== 'string') return reject('nonstring-content');
+  if (content.trim() === '') return reject('empty-content');
+  const jsonMatch = content.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) return reject('no-json-array');
+  let scores: unknown;
+  try {
+    scores = JSON.parse(jsonMatch[0]);
+  } catch {
+    return reject('json-parse-error');
+  }
+  if (!Array.isArray(scores)) return reject('not-an-array');
+  if (scores.length < batch.length) return reject(`incomplete:${scores.length}/${batch.length}`);
+  const list = scores as BatchScoreEntry[];
+  let schemaIssues = 0;
+  const result = batch.map((m, i) => {
+    const s = list[i];
+    // NO constant fill: an entry the classifier did not actually score must NOT
+    // receive a fabricated 50/50/50/50 tuple. Unscored entries fall back to
+    // the deterministic metadata ranking for this model instead.
+    if (!s || typeof s !== 'object') {
+      schemaIssues++;
+      const [fallback] = deterministicRank([m]);
+      return fallback;
+    }
+    const codingScore = clamp(s.codingScore);
+    const reasoningScore = clamp(s.reasoningScore);
+    const speedScore = clamp(s.speedScore);
+    const longContextScore = clamp(s.longContextScore);
+    const valueScore = clamp(s.valueScore);
+    const overallScore = clamp(s.overallScore ?? Math.round(codingScore * 0.3 + reasoningScore * 0.25 + speedScore * 0.15 + longContextScore * 0.15 + valueScore * 0.15));
+    return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: s.recommendedCategories || [], scoreOrigin: 'ai' as const };
+  });
+  if (schemaIssues > 0) onIssue?.(`schema:${schemaIssues}-of-${batch.length}-entries`);
+  return result;
+}
+
+/**
+ * Reduces an HTTP-200 error object to a short category token: a numeric (or
+ * charset-whitelisted) code/type, ≤64 chars, else `category=unknown`. The
+ * error `message`, raw body, headers, and anything that could echo the prompt
+ * or model output are deliberately discarded — only this token may reach a
+ * log line or thrown Error.
+ */
+function safeErrorCategory(err: unknown): string {
+  if (typeof err === 'number') return 'code=' + err;
+  if (err && typeof err === 'object') {
+    const e = err as { code?: unknown; type?: unknown; error_type?: unknown };
+    if (typeof e.code === 'number') return 'code=' + e.code;
+    if (typeof e.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(e.code)) return 'code=' + e.code;
+    for (const candidate of [e.error_type, e.type]) {
+      if (typeof candidate === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(candidate)) return 'type=' + candidate;
+    }
+  }
+  return 'category=unknown';
+}
+
+/** One bounded classifier request. Throws on transport/HTTP failure — thrown
+ * messages carry ONLY the HTTP status or a sanitized error category (never
+ * headers, keys, bodies, prompts, or model output). Returns null when the
+ * response parsed but is unusable (applyBatchScores rules); rejection
+ * categories surface through `onIssue`. Exported as a probe hook (tests
+ * exercise the diagnostics against mocked fetch responses). */
+export async function classifyBatch(
+  batch: NormalizedModel[],
+  freeModel: NormalizedModel,
+  apiKey: string,
+  baseUrl: string,
+  onIssue?: (note: string) => void
+): Promise<ClassifiedModel[] | null> {
+  const modelList = batch.map((m, i) =>
     (i + 1) + '. ' + m.provider + '/' + m.modelId + ' -- ' + m.displayName +
     ' | free=' + m.isFree + ' | price=$' + (m.inputPrice ?? '?') + '/' + (m.outputPrice ?? '?') +
     ' | ctx=' + m.contextWindow + ' | reasoning=' + m.supportsReasoning + ' tools=' + m.supportsToolCalling + ' coding=' + m.supportsCoding
@@ -384,60 +545,110 @@ async function aiClassify(userId: string, models: NormalizedModel[], freeModel: 
 
   const prompt = 'You are a model classification engine. Analyze these AI models and assign scores (0-100).\n\nMODELS:\n' + modelList + '\n\nFor EACH model return a JSON object: codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore (all 0-100), recommendedCategories (array from ["best-coding","best-reasoning","fast","long-context","best-value","free"]).\nReturn ONLY a JSON array. Example:\n[{"codingScore":85,"reasoningScore":70,"speedScore":60,"longContextScore":80,"valueScore":75,"overallScore":74,"recommendedCategories":["best-coding"]}]';
 
-  const creds = await resolveUserCredentials(userId);
-  const apiKey = creds[freeModel.provider] || envKeyForProvider(freeModel.provider);
-  if (!apiKey) throw new Error('No API key for ' + freeModel.provider);
-
-  const baseUrl = getBaseUrl(freeModel.provider);
   const response = await fetch(baseUrl + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-    body: JSON.stringify({ model: freeModel.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.1, max_tokens: 4096 }),
+    body: JSON.stringify({ model: freeModel.modelId, messages: [{ role: 'user', content: prompt }], temperature: 0.1, max_tokens: 8192 }),
   });
-
   if (!response.ok) throw new Error('AI classification call failed: ' + response.status);
-
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  const jsonMatch = content.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return { models: deterministicRank(models), applied: false };
-
-  try {
-    const scores = JSON.parse(jsonMatch[0]) as Array<{ codingScore: number; reasoningScore: number; speedScore: number; longContextScore: number; valueScore: number; overallScore: number; recommendedCategories: string[] }>;
-    // The classifier frequently truncates its list (max_tokens, refusals).
-    // Zip-mapping past the response length silently assigned the 50/50
-    // fallback tuple to every unmatched model — flattening hundreds of
-    // distinct models into identical generic scores (observed: hundreds of
-    // rows all stored 50/50/50/50). A shorter-than-models response is
-    // therefore unusable → deterministic metadata scoring for ALL models.
-    if (!Array.isArray(scores) || scores.length < models.length) {
-      return { models: deterministicRank(models), applied: false };
-    }
-    return {
-      models: models.map((m, i) => {
-        const s = scores[i];
-        // NO constant fill: an entry the classifier did not actually score
-        // must NOT receive a fabricated 50/50/50/50 tuple (that constant
-        // fill is what historically flattened hundreds of distinct models
-        // into identical scores). Unscored entries fall back to the
-        // deterministic metadata ranking for this model instead.
-        if (!s || typeof s !== 'object') {
-          const [fallback] = deterministicRank([m]);
-          return fallback;
-        }
-        const codingScore = clamp(s.codingScore);
-        const reasoningScore = clamp(s.reasoningScore);
-        const speedScore = clamp(s.speedScore);
-        const longContextScore = clamp(s.longContextScore);
-        const valueScore = clamp(s.valueScore);
-        const overallScore = clamp(s.overallScore ?? Math.round(codingScore * 0.3 + reasoningScore * 0.25 + speedScore * 0.15 + longContextScore * 0.15 + valueScore * 0.15));
-        return { ...m, codingScore, reasoningScore, speedScore, longContextScore, valueScore, overallScore, recommendedCategories: s.recommendedCategories || [] };
-      }).sort((a, b) => b.overallScore - a.overallScore),
-      applied: true,
-    };
-  } catch {
-    return { models: deterministicRank(models), applied: false };
+  // Gateways (OpenRouter documented) report post-accept failures as HTTP 200
+  // whose body holds an `error` and no `choices`. A status-only check passes
+  // that, and the empty content would then masquerade as a model-output
+  // problem — surface it instead as an API error with a sanitized category.
+  if (!data?.choices?.[0]) {
+    if (data?.error) throw new Error('classifier http200 api error: ' + safeErrorCategory(data.error));
+    throw new Error('classifier http200 missing choices');
   }
+  // Shape diagnostics BEFORE any content coercion. Note tokens are strictly
+  // sanitized: fixed category literals, booleans, and whitelist-matched enums.
+  // NEVER refusal text, reasoning text, tool-call payloads, response bodies,
+  // prompts, credentials, or model-generated content.
+  const choice = data.choices[0];
+  const metaFlags: string[] = [];
+  // finish_reason lives on the CHOICE (OpenAI-compatible shape). Whitelist:
+  // lowercase enum charset only, else the flag is omitted entirely.
+  const finish = choice?.finish_reason;
+  if (typeof finish === 'string' && /^[a-z0-9_]{1,32}$/.test(finish)) metaFlags.push('finish_reason=' + finish);
+  const message = choice?.message;
+  if (!message || typeof message !== 'object') {
+    onIssue?.(['missing-message', ...metaFlags].join('|'));
+    return null;
+  }
+  if (message.refusal) metaFlags.push('refusal-present');
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) metaFlags.push('tool-calls-present');
+  const reasoning = message.reasoning ?? message.reasoning_content;
+  if ((typeof reasoning === 'string' && reasoning.trim() !== '') || (Array.isArray(reasoning) && reasoning.length > 0)) {
+    metaFlags.push('reasoning-present');
+  }
+  const content = message.content;
+  if (content === null || content === undefined) {
+    onIssue?.(['null-content', ...metaFlags].join('|'));
+    return null;
+  }
+  if (typeof content !== 'string') {
+    onIssue?.(['nonstring-content', ...metaFlags].join('|'));
+    return null;
+  }
+  if (content.trim() === '') {
+    onIssue?.(['empty-content', ...metaFlags].join('|'));
+    return null;
+  }
+  const noteWithFlags = (note: string): string =>
+    metaFlags.length > 0 && (note === 'json-parse-error' || note === 'no-json-array')
+      ? [note, ...metaFlags].join('|')
+      : note;
+  return applyBatchScores(batch, content, onIssue ? (note) => onIssue?.(noteWithFlags(note)) : undefined);
+}
+
+// Exported as a probe hook (tests exercise batching/fallback against a local
+// mock); callers inside the app go through getOrBuildCatalog only.
+export async function aiClassify(userId: string, models: NormalizedModel[], freeModel: NormalizedModel): Promise<ClassificationOutcome> {
+  const batches = splitClassificationBatches(models);
+  if (batches.length === 0) return { models: deterministicRank(models), applied: false };
+
+  // Credentials/endpoint resolve ONCE before any request — a missing key still
+  // throws to the caller exactly as the single-request implementation did
+  // (whole catalog deterministic, classified_by_ai=false).
+  const creds = await resolveUserCredentials(userId);
+  const apiKey = creds[freeModel.provider] || envKeyForProvider(freeModel.provider);
+  if (!apiKey) throw new Error('No API key for ' + freeModel.provider);
+  const baseUrl = getBaseUrl(freeModel.provider);
+
+  // Sequential batches: no concurrency to manage, no rate-limit fan-out, one
+  // output budget (8192 tokens, raised from 4096) per ≤80-model request — the
+  // proven-safe envelope.
+  const merged: ClassifiedModel[] = [];
+  let appliedBatches = 0;
+  let appliedModels = 0;
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    let scored: ClassifiedModel[] | null = null;
+    let issueNote = '';
+    const onIssue = (note: string) => {
+      if (!issueNote) issueNote = note; // first sanitized rejection category wins
+    };
+    try {
+      scored = await classifyBatch(batch, freeModel, apiKey, baseUrl, onIssue);
+    } catch (err) {
+      console.warn(`[model-intelligence] AI classification batch ${i + 1}/${batches.length} failed:`, err);
+    }
+    if (scored) {
+      merged.push(...scored);
+      appliedBatches++;
+      appliedModels += batch.length;
+    } else {
+      // Failed/truncated batch falls back to deterministic scoring for ITS
+      // models only — successful batches stay applied and are never re-scored.
+      merged.push(...deterministicRank(batch));
+    }
+    console.log(`[model-intelligence] classification batch ${i + 1}/${batches.length} (${batch.length} models): ${scored ? 'ai-applied' : 'deterministic-fallback'}${issueNote ? ` [${issueNote}]` : ''}`);
+  }
+  console.log(`[model-intelligence] classification total: ${appliedModels}/${models.length} models AI-scored (${appliedBatches}/${batches.length} batches applied)`);
+  // One global sort mirrors the single-request behavior (stable sort keeps
+  // batch order for ties). Batch index is not a scoring signal anywhere.
+  merged.sort((a, b) => b.overallScore - a.overallScore);
+  return { models: merged, applied: appliedBatches > 0 };
 }
 
 function getBaseUrl(provider: ProviderName): string {
@@ -459,6 +670,124 @@ function clamp(v: unknown): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+const AI_SOURCE_STAMP = 'ai_classified';
+const AI_SOURCE_PREFIX = 'ai_classified:';
+
+/**
+ * Encodes THIS row's score origin + entry provenance into the existing
+ * `source` column (no schema migration):
+ *   'ai_classified:registry' | 'ai_classified:live'
+ *       — scores came from the AI classifier; entry provenance survives the
+ *         colon. Written ONLY for rows the classifier actually scored, so a
+ *         partial batch failure can no longer stamp fallback rows as AI.
+ *   'registry' | 'live'
+ *       — deterministic (metadata-derived) scores AND entry provenance,
+ *         byte-identical to what the pre-fix writer produced.
+ *   'ai_classified'
+ *       — legacy catalog-wide stamp (pre-fix, when classifiedByAi=true);
+ *         parsePersistedSource keeps reading it.
+ */
+export function persistedSource(m: Pick<ClassifiedModel, 'source' | 'scoreOrigin'>): string {
+  if (m.scoreOrigin === 'ai') {
+    return m.source === 'registry' || m.source === 'live' ? AI_SOURCE_PREFIX + m.source : AI_SOURCE_STAMP;
+  }
+  // Deterministic rows always come from fresh discovery ('registry'|'live').
+  // The ':live' fallback only guards the unreachable legacy combination (a
+  // pre-fix 'ai_classified' source on a deterministic row), keeping the
+  // encoded value inside the documented domain without claiming AI.
+  return m.source === 'registry' ? 'registry' : 'live';
+}
+
+/** Inverse of persistedSource — parses a stored `source` value. */
+export function parsePersistedSource(raw: string | null | undefined): { source: NormalizedModel['source']; scoreOrigin: ScoreOrigin } {
+  if (raw != null && raw.startsWith(AI_SOURCE_PREFIX)) {
+    const entry = raw.slice(AI_SOURCE_PREFIX.length);
+    // Unknown composite suffix: the 'ai_classified:' prefix still proves the
+    // score origin; keep the legacy provenance-less value rather than invent one.
+    return { source: entry === 'registry' || entry === 'live' ? entry : AI_SOURCE_STAMP, scoreOrigin: 'ai' };
+  }
+  if (raw === AI_SOURCE_STAMP) return { source: AI_SOURCE_STAMP, scoreOrigin: 'ai' }; // legacy pre-fix stamp
+  if (raw === 'registry' || raw === 'live') return { source: raw, scoreOrigin: 'deterministic' };
+  // No writer has produced any other value. Default conservatively: a row
+  // without a recognisable stamp must NEVER read as AI-classified.
+  return { source: 'live', scoreOrigin: 'deterministic' };
+}
+
+/**
+ * One `model_catalog` upsert row (exported so tests can round-trip the exact
+ * persistence mapping without a database). `source` carries the per-row score
+ * origin via persistedSource().
+ */
+export function toCatalogRow(
+  m: ClassifiedModel,
+  ctx: { userId: string; providerFingerprint: string; analyzedAt: string }
+): ModelCatalogRow {
+  return {
+    user_id: ctx.userId, provider: m.provider, model_id: m.modelId, display_name: m.displayName,
+    is_free: m.isFree, input_price: m.inputPrice, output_price: m.outputPrice,
+    price_source: m.priceSource, price_fetched_at: m.priceFetchedAt,
+    context_window: m.contextWindow, max_output_tokens: m.maxOutputTokens,
+    supports_reasoning: m.supportsReasoning, supports_tool_calling: m.supportsToolCalling,
+    supports_structured_output: m.supportsStructuredOutput, supports_coding: m.supportsCoding,
+    supports_vision: m.supportsVision, coding_score: m.codingScore, reasoning_score: m.reasoningScore,
+    speed_score: m.speedScore, long_context_score: m.longContextScore, value_score: m.valueScore,
+    overall_score: m.overallScore, recommended_categories: m.recommendedCategories,
+    availability: m.availability, source: persistedSource(m),
+    provider_fingerprint: ctx.providerFingerprint, last_analyzed_at: ctx.analyzedAt,
+  };
+}
+
+/** Row shape written to/read from `model_catalog` by the helpers above. */
+export interface ModelCatalogRow {
+  user_id?: string;
+  provider: string;
+  model_id: string;
+  display_name: string;
+  is_free: boolean;
+  input_price: number | null;
+  output_price: number | null;
+  price_source?: string | null;
+  price_fetched_at?: string | null;
+  context_window: number;
+  max_output_tokens: number | null;
+  supports_reasoning: boolean;
+  supports_tool_calling: boolean;
+  supports_structured_output: boolean;
+  supports_coding: boolean;
+  supports_vision: boolean;
+  availability: string;
+  source?: string | null;
+  coding_score: number;
+  reasoning_score: number;
+  speed_score: number;
+  long_context_score: number;
+  value_score: number;
+  overall_score: number;
+  recommended_categories?: string[] | null;
+  provider_fingerprint?: string;
+  last_analyzed_at?: string;
+}
+
+/** Inverse of toCatalogRow (exported for tests). */
+export function fromCatalogRow(r: ModelCatalogRow): ClassifiedModel {
+  const parsed = parsePersistedSource(r.source);
+  return {
+    provider: r.provider as ProviderName, modelId: r.model_id, displayName: r.display_name,
+    isFree: r.is_free, inputPrice: r.input_price, outputPrice: r.output_price,
+    // Default pre-migration rows to 'unknown' — do not assume stale prices are
+    // live or registry-confirmed.
+    priceSource: (r.price_source ?? 'unknown') as NormalizedModel['priceSource'], priceFetchedAt: r.price_fetched_at ?? null,
+    contextWindow: r.context_window, maxOutputTokens: r.max_output_tokens,
+    supportsReasoning: r.supports_reasoning, supportsToolCalling: r.supports_tool_calling,
+    supportsStructuredOutput: r.supports_structured_output, supportsCoding: r.supports_coding,
+    supportsVision: r.supports_vision, availability: r.availability as NormalizedModel['availability'],
+    source: parsed.source, scoreOrigin: parsed.scoreOrigin,
+    codingScore: r.coding_score, reasoningScore: r.reasoning_score, speedScore: r.speed_score,
+    longContextScore: r.long_context_score, valueScore: r.value_score, overallScore: r.overall_score,
+    recommendedCategories: r.recommended_categories || [],
+  };
+}
+
 async function storeCatalog(userId: string, result: ModelIntelligenceResult): Promise<void> {
   const db = createBackgroundClient();
   // Meta-level provenance: the most authoritative price confirmation across
@@ -472,19 +801,13 @@ async function storeCatalog(userId: string, result: ModelIntelligenceResult): Pr
     }
     return best;
   }, { source: 'unknown', at: null });
-  const rows = result.models.map((m) => ({
-    user_id: userId, provider: m.provider, model_id: m.modelId, display_name: m.displayName,
-    is_free: m.isFree, input_price: m.inputPrice, output_price: m.outputPrice,
-    price_source: m.priceSource, price_fetched_at: m.priceFetchedAt,
-    context_window: m.contextWindow, max_output_tokens: m.maxOutputTokens,
-    supports_reasoning: m.supportsReasoning, supports_tool_calling: m.supportsToolCalling,
-    supports_structured_output: m.supportsStructuredOutput, supports_coding: m.supportsCoding,
-    supports_vision: m.supportsVision, coding_score: m.codingScore, reasoning_score: m.reasoningScore,
-    speed_score: m.speedScore, long_context_score: m.longContextScore, value_score: m.valueScore,
-    overall_score: m.overallScore, recommended_categories: m.recommendedCategories,
-    availability: m.availability, source: result.classifiedByAi ? 'ai_classified' : m.source,
-    provider_fingerprint: result.providerFingerprint, last_analyzed_at: result.analyzedAt,
-  }));
+  // Per-row score origin: each row's `source` reflects whether THIS row was
+  // AI-scored (ai_classified:<entry>) or deterministically scored (<entry>) —
+  // never stamped catalog-wide from result.classifiedByAi (that over-credited
+  // deterministic fallback rows whenever only some batches applied).
+  const rows = result.models.map((m) =>
+    toCatalogRow(m, { userId, providerFingerprint: result.providerFingerprint, analyzedAt: result.analyzedAt })
+  );
 
   // Upsert row-by-row (chunked), THEN write meta LAST.
   //
@@ -524,11 +847,10 @@ async function storeCatalog(userId: string, result: ModelIntelligenceResult): Pr
   }
 
   // Meta LAST (see above): freshness clock only advances after rows persisted.
-  // Truthful counts: 'source' may say ai_classified for all rows, but the
-  // classification itself is deterministic metadata-derived scoring unless
-  // classifiedByAi — counts reflect the actual result object, and
-  // classifiedByAi is only true when the classifier returned a COMPLETE score
-  // list (see aiClassify).
+  // Truthful counts: classified_by_ai is a CATALOG-level flag meaning "at least
+  // one classifier batch was accepted" (see aiClassify); per-row score origin
+  // lives in each row's `source` (see persistedSource) and is never derived
+  // from this flag.
   await db.from('model_catalog_meta').upsert({
     user_id: userId, provider_fingerprint: result.providerFingerprint,
     model_count: result.models.length, free_model_count: result.models.filter((m) => m.isFree).length,
@@ -544,20 +866,7 @@ async function loadCatalog(userId: string): Promise<ModelIntelligenceResult | nu
   if (metaErr || !meta) return null;
   const { data: rows, error: rowsErr } = await db.from('model_catalog').select('*').eq('user_id', userId).order('overall_score', { ascending: false });
   if (rowsErr || !rows || rows.length === 0) return null;
-  const models: ClassifiedModel[] = rows.map((r) => ({
-    provider: r.provider as ProviderName, modelId: r.model_id, displayName: r.display_name,
-    isFree: r.is_free, inputPrice: r.input_price, outputPrice: r.output_price,
-    // Default pre-migration rows to 'unknown' — do not assume stale prices are
-    // live or registry-confirmed.
-    priceSource: r.price_source ?? 'unknown', priceFetchedAt: r.price_fetched_at ?? null,
-    contextWindow: r.context_window, maxOutputTokens: r.max_output_tokens,
-    supportsReasoning: r.supports_reasoning, supportsToolCalling: r.supports_tool_calling,
-    supportsStructuredOutput: r.supports_structured_output, supportsCoding: r.supports_coding,
-    supportsVision: r.supports_vision, availability: r.availability, source: r.source,
-    codingScore: r.coding_score, reasoningScore: r.reasoning_score, speedScore: r.speed_score,
-    longContextScore: r.long_context_score, valueScore: r.value_score, overallScore: r.overall_score,
-    recommendedCategories: r.recommended_categories || [],
-  }));
+  const models: ClassifiedModel[] = rows.map((r) => fromCatalogRow(r as ModelCatalogRow));
   // Enrich with CURRENT static registry scores (no registry_scores DB column):
   // keeps loaded live rows from being stuck with build-time default scores.
   for (const m of models) {

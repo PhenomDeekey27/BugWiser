@@ -7,7 +7,11 @@
 //   custom      — inherits auto strategy, with optional stage_overrides
 //   auto        — auto-selects the best model per-stage (default)
 //
-// Uses the existing MODEL_REGISTRY scoring system.
+// Uses the existing MODEL_REGISTRY scoring system. FREE STATUS IS CANONICAL:
+// every mode receives `confirmedFreeIds` (provider/model keys derived by the
+// gateway from the catalog's price.isFree) and classifies models exclusively
+// through that set — MODEL_REGISTRY.free is never consulted. No set ⇒ nothing
+// counts as confirmed free (conservative default).
 //
 // Persisted stage_overrides (the concrete picks saved by the /models page
 // setups) are honored by EVERY mode via applyStageOverrides — so an automatic
@@ -27,6 +31,11 @@ const AI_STAGES: AnalysisTask[] = [
   'patch_generation',
 ];
 
+/** Canonical free membership test: gateway-derived set from catalog price.isFree. */
+function isConfirmedFree(provider: ProviderName, model: string, confirmedFreeIds?: Set<string>): boolean {
+  return confirmedFreeIds?.has(`${provider}/${model}`) ?? false;
+}
+
 export interface StageAssignment {
   task: AnalysisTask;
   provider: ProviderName;
@@ -36,13 +45,17 @@ export interface StageAssignment {
 
 export interface StrategyMode {
   name: 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'auto';
-  build: (availableProviders: Set<ProviderName>, stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>) => StageAssignment[];
+  build: (
+    availableProviders: Set<ProviderName>,
+    stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>,
+    confirmedFreeIds?: Set<string>
+  ) => StageAssignment[];
 }
 
 export const STRATEGY_MODES: StrategyMode[] = [
   {
     name: 'free',
-    build: (availableProviders, stageOverrides) => {
+    build: (availableProviders, stageOverrides, confirmedFreeIds) => {
       const assignments: StageAssignment[] = [];
 
       for (const task of AI_STAGES) {
@@ -50,13 +63,13 @@ export const STRATEGY_MODES: StrategyMode[] = [
         if (!taskType) continue;
 
         const freeModels = MODEL_REGISTRY.filter((m) => {
-          return m.free && availableProviders.has(m.provider);
+          return isConfirmedFree(m.provider, m.model, confirmedFreeIds) && availableProviders.has(m.provider);
         });
 
         if (freeModels.length === 0) {
-          // STRICT FREE: no confirmed-free model on any connected provider —
-          // skip the stage instead of falling back to a paid model. The
-          // runtime error-fallback chain (autoChain in runWithFallback) is
+          // STRICT FREE: no catalog-confirmed-free model on any connected
+          // provider — skip the stage instead of falling back to a paid model.
+          // The runtime error-fallback chain (autoChain in runWithFallback) is
           // unaffected; this only removes the paid model as the strategy pick.
           continue;
         }
@@ -74,12 +87,12 @@ export const STRATEGY_MODES: StrategyMode[] = [
         }
       }
 
-      return applyStageOverrides(assignments, stageOverrides);
+      return applyStageOverrides(assignments, stageOverrides, confirmedFreeIds);
     },
   },
   {
     name: 'free_paid',
-    build: (availableProviders, stageOverrides) => {
+    build: (availableProviders, stageOverrides, confirmedFreeIds) => {
       const assignments: StageAssignment[] = [];
 
       // Define which stages use FREE models
@@ -96,14 +109,15 @@ export const STRATEGY_MODES: StrategyMode[] = [
         const isFreeStage = freeStages.has(task);
 
         if (isFreeStage) {
-          // FREE models for discovery and evidence stages
+          // FREE models for discovery and evidence stages (canonical set only)
           models = MODEL_REGISTRY.filter((m) => {
-            return m.free && availableProviders.has(m.provider);
+            return isConfirmedFree(m.provider, m.model, confirmedFreeIds) && availableProviders.has(m.provider);
           });
         } else {
-          // PAID models for analysis and generation stages
+          // PAID models for analysis and generation stages (anything not
+          // confirmed free by the catalog — includes unknown pricing)
           models = MODEL_REGISTRY.filter((m) => {
-            return !m.free && availableProviders.has(m.provider);
+            return !isConfirmedFree(m.provider, m.model, confirmedFreeIds) && availableProviders.has(m.provider);
           });
         }
 
@@ -131,19 +145,19 @@ export const STRATEGY_MODES: StrategyMode[] = [
             task,
             provider: best.provider as ProviderName,
             model: best.model as string,
-            isFree: isFreeStage,
+            isFree: isFreeStage && isConfirmedFree(best.provider, best.model, confirmedFreeIds),
           });
         } else {
           continue;
         }
       }
 
-      return applyStageOverrides(assignments, stageOverrides);
+      return applyStageOverrides(assignments, stageOverrides, confirmedFreeIds);
     },
   },
   {
     name: 'fully_paid',
-    build: (availableProviders, stageOverrides) => {
+    build: (availableProviders, stageOverrides, confirmedFreeIds) => {
       const assignments: StageAssignment[] = [];
 
       for (const task of AI_STAGES) {
@@ -151,7 +165,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
         if (!taskType) continue;
 
         const paidModels = MODEL_REGISTRY.filter((m) => {
-          return !m.free && availableProviders.has(m.provider);
+          return !isConfirmedFree(m.provider, m.model, confirmedFreeIds) && availableProviders.has(m.provider);
         });
 
         if (paidModels.length === 0) {
@@ -185,14 +199,14 @@ export const STRATEGY_MODES: StrategyMode[] = [
         }
       }
 
-      return applyStageOverrides(assignments, stageOverrides);
+      return applyStageOverrides(assignments, stageOverrides, confirmedFreeIds);
     },
   },
   {
     name: 'custom',
-    build: (availableProviders, stageOverrides) => {
+    build: (availableProviders, stageOverrides, confirmedFreeIds) => {
       // Start with the "auto" strategy (per-stage optimal) as the base
-      const baseAssignments = buildAutoAssignments(availableProviders);
+      const baseAssignments = buildAutoAssignments(availableProviders, confirmedFreeIds);
 
       // Apply stage overrides on top
       const merged: StageAssignment[] = [];
@@ -200,9 +214,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
       for (const task of AI_STAGES) {
         if (stageOverrides && stageOverrides[task]) {
           const { provider, model } = stageOverrides[task];
-          const isFree = MODEL_REGISTRY.find(
-            (m) => m.provider === provider && m.model === model
-          )?.free ?? false;
+          const isFree = isConfirmedFree(provider, model, confirmedFreeIds);
           merged.push({
             task,
             provider,
@@ -227,7 +239,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
                     task,
                     provider: best.provider as ProviderName,
                     model: best.model as string,
-                    isFree: best.free,
+                    isFree: isConfirmedFree(best.provider, best.model, confirmedFreeIds),
                   });
                 }
               }
@@ -241,9 +253,9 @@ export const STRATEGY_MODES: StrategyMode[] = [
   },
   {
     name: 'auto',
-    build: (availableProviders, stageOverrides) => {
+    build: (availableProviders, stageOverrides, confirmedFreeIds) => {
       // Auto strategy: per-stage optimal selection (mix of providers/models)
-      const baseAssignments = buildAutoAssignments(availableProviders);
+      const baseAssignments = buildAutoAssignments(availableProviders, confirmedFreeIds);
 
       // Apply stage overrides on top
       const merged: StageAssignment[] = [];
@@ -255,7 +267,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
             task,
             provider,
             model,
-            isFree: false, // auto mode doesn't track free status on overrides
+            isFree: isConfirmedFree(provider, model, confirmedFreeIds),
           });
         } else {
           const base = baseAssignments.find((a) => a.task === task);
@@ -275,7 +287,7 @@ export const STRATEGY_MODES: StrategyMode[] = [
                     task,
                     provider: best.provider as ProviderName,
                     model: best.model as string,
-                    isFree: best.free,
+                    isFree: isConfirmedFree(best.provider, best.model, confirmedFreeIds),
                   });
                 }
               }
@@ -292,21 +304,20 @@ export const STRATEGY_MODES: StrategyMode[] = [
 /**
  * Applies persisted per-stage overrides (user_model_preferences.stage_overrides)
  * on top of built assignments. An override with a valid provider+model replaces
- * the assignment; `isFree` is re-derived from the registry (unknown entry →
- * false, conservative). Used by every mode so the engine's stage list always
- * reflects what the user actually configured on /models.
+ * the assignment; `isFree` is re-derived from the canonical confirmed-free set
+ * (unknown entry → false, conservative). Used by every mode so the engine's
+ * stage list always reflects what the user actually configured on /models.
  */
 function applyStageOverrides(
   assignments: StageAssignment[],
-  stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>
+  stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>,
+  confirmedFreeIds?: Set<string>
 ): StageAssignment[] {
   if (!stageOverrides) return assignments;
   return assignments.map((assignment) => {
     const override = stageOverrides[assignment.task];
     if (!override?.provider || !override?.model) return assignment;
-    const isFree = MODEL_REGISTRY.find(
-      (m) => m.provider === override.provider && m.model === override.model
-    )?.free ?? false;
+    const isFree = isConfirmedFree(override.provider, override.model, confirmedFreeIds);
     return { ...assignment, provider: override.provider, model: override.model, isFree };
   });
 }
@@ -342,7 +353,10 @@ function pickBestForTask(
   return scored[0]?.entry || undefined;
 }
 
-function buildAutoAssignments(availableProviders: Set<ProviderName>): StageAssignment[] {
+function buildAutoAssignments(
+  availableProviders: Set<ProviderName>,
+  confirmedFreeIds?: Set<string>
+): StageAssignment[] {
   // Auto strategy: per-stage optimal selection (mix of providers/models)
   const assignments: StageAssignment[] = [];
 
@@ -364,7 +378,7 @@ function buildAutoAssignments(availableProviders: Set<ProviderName>): StageAssig
         task,
         provider: best.provider as ProviderName,
         model: best.model as string,
-        isFree: best.free,
+        isFree: isConfirmedFree(best.provider, best.model, confirmedFreeIds),
       });
     } else {
       continue;
@@ -378,11 +392,12 @@ function buildAutoAssignments(availableProviders: Set<ProviderName>): StageAssig
 export function buildStageAssignments(
   strategyMode: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom',
   availableProviders: Set<ProviderName>,
-  stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>
+  stageOverrides?: Record<AnalysisTask, { provider: ProviderName; model: string }>,
+  confirmedFreeIds?: Set<string>
 ): StageAssignment[] {
   const mode = STRATEGY_MODES.find((s) => s.name === strategyMode);
   if (!mode) {
     throw new Error(`Unknown strategy mode: ${strategyMode}`);
   }
-  return mode.build(availableProviders, stageOverrides);
+  return mode.build(availableProviders, stageOverrides, confirmedFreeIds);
 }

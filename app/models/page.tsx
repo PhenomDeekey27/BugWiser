@@ -23,6 +23,7 @@ import type { GitHubUser } from '@/types';
 import { ProviderCard } from '@/components/models/ProviderCard';
 import { StageConfigPanel } from '@/components/models/StageConfigPanel';
 import { selectStageModels, type SetupChoice, type StageKey } from '@/lib/ai/catalog/stageSelection';
+import { describeScoringStatus } from '@/lib/ai/catalog/scoringStatus';
 import { estimateCostUsd, formatCostUsd, type CostEstimate } from '@/lib/ai/catalog/cost';
 import { STAGE_TOKEN_PROFILES, type StageTokenProfile } from '@/lib/ai/catalog/stageTokenProfiles';
 
@@ -42,7 +43,7 @@ type StageModel = { stageId: string; label: string; selectedProvider: string | n
 
 export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
 
-export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; }
+export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; /** Actual score origin for this row (absent on older payloads). */ scoreOrigin?: 'ai' | 'deterministic'; }
 
 export interface Preference { user_id: string; provider: string | null; model: string | null; selection_mode: 'auto' | 'manual'; selected_strategy?: 'auto' | 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'balanced' | 'quality'; stage_overrides?: Record<string, { provider: string | null; model: string | null; unavailable?: boolean }>; }
 
@@ -62,12 +63,19 @@ export default function ModelsPage() {
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
   const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
   const [applyingSetup, setApplyingSetup] = useState<SetupChoice | null>(null);
+  // Catalog-level classification flags from /api/models (absent/null handled
+  // by describeScoringStatus — the badge renders nothing when unknown).
+  const [scoring, setScoring] = useState<{ classifiedByAi?: boolean | null; classificationModel?: string | null }>({});
 
   const connectedProviders = useMemo(() => providers.filter((p) => p.status === 'connected'), [providers]);
   const connectedProviderIds = useMemo(() => new Set(connectedProviders.map((p) => p.providerId)), [connectedProviders]);
   const libraryBaseModels = useMemo(
     () => models.filter((m) => m.available && connectedProviderIds.has(m.providerId)),
     [models, connectedProviderIds]
+  );
+  const scoringStatus = useMemo(
+    () => describeScoringStatus({ classifiedByAi: scoring.classifiedByAi, classificationModel: scoring.classificationModel, rows: models }),
+    [scoring, models]
   );
 
   const loadData = useCallback(async () => {
@@ -89,6 +97,7 @@ export default function ModelsPage() {
     const data = payload.data;
     setProviders(data.providers || []);
     setModels(data.models || []);
+    setScoring({ classifiedByAi: data.classifiedByAi, classificationModel: data.classificationModel });
     if (data.preference) {
       const pref = data.preference;
       setPreference(pref);
@@ -326,6 +335,13 @@ export default function ModelsPage() {
          <div className="mb-6 lg:mb-8">
            <h1 className="text-2xl lg:text-3xl font-bold text-bw-peach-light mb-2">AI Models</h1>
            <p className="text-bw-peach text-sm lg:text-base">Connect providers, choose a model setup, and configure which model handles each bug-fixing stage.</p>
+           {scoringStatus.label && (
+             <div className="mt-3">
+               <Badge variant="outline" className="text-xs text-bw-peach" title={scoringStatus.detail || undefined}>
+                 {scoringStatus.label}
+               </Badge>
+             </div>
+           )}
          </div>
 
         {error && (

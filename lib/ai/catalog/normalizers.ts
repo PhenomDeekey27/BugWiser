@@ -30,6 +30,7 @@ import type {
 import { findStaticModel } from './registry';
 import {
   codingFamilySignal,
+  reasoningFamilySignal,
   inputModalityImage,
   outputModalityIsText,
 } from './modelSignals';
@@ -349,13 +350,19 @@ export function normalizeChutesModel(raw: Record<string, unknown>): ModelDefinit
 
 // ── OpenCode ──
 // The payload carries ONLY id/object/created/owned_by — no pricing, context, or
-// capability fields. Static exact-match entries (explicit free) fill the gap;
-// everything else stays unknown with NO silent-true defaults. Free is never
+// capability fields. Capability evidence therefore comes only from the shared
+// deterministic ID signals, at the SAME thresholds the OpenRouter/Chutes/
+// DeepSeek normalizers already use (coding ≥ 0.5; reasoning = the explicit
+// tier only). Provenance stays 'unknown' unless a signal actually fires, so
+// exact-match static curated capabilities still win via applyStaticFallback.
+// Static exact-match entries (explicit free) fill pricing; free is never
 // inferred from "-free"/"(free)" naming.
 
 export function normalizeOpenCodeModel(raw: Record<string, unknown>): ModelDefinition | null {
   const modelId = typeof raw.id === 'string' ? raw.id : '';
   if (!modelId) return null;
+  const coding = codingFamilySignal(modelId) >= 0.5;
+  const reasoning = reasoningFamilySignal(modelId) >= 1;
   const draft = {
     displayName: (typeof raw.name === 'string' && raw.name) || (typeof raw.display_name === 'string' && raw.display_name) || modelId,
     inputPrice: null as number | null,
@@ -366,8 +373,12 @@ export function normalizeOpenCodeModel(raw: Record<string, unknown>): ModelDefin
     contextWindow: null as number | null,
     contextSource: null as ContextSource | null,
     maxOutputTokens: typeof raw.max_output_tokens === 'number' ? raw.max_output_tokens : null,
-    flags: { coding: false, reasoning: false, vision: false, toolCalling: false, structuredOutput: false },
-    provenance: { ...UNKNOWN_PROVENANCE },
+    flags: { coding, reasoning, vision: false, toolCalling: false, structuredOutput: false },
+    provenance: {
+      ...UNKNOWN_PROVENANCE,
+      coding: coding ? ('derived' as const) : ('unknown' as const),
+      reasoning: reasoning ? ('derived' as const) : ('unknown' as const),
+    },
   };
   // Exact-match static entries (e.g. nemotron-3-ultra-free isFree=true) fill pricing,
   // context, and curated caps. Non-matching IDs keep honest unknown/false.
@@ -379,6 +390,11 @@ export function normalizeOpenCodeModel(raw: Record<string, unknown>): ModelDefin
 // /models exposes id/object/created/owned_by/shutdown_date only. owned_by is NOT a
 // reliable provider filter (API now returns 'system' for production models), so the
 // code-generation ID shape carries the filter instead. Past shutdown_date ⇒ excluded.
+// The payload carries no capability fields, so capability evidence comes only from
+// the shared deterministic ID signals at the SAME thresholds the OpenRouter/
+// Chutes/DeepSeek normalizers use (coding ≥ 0.5; reasoning = the explicit tier
+// only). Provenance stays 'unknown' unless a signal fires, so exact-match static
+// curated capabilities still win via applyStaticFallback.
 
 const OPENAI_CODE_ID = /(gpt|o1|o3|o4|chat)/i;
 const OPENAI_OWNERS = new Set(['openai', 'system']);
@@ -400,6 +416,8 @@ export function normalizeOpenAIModel(raw: Record<string, unknown>): ModelDefinit
     const t = Date.parse(raw.shutdown_date);
     if (Number.isFinite(t) && t < Date.now()) return null;
   }
+  const coding = codingFamilySignal(modelId) >= 0.5;
+  const reasoning = reasoningFamilySignal(modelId) >= 1;
   const draft = {
     displayName: modelId,
     inputPrice: null as number | null,
@@ -410,8 +428,12 @@ export function normalizeOpenAIModel(raw: Record<string, unknown>): ModelDefinit
     contextWindow: null as number | null,
     contextSource: null as ContextSource | null,
     maxOutputTokens: null as number | null,
-    flags: { coding: false, reasoning: false, vision: false, toolCalling: false, structuredOutput: false },
-    provenance: { ...UNKNOWN_PROVENANCE },
+    flags: { coding, reasoning, vision: false, toolCalling: false, structuredOutput: false },
+    provenance: {
+      ...UNKNOWN_PROVENANCE,
+      coding: coding ? ('derived' as const) : ('unknown' as const),
+      reasoning: reasoning ? ('derived' as const) : ('unknown' as const),
+    },
   };
   applyStaticFallback('openai', modelId, draft);
   return finalize('openai', modelId, draft);
@@ -443,8 +465,15 @@ export function normalizeGeminiModel(raw: Record<string, unknown>): ModelDefinit
   // providers' own naming for image generation, not text/code generation.
   if (GEMINI_IMAGE_OUTPUT_FAMILY.test(lowId) || GEMINI_IMAGE_OUTPUT_FAMILY.test(lowName)) return null;
 
-  // `thinking: true` is direct provider evidence of reasoning support.
+  // `thinking: true` is direct provider evidence of reasoning support and stays
+  // authoritative; the shared explicit-reasoning ID signal is the fallback when
+  // the payload is silent. Coding uses the shared ID signal at the same threshold
+  // the OpenRouter/Chutes/DeepSeek normalizers use (≥ 0.5) — provenance 'derived'
+  // only when the signal fires, otherwise 'unknown' so exact-match static curated
+  // capabilities still win via applyStaticFallback.
   const thinking = raw.thinking === true;
+  const coding = codingFamilySignal(modelId) >= 0.5;
+  const idReasoning = reasoningFamilySignal(modelId) >= 1;
   const draft = {
     displayName: displayName || modelId,
     inputPrice: null as number | null,
@@ -457,10 +486,15 @@ export function normalizeGeminiModel(raw: Record<string, unknown>): ModelDefinit
     contextWindow: typeof raw.inputTokenLimit === 'number' ? raw.inputTokenLimit : null,
     contextSource: (typeof raw.inputTokenLimit === 'number' ? 'live' : null) as ContextSource | null,
     maxOutputTokens: typeof raw.outputTokenLimit === 'number' ? raw.outputTokenLimit : null,
-    flags: { coding: false, reasoning: thinking, vision: false, toolCalling: false, structuredOutput: false },
+    flags: { coding, reasoning: thinking || idReasoning, vision: false, toolCalling: false, structuredOutput: false },
     provenance: {
       ...UNKNOWN_PROVENANCE,
-      reasoning: thinking ? ('observed' as const) : ('unknown' as const),
+      coding: coding ? ('derived' as const) : ('unknown' as const),
+      reasoning: thinking
+        ? ('observed' as const)
+        : idReasoning
+          ? ('derived' as const)
+          : ('unknown' as const),
     },
   };
   applyStaticFallback('gemini', modelId, draft);
@@ -509,11 +543,17 @@ export function normalizeDeepSeekModel(raw: Record<string, unknown>): ModelDefin
 // ── Z.AI ──
 // Payload carries ONLY id/object/created/owned_by. Exact-match static fallback only
 // (currently no live ID matches a static row — those rows stay registry-only entries
-// and must NOT attach to the plain glm-4.x live IDs). Nothing is invented.
+// and must NOT attach to the plain glm-4.x live IDs). The payload carries no capability
+// fields, so capability evidence comes only from the shared deterministic ID signals
+// at the SAME thresholds the OpenRouter/Chutes/DeepSeek normalizers use (coding ≥ 0.5;
+// reasoning = the explicit tier only). Provenance stays 'unknown' unless a signal
+// fires, so exact-match static curated capabilities still win via applyStaticFallback.
 
 export function normalizeZAIModel(raw: Record<string, unknown>): ModelDefinition | null {
   const modelId = typeof raw.id === 'string' ? raw.id : '';
   if (!modelId) return null;
+  const coding = codingFamilySignal(modelId) >= 0.5;
+  const reasoning = reasoningFamilySignal(modelId) >= 1;
   const draft = {
     displayName: modelId,
     inputPrice: null as number | null,
@@ -524,8 +564,12 @@ export function normalizeZAIModel(raw: Record<string, unknown>): ModelDefinition
     contextWindow: null as number | null,
     contextSource: null as ContextSource | null,
     maxOutputTokens: null as number | null,
-    flags: { coding: false, reasoning: false, vision: false, toolCalling: false, structuredOutput: false },
-    provenance: { ...UNKNOWN_PROVENANCE },
+    flags: { coding, reasoning, vision: false, toolCalling: false, structuredOutput: false },
+    provenance: {
+      ...UNKNOWN_PROVENANCE,
+      coding: coding ? ('derived' as const) : ('unknown' as const),
+      reasoning: reasoning ? ('derived' as const) : ('unknown' as const),
+    },
   };
   applyStaticFallback('zai', modelId, draft);
   return finalize('zai', modelId, draft);

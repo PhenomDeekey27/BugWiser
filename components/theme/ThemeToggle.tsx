@@ -8,21 +8,18 @@ interface ThemeToggleProps {
 }
 
 export function ThemeToggle({ className }: ThemeToggleProps) {
-  const { resolvedTheme, toggleTheme } = useTheme();
+  const { toggleTheme } = useTheme();
 
   return (
     <button
       type="button"
       onClick={toggleTheme}
-      aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label="Toggle theme"
+      title="Toggle theme"
       className={`flex items-center justify-center w-8 h-8 rounded-lg border border-border bg-surface-dim text-bw-peach hover:text-bw-peach-light hover:ring-2 hover:ring-primary/20 transition-all cursor-pointer ${className || ''}`}
     >
-      {resolvedTheme === 'dark' ? (
-        <Sun className="w-4 h-4" />
-      ) : (
-        <Moon className="w-4 h-4" />
-      )}
+      <Sun className="hidden w-4 h-4 dark:block" />
+      <Moon className="block w-4 h-4 dark:hidden" />
     </button>
   );
 }

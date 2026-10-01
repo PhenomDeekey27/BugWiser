@@ -9,6 +9,7 @@ import { recordStageAssignment } from './analysis-selection';
 import { getOrBuildCatalog } from './model-intelligence';
 import { toCatalogModel } from './catalog/toCatalogModel';
 import { prepareStrictFreeRun } from './catalog/stageSelection';
+import type { CatalogModel } from '@/app/models/page';
 import type { TaskModelEntry } from './config';
 import type { ProviderName } from './providers/registry';
 import type { AICompletionRequest } from './providers/base';
@@ -75,18 +76,39 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
 
   let stageOverride = routing.runArgs.stageOverrides;
   let freeCandidates: TaskModelEntry[] | undefined;
-  if (strictFree) {
-    if (routing.stageOverrideUnavailable) {
-      // Marker stage: runWithFallback fails fast with the structured
-      // no-free-model error — no catalog load, no candidate, no paid chain.
-      stageOverride = undefined;
-    } else {
+  let confirmedFreeIds: Set<string> | undefined;
+
+  if (strictFree && routing.stageOverrideUnavailable) {
+    // Marker stage: runWithFallback fails fast with the structured
+    // no-free-model error — no catalog load, no candidate, no paid chain.
+    stageOverride = undefined;
+  } else {
+    // ONE canonical free source: this single catalog load (the same data
+    // flow strict Free already used) serves BOTH strict-Free planning and
+    // non-strict free-first ranking / engine free classification —
+    // confirmedFreeIds below is derived from catalog price.isFree and is the
+    // ONLY free authority runtime selection consults (never
+    // MODEL_REGISTRY.free). Strict-Free load failures propagate (unchanged);
+    // non-strict failures degrade conservatively (no model counts as
+    // confirmed free) and never fail the stage.
+    let catalogModels: CatalogModel[];
+    try {
       const catalog = await getOrBuildCatalog(userId);
-      const plan = prepareStrictFreeRun(
-        catalog.models.map(toCatalogModel),
-        params.task,
-        stageOverride ?? null
-      );
+      catalogModels = catalog.models.map(toCatalogModel);
+    } catch (err) {
+      if (strictFree) throw err;
+      console.warn('[gateway] Catalog unavailable for free-status resolution — no model counts as confirmed free:', err);
+      catalogModels = [];
+    }
+
+    confirmedFreeIds = new Set(
+      catalogModels
+        .filter((m) => m.price.isFree)
+        .map((m) => `${m.providerId}/${m.modelId}`)
+    );
+
+    if (strictFree) {
+      const plan = prepareStrictFreeRun(catalogModels, params.task, stageOverride ?? null);
       freeCandidates = plan.freeCandidates.map((c) => ({
         provider: c.provider as ProviderName,
         model: c.model,
@@ -110,6 +132,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     strictFree,
     freeCandidates,
     stageOverrideUnavailable: strictFree && routing.stageOverrideUnavailable,
+    confirmedFreeIds,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on

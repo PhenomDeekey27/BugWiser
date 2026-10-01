@@ -27,6 +27,7 @@ export function toCatalogModel(m: ClassifiedModel): CatalogModel {
       ...(m.supportsStructuredOutput ? ['structured_output'] : []),
     ],
     availability: m.availability,
+    scoreOrigin: m.scoreOrigin,
     scores: {
       coding: m.codingScore,
       reasoning: m.reasoningScore,
