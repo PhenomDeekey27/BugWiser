@@ -161,27 +161,25 @@ export function ModelTierPipeline({
 
       <div className="flex items-center gap-2 flex-wrap">
         {fallbackChain.map((model, idx) => {
-          const isCurrent = model === currentModel;
-          const isUsed = currentModel ? fallbackChain.indexOf(currentModel) >= idx : false;
-          const isFailed = currentModel ? fallbackChain.indexOf(currentModel) >= 0 && idx > fallbackChain.indexOf(currentModel) : false;
+          const currentIdx = currentModel ? fallbackChain.indexOf(currentModel) : -1;
+          const isCurrent = idx === currentIdx;
+          const isFailed = currentIdx >= 0 && idx < currentIdx;
 
           return (
             <div
               key={`${idx}-${model}`}
               className={cn(
                 'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-mono transition-all duration-300',
-                isCurrent && 'bg-green-500/10 border-green-500/30 text-green-400 shadow-[0_0_12px_rgba(34,197,94,0.15)]',
-                isUsed && !isCurrent && 'bg-green-500/5 border-green-500/20 text-green-400/50',
-                isFailed && 'bg-red-500/5 border-red-500/20 text-red-400/50 line-through',
-                !isCurrent && !isUsed && !isFailed && 'bg-surface border-border text-bw-peach/60'
+                isCurrent && 'bg-green-500/10 border-green-500/30 text-green-500 shadow-[0_0_12px_rgba(34,197,94,0.15)]',
+                !isCurrent && isFailed && 'bg-red-500/5 border-red-500/30 text-red-400/50 line-through',
+                !isCurrent && !isFailed && 'bg-surface border-border text-bw-peach/60'
               )}
             >
               <span className={cn(
                 'w-1.5 h-1.5 rounded-full',
                 isCurrent && 'bg-green-400 animate-pulse',
-                isUsed && !isCurrent && 'bg-green-400/50',
-                isFailed && 'bg-red-400/50',
-                !isCurrent && !isUsed && !isFailed && 'bg-surface-bright/30'
+                !isCurrent && isFailed && 'bg-red-400/50',
+                !isCurrent && !isFailed && 'bg-surface-bright/30'
               )} />
               <span className="truncate max-w-[200px]">{model}</span>
               {isCurrent && (

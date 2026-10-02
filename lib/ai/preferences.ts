@@ -4,6 +4,7 @@
 
 import { createBackgroundClient } from '@/lib/supabase/background';
 import type { ProviderName } from '@/lib/ai/providers/registry';
+import type { StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 
 export type SelectionMode = 'auto' | 'manual';
 
@@ -18,7 +19,8 @@ export interface ModelPreference {
   model: string | null;
   selection_mode: SelectionMode;
   selected_strategy: SelectedStrategy;
-  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
+  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean; origin?: StageOverrideOrigin }>;
+  readFailed?: boolean;
 }
 
 export interface ModelPreferenceSave {
@@ -26,20 +28,47 @@ export interface ModelPreferenceSave {
   selected_strategy?: SelectedStrategy;
   provider?: ProviderName | null;
   model?: string | null;
-  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
+  stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean; origin?: StageOverrideOrigin }>;
 }
 
-export async function getModelPreference(userId: string): Promise<ModelPreference> {
+export interface PreferenceRow {
+  provider?: unknown;
+  model?: unknown;
+  selection_mode?: unknown;
+  selected_strategy?: unknown;
+  stage_overrides?: unknown;
+}
+
+export type PreferenceRowLoader = (userId: string) => Promise<{
+  data: PreferenceRow | null;
+  error: { message: string } | null;
+}>;
+
+async function loadPreferenceRow(userId: string): Promise<{
+  data: PreferenceRow | null;
+  error: { message: string } | null;
+}> {
   const db = createBackgroundClient();
   const { data, error } = await db
     .from('user_model_preferences')
     .select('*')
     .eq('user_id', userId)
     .maybeSingle();
+  return {
+    data: (data ?? null) as PreferenceRow | null,
+    error: error ? { message: error.message } : null,
+  };
+}
+
+export async function getModelPreference(
+  userId: string,
+  loadRow: PreferenceRowLoader = loadPreferenceRow
+): Promise<ModelPreference> {
+  const { data, error } = await loadRow(userId);
 
   if (error) {
     console.error('[prefs] Failed to load preference:', error.message);
-    return { user_id: userId, provider: null, model: null, selection_mode: 'auto', selected_strategy: 'auto' };
+    return { user_id: userId, provider: null, model: null, selection_mode: 'auto', selected_strategy: 'auto', readFailed: true };
   }
 
   if (!data) {
@@ -49,10 +78,10 @@ export async function getModelPreference(userId: string): Promise<ModelPreferenc
   return {
     user_id: userId,
     provider: (data.provider as ProviderName) || null,
-    model: data.model || null,
+    model: (data.model as string) || null,
     selection_mode: (data.selection_mode === 'manual' ? 'manual' : 'auto'),
     selected_strategy: (data.selected_strategy as SelectedStrategy | undefined) || 'auto',
-    stage_overrides: data.stage_overrides as Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }> | undefined,
+    stage_overrides: data.stage_overrides as Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean; origin?: StageOverrideOrigin }> | undefined,
   };
 }
 
@@ -98,4 +127,24 @@ export async function saveModelPreference(
       stage_overrides: row.stage_overrides,
     },
   };
+}
+
+export type StrategySaveResolution =
+  | { ok: true; strategy: SelectedStrategy }
+  | { ok: false; error: string };
+
+export function resolveSavedStrategy(
+  requested: SelectedStrategy | null | undefined,
+  stored: ModelPreference | null
+): StrategySaveResolution {
+  if (requested != null) {
+    return { ok: true, strategy: requested };
+  }
+  if (!stored) {
+    return { ok: false, error: 'Stored model strategy is unavailable — nothing was changed. Try again.' };
+  }
+  if (stored.readFailed) {
+    return { ok: false, error: 'Could not verify your stored model strategy (preference read failed) — nothing was changed. Try again.' };
+  }
+  return { ok: true, strategy: stored.selected_strategy };
 }

@@ -247,7 +247,13 @@ export interface AnalysisModelSelection {
   startedAt?: string;
   stages?: Record<
     string,
-    { provider: string; model: string; fit?: number | null }
+    {
+      provider: string;
+      model: string;
+      fit?: number | null;
+      fallbackCount?: number;
+      attempted?: Array<{ provider: string; model: string }>;
+    }
   >;
 }
 

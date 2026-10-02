@@ -534,6 +534,17 @@ export default function InvestigationPage() {
   const isPatchReady = record?.status === 'solution_complete' || (record?.status === 'failed' && record?.current_stage === 'patch_generation');
   const isPatchRunning = record?.status === 'analyzing' && record?.current_stage === 'patch_generation';
 
+  const stagePipelineProps = (stageKey: string) => {
+    const assignment = record?.model_selection?.stages?.[stageKey];
+    const actual = assignment?.provider && assignment.model ? `${assignment.provider} · ${assignment.model}` : null;
+    return {
+      fallbackChain: assignment?.attempted?.map((a) => `${a.provider} · ${a.model}`) ?? [],
+      currentModel: actual ?? undefined,
+      activeModel: actual,
+      provider: assignment?.provider,
+    };
+  };
+
   const showProgress = isRunning || isFailed || record?.status === 'ready_for_analysis' || record?.status === 'relevant_files_ready' || record?.status === 'root_cause_complete' || record?.status === 'evidence_complete' || record?.status === 'solution_complete';
   const showMainContent = isDiscoveryReady || isDiscoveryRunning || isComplete || isRootCauseReady || isEvidenceReady || isSolutionReady || isPatchReady || record?.status === 'relevant_files_ready' || record?.status === 'root_cause_complete' || record?.status === 'evidence_complete' || record?.status === 'solution_complete';
 
@@ -597,12 +608,7 @@ export default function InvestigationPage() {
 
               {(isDiscoveryReady || isDiscoveryRunning) && (
                 <div className="mb-6">
-                  <ModelTierPipeline
-                    activeModel={isDiscoveryRunning ? (record.ai_model || null) : null}
-                    fallbackChain={['nemotron-3.5-lightning-free', 'ling-3.0-flash-fin-free', 'mimo-v2.5-free', 'muse-spark-1.2-free']}
-                    currentModel={record.ai_model || undefined}
-                    provider={record.ai_provider || 'opencode-zen'}
-                  />
+                  <ModelTierPipeline {...stagePipelineProps('relevant_file_discovery')} />
                   <div className="mt-3">
                     <Button
                       onClick={handleStartDiscovery}
@@ -626,12 +632,7 @@ export default function InvestigationPage() {
 
               {isRootCauseReady && (
                 <div className="mb-6">
-                  <ModelTierPipeline
-                    activeModel={isRootCauseRunning ? (record.ai_model || null) : null}
-                    fallbackChain={['nemotron-3.5-lightning-free', 'ling-3.0-flash-fin-free', 'mimo-v2.5-free', 'muse-spark-1.2-free']}
-                    currentModel={record.ai_model || undefined}
-                    provider={record.ai_provider || 'opencode-zen'}
-                  />
+                  <ModelTierPipeline {...stagePipelineProps('root_cause_analysis')} />
                   <div className="mt-3 flex gap-2">
                     <Button
                       onClick={() => handleStartRootCause(false)}
@@ -665,12 +666,7 @@ export default function InvestigationPage() {
 
               {isEvidenceReady && (
                 <div className="mb-6">
-                  <ModelTierPipeline
-                    activeModel={isEvidenceRunning ? (record.ai_model || null) : null}
-                    fallbackChain={['nemotron-3.5-lightning-free', 'ling-3.0-flash-fin-free', 'mimo-v2.5-free', 'muse-spark-1.2-free']}
-                    currentModel={record.ai_model || undefined}
-                    provider={record.ai_provider || 'opencode-zen'}
-                  />
+                  <ModelTierPipeline {...stagePipelineProps('evidence_extraction')} />
                   <div className="mt-3 flex gap-2">
                     <Button
                       onClick={() => handleStartEvidence(false)}
@@ -704,12 +700,7 @@ export default function InvestigationPage() {
 
               {isSolutionReady && (
                 <div className="mb-6">
-                  <ModelTierPipeline
-                    activeModel={isSolutionRunning ? (record.ai_model || null) : null}
-                    fallbackChain={['nemotron-3.5-lightning-free', 'ling-3.0-flash-fin-free', 'mimo-v2.5-free', 'muse-spark-1.2-free']}
-                    currentModel={record.ai_model || undefined}
-                    provider={record.ai_provider || 'opencode-zen'}
-                  />
+                  <ModelTierPipeline {...stagePipelineProps('solution_generation')} />
                   <div className="mt-3 flex gap-2">
                     <Button
                       onClick={() => handleStartSolution(false)}
@@ -743,12 +734,7 @@ export default function InvestigationPage() {
 
               {isPatchReady && (
                 <div className="mb-6">
-                  <ModelTierPipeline
-                    activeModel={isPatchRunning ? (record.ai_model || null) : null}
-                    fallbackChain={['nemotron-3.5-lightning-free', 'ling-3.0-flash-fin-free', 'mimo-v2.5-free', 'muse-spark-1.2-free']}
-                    currentModel={record.ai_model || undefined}
-                    provider={record.ai_provider || 'opencode-zen'}
-                  />
+                  <ModelTierPipeline {...stagePipelineProps('patch_generation')} />
                   <div className="mt-3 flex gap-2">
                     <Button
                       onClick={() => handleStartPatch(false)}

@@ -1,6 +1,7 @@
 'use client';
 
 import { AnalysisRecord } from '@/types';
+import { deriveStageAttemptView } from '@/lib/ai/stageAttemptView';
 
 interface ProgressOverlayProps {
   record: AnalysisRecord;
@@ -82,6 +83,7 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
       : null;
   const selectionMode = record.model_selection?.mode || null;
   const manualFallback = record.model_selection?.manualFallbackOccurred || false;
+  const attemptView = deriveStageAttemptView(stageAssignment);
 
   const statusMessages: Record<string, string> = {
     queued: 'Queued — waiting to start',
@@ -156,6 +158,12 @@ export function ProgressOverlay({ record }: ProgressOverlayProps) {
                 <div className="mt-1 text-[11px] font-mono text-bw-peach">
                   {selectionMode === 'manual' ? (
                     manualFallback ? 'Manual mode — fell back after a recoverable failure.' : 'Manual mode — your selected model is running.'
+                  ) : attemptView.state === 'fallback' ? (
+                    attemptView.selected
+                      ? `Fallback — selected ${attemptView.selected}; now using ${attemptView.actual}.`
+                      : 'Fallback — a different model is running after a recoverable failure.'
+                  ) : attemptView.state === 'exhausted' ? (
+                    'Fallback exhausted — every attempted model failed.'
                   ) : (
                     'Auto mode — BugWiser picked the best model for this stage.'
                   )}

@@ -8,6 +8,7 @@ export interface ResolvedRouting {
   runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'stageOverrides'>;
   /** The user's CURRENT strategy from user_model_preferences (live — not the analysis-row snapshot). */
   selectedStrategy: SelectedStrategy;
+  preferenceReadFailed: boolean;
   /**
    * Strict-Free unavailable marker for THIS stage: stage_overrides[task] =
    * {provider: null, model: null, unavailable: true}. False in manual mode
@@ -56,10 +57,19 @@ function resolveStageOverride(
  * The model-router remains the source of truth for availability, scoring, and
  * fallback; this only determines the first candidate and the credential set.
  */
-export async function resolveAnalysisRouting(userId: string, task?: string): Promise<ResolvedRouting> {
+export interface RoutingDependencies {
+  resolveCredentials?: typeof resolveUserCredentials;
+  loadPreference?: typeof getModelPreference;
+}
+
+export async function resolveAnalysisRouting(
+  userId: string,
+  task?: string,
+  dependencies: RoutingDependencies = {}
+): Promise<ResolvedRouting> {
   const [credentials, preference] = await Promise.all([
-    resolveUserCredentials(userId),
-    getModelPreference(userId),
+    (dependencies.resolveCredentials ?? resolveUserCredentials)(userId),
+    (dependencies.loadPreference ?? getModelPreference)(userId),
   ]);
 
   const providerTokens = Object.fromEntries(
@@ -84,17 +94,9 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
 
   if (preference.selection_mode === 'manual' && preference.provider && preference.model) {
     if (!credentials[preference.provider]) {
-      return {
-        runArgs: { providerTokens },
-        selectedStrategy: preference.selected_strategy,
-        stageOverrideUnavailable: false,
-        selection: {
-          mode: 'manual',
-          provider: null as ProviderName | null,
-          model: null as string | null,
-          reason: `Model selected but provider "${preference.provider}" is not connected. No fallback to a different model.`,
-        },
-      };
+      throw new Error(
+        `Model selected but provider "${preference.provider}" is not connected. No fallback to a different model. Reconnect the provider or switch to Auto mode.`
+      );
     }
     return {
       runArgs: {
@@ -102,6 +104,7 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
         manualModel: { provider: preference.provider as ProviderName, model: preference.model },
       },
       selectedStrategy: preference.selected_strategy,
+      preferenceReadFailed: preference.readFailed === true,
       stageOverrideUnavailable: false,
       selection: {
         mode: 'manual',
@@ -115,6 +118,7 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
   return {
     runArgs: { providerTokens, stageOverrides: stageOverride },
     selectedStrategy: preference.selected_strategy,
+    preferenceReadFailed: preference.readFailed === true,
     stageOverrideUnavailable,
     selection: {
       mode: 'auto',
@@ -125,4 +129,10 @@ export async function resolveAnalysisRouting(userId: string, task?: string): Pro
         : 'Auto mode: BugWiser selects the best available model per stage.',
     },
   };
+}
+
+export function isStrictFreeSelection(
+  routing: Pick<ResolvedRouting, 'selectedStrategy' | 'preferenceReadFailed' | 'selection'>
+): boolean {
+  return (routing.selectedStrategy === 'free' || routing.preferenceReadFailed) && routing.selection.mode === 'auto';
 }

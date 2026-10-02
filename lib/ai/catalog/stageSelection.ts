@@ -472,6 +472,30 @@ export function getFreeStageCandidates(
     .map((m) => ({ provider: m.providerId, model: m.modelId }));
 }
 
+export interface AutomaticStageCandidate {
+  provider: string;
+  model: string;
+  contextWindow: number;
+}
+
+export function getAutomaticStageCandidates(
+  availableModels: CatalogModel[],
+  stageId: string
+): AutomaticStageCandidate[] {
+  const stageKey: StageKey | null = Object.prototype.hasOwnProperty.call(STAGE_WEIGHTS, stageId)
+    ? (stageId as StageKey)
+    : null;
+  if (!stageKey || availableModels.length === 0) return [];
+  const w = STAGE_WEIGHTS[stageKey];
+  const autoPool = buildAutomaticPool(availableModels, stageKey, w);
+  const pool = scoreOrderedPool(autoPool, w);
+  return pool.map((m) => ({
+    provider: m.providerId,
+    model: m.modelId,
+    contextWindow: m.contextWindow,
+  }));
+}
+
 /**
  * ONE canonical confirmed-free check for a specific provider/model pair:
  * look the model up in the catalog and return its `price.isFree`. Unknown or

@@ -4,13 +4,13 @@
 
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback, RunResponse } from './model-router';
-import { resolveAnalysisRouting } from './routing';
+import { resolveAnalysisRouting, isStrictFreeSelection } from './routing';
 import { recordStageAssignment } from './analysis-selection';
 import { getOrBuildCatalog } from './model-intelligence';
 import { toCatalogModel } from './catalog/toCatalogModel';
-import { prepareStrictFreeRun } from './catalog/stageSelection';
+import { prepareStrictFreeRun, getAutomaticStageCandidates } from './catalog/stageSelection';
 import type { CatalogModel } from '@/app/models/page';
-import type { TaskModelEntry } from './config';
+import type { TaskModelEntry, AutomaticCandidate } from './config';
 import type { ProviderName } from './providers/registry';
 import type { AICompletionRequest } from './providers/base';
 
@@ -70,13 +70,16 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
   // analysis stage (primary, overrides, strategy picks, and every fallback
   // hop). It reads the live preference (not the analysis-row snapshot, which
   // is only a creation-time copy) so "selected strategy = free" is enforced
-  // exactly as the user last set it. Manual mode intentionally sits OUTSIDE
-  // strict Free: the user's explicit single model wins (existing design).
-  const strictFree = routing.selectedStrategy === 'free' && routing.selection.mode === 'auto';
+  // exactly as the user last set it. A FAILED preference read also counts as
+  // strict (isStrictFreeSelection): unknown preference must not unlock paid
+  // models. Manual mode intentionally sits OUTSIDE strict Free: the user's
+  // explicit single model wins (existing design).
+  const strictFree = isStrictFreeSelection(routing);
 
   let stageOverride = routing.runArgs.stageOverrides;
   let freeCandidates: TaskModelEntry[] | undefined;
   let confirmedFreeIds: Set<string> | undefined;
+  let automaticCandidates: AutomaticCandidate[] | undefined;
 
   if (strictFree && routing.stageOverrideUnavailable) {
     // Marker stage: runWithFallback fails fast with the structured
@@ -116,6 +119,12 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
       stageOverride = plan.stageOverride
         ? { provider: plan.stageOverride.provider as ProviderName, model: plan.stageOverride.model }
         : undefined;
+    } else {
+      automaticCandidates = getAutomaticStageCandidates(catalogModels, params.task).map((c) => ({
+        provider: c.provider as ProviderName,
+        model: c.model,
+        contextWindow: c.contextWindow,
+      }));
     }
   }
 
@@ -133,6 +142,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     freeCandidates,
     stageOverrideUnavailable: strictFree && routing.stageOverrideUnavailable,
     confirmedFreeIds,
+    automaticCandidates,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on
@@ -158,7 +168,12 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     await recordStageAssignment(
       params.analysisId,
       params.task,
-      { provider: routed.provider as ProviderName, model: routed.model },
+      {
+        provider: routed.provider as ProviderName,
+        model: routed.model,
+        fallbackCount: routed.fallbackCount,
+        attempted: routed.attemptedProviders.map(({ provider, model }) => ({ provider, model })),
+      },
       {
         mode: routing.selection.mode,
         reason: routing.selection.reason,

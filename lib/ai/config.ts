@@ -16,6 +16,10 @@ export interface TaskModelEntry {
   model: string;
 }
 
+export interface AutomaticCandidate extends TaskModelEntry {
+  contextWindow: number;
+}
+
 export type TaskType =
   | 'simple_coding'
   | 'complex_debugging'
@@ -109,63 +113,6 @@ function rankModels(
   return scored;
 }
 
-// ── Chutes Preferred Models by Task ──
-
-const CHUTES_ROOT_CAUSE: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'Qwen/Qwen3.5-397B-A17B-TEE' },
-  { provider: 'chutes', model: 'moonshotai/Kimi-K2.6-TEE' },
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-  { provider: 'chutes', model: 'Qwen/Qwen3-32B-TEE' },
-];
-
-const CHUTES_EVIDENCE: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-  { provider: 'chutes', model: 'Qwen/Qwen3-32B-TEE' },
-  { provider: 'chutes', model: 'Qwen/Qwen3.5-397B-A17B-TEE' },
-  { provider: 'chutes', model: 'moonshotai/Kimi-K2.6-TEE' },
-];
-
-const CHUTES_RELEVANT_FILES: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-  { provider: 'chutes', model: 'Qwen/Qwen3-32B-TEE' },
-  { provider: 'chutes', model: 'Qwen/Qwen3.5-397B-A17B-TEE' },
-];
-
-const CHUTES_SOLUTION: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'Qwen/Qwen3.5-397B-A17B-TEE' },
-  { provider: 'chutes', model: 'moonshotai/Kimi-K2.6-TEE' },
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-];
-
-const CHUTES_PATCH: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'Qwen/Qwen3.5-397B-A17B-TEE' },
-  { provider: 'chutes', model: 'moonshotai/Kimi-K2.6-TEE' },
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-];
-
-const CHUTES_VALIDATION: TaskModelEntry[] = [
-  { provider: 'chutes', model: 'Qwen/Qwen3-32B-TEE' },
-  { provider: 'chutes', model: 'deepseek-ai/DeepSeek-V4-Flash-0731-TEE' },
-  { provider: 'chutes', model: 'moonshotai/Kimi-K2.6-TEE' },
-];
-
-function getChutesPreferred(task: string): TaskModelEntry[] {
-  switch (task) {
-    case 'root_cause_analysis':
-      return CHUTES_ROOT_CAUSE;
-    case 'evidence_extraction':
-      return CHUTES_EVIDENCE;
-    case 'relevant_file_discovery':
-      return CHUTES_RELEVANT_FILES;
-    case 'solution_generation':
-      return CHUTES_SOLUTION;
-    case 'patch_generation':
-      return CHUTES_PATCH;
-    default:
-      return CHUTES_VALIDATION;
-  }
-}
-
 // BENCHMARK MODE: Override all task models for benchmarking
 const BENCHMARK_MODELS: Record<string, TaskModelEntry[]> = {
   simple_coding: [{ provider: 'openrouter', model: 'deepseek/deepseek-v4-flash-0731' }],
@@ -182,7 +129,8 @@ export function selectModelsForTask(
   estimatedTokens: number = 0,
   excludeModels: Set<string> = new Set(),
   availableProviders?: Set<ProviderName>,
-  confirmedFreeIds?: Set<string>
+  confirmedFreeIds?: Set<string>,
+  automaticCandidates?: AutomaticCandidate[]
 ): TaskModelEntry[] {
   // BENCHMARK MODE: Use DeepSeek models if BENCHMARK_DEEPSEEK=true
   if (process.env.BENCHMARK_DEEPSEEK === 'true') {
@@ -197,31 +145,21 @@ export function selectModelsForTask(
     }
   }
 
-  // CHUTES MODE: Use Chutes models first if CHUTES_API_KEY is configured
-  const chutesConfigured = availableProviders
-    ? availableProviders.has('chutes')
-    : !!process.env.CHUTES_API_KEY;
-  if (chutesConfigured) {
-    const chutesPreferred = getChutesPreferred(task).filter(
-      (m) => !excludeModels.has(`${m.provider}/${m.model}`)
+  if (automaticCandidates && automaticCandidates.length > 0) {
+    const requiredContext = Math.max(estimatedTokens * 2, 32_000);
+    const eligible = automaticCandidates.filter(
+      (c) =>
+        (availableProviders ? availableProviders.has(c.provider) : isProviderConfigured(c.provider)) &&
+        c.contextWindow >= requiredContext &&
+        !excludeModels.has(`${c.provider}/${c.model}`)
     );
-
-    if (chutesPreferred.length > 0) {
-      const primaryModel = chutesPreferred[0]?.model || 'unknown';
-      const taskType = TASK_TYPE_MAP[task as AnalysisTask] || 'general';
-      const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-      const ranked = rankModels(taskType, requiredContext, excludeModels, availableProviders, confirmedFreeIds);
-      const remaining = ranked.filter(
-        (r) => !chutesPreferred.some(
-          (p) => p.provider === r.entry.provider && p.model === r.entry.model
-        )
-      );
-
-      console.log(`[chutes] Task ${task}: primary=${primaryModel} | ${chutesPreferred.length} Chutes models + ${remaining.length} fallbacks`);
-      return [
-        ...chutesPreferred,
-        ...remaining.map((r) => ({ provider: r.entry.provider, model: r.entry.model })),
-      ];
+    const freeIds = confirmedFreeIds ?? new Set<string>();
+    const freeFirst = [
+      ...eligible.filter((c) => freeIds.has(`${c.provider}/${c.model}`)),
+      ...eligible.filter((c) => !freeIds.has(`${c.provider}/${c.model}`)),
+    ];
+    if (freeFirst.length > 0) {
+      return freeFirst.map((c) => ({ provider: c.provider, model: c.model }));
     }
   }
 

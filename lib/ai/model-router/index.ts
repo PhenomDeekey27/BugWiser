@@ -4,7 +4,7 @@ import {
   ProviderName,
   isProviderConfigured,
 } from '../providers/registry';
-import { selectModelsForTask, getTestFailProvider, TaskModelEntry, getModelById } from '../config';
+import { selectModelsForTask, getTestFailProvider, TaskModelEntry, AutomaticCandidate, getModelById } from '../config';
 import {
   buildStageAssignments,
   StrategyMode,
@@ -74,6 +74,7 @@ export interface RunRequest {
    * from freeCandidates).
    */
   confirmedFreeIds?: Set<string>;
+  automaticCandidates?: AutomaticCandidate[];
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -355,7 +356,8 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
         estimatedTokens,
         new Set(),
         availableProviders,
-        request.confirmedFreeIds
+        request.confirmedFreeIds,
+        request.automaticCandidates
       );
   const stageAssignments = request.strictFree
     ? []

@@ -10,6 +10,8 @@ export interface StageAssignmentRecord {
   provider: ProviderName;
   model: string;
   fit?: number | null;
+  fallbackCount?: number;
+  attempted?: Array<{ provider: ProviderName; model: string }>;
 }
 
 export interface AnalysisSelectionRecord {

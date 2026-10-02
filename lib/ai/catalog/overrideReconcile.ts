@@ -20,6 +20,8 @@
 //   - An empty result means "no overrides", which re-enables automatic
 //     selection per stage; that is the correct recovery.
 
+export type StageOverrideOrigin = 'setup' | 'manual';
+
 export interface StageOverrideEntry {
   provider: string | null;
   model: string | null;
@@ -29,6 +31,7 @@ export interface StageOverrideEntry {
    * never go stale) until the user re-applies a setup or configures the stage.
    */
   unavailable?: boolean;
+  origin?: StageOverrideOrigin;
 }
 
 export interface ReconcilableModel {
@@ -72,7 +75,7 @@ export function reconcileStageOverrides(
       // Strict-Free unavailable marker: keep verbatim (no model to validate).
       kept[stage] = { provider: null, model: null, unavailable: true };
     } else if (provider && model && valid.has(`${provider}::${model}`)) {
-      kept[stage] = { provider, model };
+      kept[stage] = { provider, model, ...(entry.origin ? { origin: entry.origin } : {}) };
     } else {
       droppedStages.push(stage);
     }

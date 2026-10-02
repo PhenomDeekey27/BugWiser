@@ -5,7 +5,7 @@ import { getModelPreference } from '@/lib/ai/preferences';
 import { getProviderConnections, isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
 import type { ProviderName } from '@/lib/ai/catalog/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
-import { reconcileStageOverrides } from '@/lib/ai/catalog/overrideReconcile';
+import { reconcileStageOverrides, type StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 import { toCatalogModel } from '@/lib/ai/catalog/toCatalogModel';
 
 export async function GET() {
@@ -75,7 +75,7 @@ export async function GET() {
       available: m.availability !== 'unavailable',
     }));
     const reconcile = reconcileStageOverrides(
-      (preference.stage_overrides ?? null) as Record<string, { provider: string | null; model: string | null; unavailable?: boolean }> | null,
+      preference.stage_overrides ?? null,
       catalogModelsForReconcile
     );
 
@@ -91,7 +91,7 @@ export async function GET() {
         selected_strategy: preference.selected_strategy,
         provider: preference.provider,
         model: preference.model,
-        stage_overrides: reconcile.kept as Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>,
+        stage_overrides: reconcile.kept as Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean; origin?: StageOverrideOrigin }>,
       });
       console.warn(
         `[api/models] Dropped ${reconcile.droppedStages.length} stale stage_overrides (models no longer in connected catalog):`,

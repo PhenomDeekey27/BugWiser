@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getModelPreference, saveModelPreference, type SelectedStrategy } from '@/lib/ai/preferences';
+import { getModelPreference, resolveSavedStrategy, saveModelPreference, type SelectedStrategy } from '@/lib/ai/preferences';
+import type { StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 import type { ProviderName } from '@/lib/ai/providers/registry';
 
 export async function GET() {
@@ -33,7 +34,7 @@ export async function PUT(request: Request) {
       provider?: ProviderName | null;
       model?: string | null;
       selected_strategy?: SelectedStrategy;
-      stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean }>;
+      stage_overrides?: Record<string, { provider: ProviderName | null; model: string | null; unavailable?: boolean; origin?: StageOverrideOrigin }>;
     };
     try {
       body = await request.json();
@@ -48,15 +49,20 @@ export async function PUT(request: Request) {
     // selected_strategy omitted → keep the STORED strategy. Callers that only
     // update mode/model (analysis/new handleSaveModel) must not reset the
     // user's /models strategy choice — strict-Free runtime enforcement keys
-    // off selected_strategy === 'free'.
-    const selectedStrategy =
-      body.selected_strategy ?? (await getModelPreference(user.id)).selected_strategy;
+    // off selected_strategy === 'free'. When the stored read FAILS, refuse to
+    // save rather than clobber the stored strategy with a fabricated default.
+    const storedPreference =
+      body.selected_strategy == null ? await getModelPreference(user.id) : null;
+    const strategyResolution = resolveSavedStrategy(body.selected_strategy, storedPreference);
+    if (!strategyResolution.ok) {
+      return NextResponse.json({ error: strategyResolution.error }, { status: 503 });
+    }
 
     const result = await saveModelPreference(user.id, {
       selection_mode: body.selection_mode,
       provider: body.provider || null,
       model: body.model || null,
-      selected_strategy: selectedStrategy,
+      selected_strategy: strategyResolution.strategy,
       stage_overrides: body.stage_overrides,
     });
 

@@ -4685,3 +4685,1290 @@ out of scope per task (not app-fixable).
   could cause API/DB/model traffic.
 
 ## STOP
+
+---
+
+# TASK — MODEL SELECTION ARCHITECTURE AUDIT (read-only — 2026-10-01)
+
+**Status:** ✅ COMPLETE. Read-only code audit; **no source/DB edits, no
+discovery/classification/generation/rebuild, no API/DB/network calls, no
+secrets. Files changed: `think/state.md` only.** `skills.md` absent
+(re-confirmed); `AGENTS.md` read (injected). Safe local checks: none needed
+(pure code reads + greps; line counts only).
+
+## 1. Architecture trace (verified file:line)
+
+```
+Connected providers ─ DB `provider_connections` (status='connected' only;
+  env keys are NOT "connected" — service.ts:74-102 esp. :76-79)
+        │ resolveUserCredentials: ENV wins over DB (service.ts:104-157)
+        ▼
+Discovery ─ discoverModels (model-intelligence/index.ts:109-221):
+  static registry filtered to CONNECTED providers (:120-121; 14 rows =
+  chutes5+opencode4+deepseek2+gemini2+zai1, registry.ts:112-352)
+  + live fetch per provider with creds (live.ts:105-147; all 7 fetchers),
+  live groups of NON-connected providers skipped (:161-163),
+  merge static→live wins on same key (:204-212). TTL 60min (:93).
+        ▼
+Verified pricing ─ normalizers: isFree ⇔ explicit zero (normalizers.ts:62,
+  :263/:315) or registry-confirmed static free (:143-151); priceSource
+  live|registry|unknown (:271/:332, index.ts:131); unknown price NEVER free
+  (stageSelection.ts:419-431; cost.ts:60-62). Free never name-inferred
+  (normalizers.ts:14-15).
+        ▼
+Stage eligibility ─ STAGE_CONTEXT_MIN gates 32K/128K/200K/32K/32K
+  (stageSelection.ts:48-54) → family grouping (:223-244, provider-scoped
+  :143) → per-provider top-5 (MAX_CANDIDATES_PER_PROVIDER :61, :248-264)
+  = buildAutomaticPool (:223-266).
+        ▼
+Free/Balanced/Quality scoring ─ selectForStage (:389-446):
+  Free = first of price.isFree-filtered score-ordered pool (:429-433),
+    else `unavailable` (:430-432); Balanced = max quality−log10(1+cost·100)·12
+    (:287-310, per-analysis cost via STAGE_TOKEN_PROFILES stageTokenProfiles
+    :24-37); Quality = cheapest among within-5-pts-of-best (:328-354).
+  Weights: STAGE_WEIGHTS (stageSelection.ts:36-42).
+        ▼
+Saved custom overrides ─ /models handleSetupSelect computes picks CLIENT-side
+  and PUTs {selection_mode:'auto', selected_strategy, stage_overrides}
+  (app/models/page.tsx:153-209) → preference route PUT
+  (app/api/models/preference/route.ts:23-73; omitted strategy preserved
+  :52-53) → user_model_preferences row (preferences.ts:59-101).
+  Stale-model hygiene: reconcileStageOverrides (overrideReconcile.ts:54-83)
+  wired into GET /api/models with self-healing persist
+  (app/api/models/route.ts:67-100).
+        ▼
+Displayed selections ─ page stage rows render the PERSISTED overrides
+  (loadStageModels page.tsx:121-128; badge/status :423-458). Setup chips =
+  live preference.selected_strategy (:108/:147, toSetupChoice :551-553).
+        ▼
+Runtime routing ─ gateway.generate (gateway.ts:53-177):
+  resolveAnalysisRouting (routing.ts:59-128): manual → single model
+  (:85-113); auto → stage_overrides[task] FIRST (:72-75) + live
+  selected_strategy. strictFree = LIVE strategy==='free' && auto
+  (gateway.ts:75). strategy mode for the chain = ANALYSIS-ROW snapshot
+  model_strategy (:61-66), created via analyses route mapping
+  balanced/quality→'custom' (app/api/analyses/route.ts:53-56).
+  Chain order (model-router/index.ts:247, buildRunChain :250-340):
+  strict free → [verified free override, ...freeCandidates] (:267-287,
+  else-throw); non-strict → stage override > manual > strategy assignment
+  > autoChain (:289-337). autoChain = selectModelsForTask over STATIC
+  MODEL_REGISTRY (config.ts:180-245), strategy engine likewise
+  (strategy-selection.ts:55-302, :311-323 applyStageOverrides).
+```
+
+## 2. Q3 — why not all connected providers appear in stage selections
+
+Gate ladder (any one hides a provider from a given stage row), code-proven:
+1. **One winner per stage by design** — 5 rows × 1 pick each
+   (selectForStage returns a single StagePick).
+2. **DB-connected only** (service.ts:76-79) and **in PROVIDER_DEFINITIONS**
+   (route.ts:29-30) — env-only keys are runtime creds, never catalog rows.
+3. **Zero catalog models**: live-only providers (openrouter, openai — zero
+   static entries, registry.ts:112-283) disappear entirely if their fetch
+   fails (live.ts:140-143 warn-and-skip) or normalizer excludes every entry
+   (null-returns: non-text family normalizers.ts:238-243, sunset :413,
+   image-output :464, missing id :236/:301/:363).
+4. **Stage context gate** (stageSelection.ts:48-54,:233-234): e.g. Evidence
+   requires ≥200K — 128K/131K models (opencode/deepseek/zai static, many
+   others) are excluded from that stage ONLY; chutes Qwen3-32B (32K) fails
+   root-cause 128K too.
+5. **Family grouping** (:143, :236-244): free+paid siblings collapse to one
+   rep (lower cost wins :192-209) — variants disappear, provider does not.
+6. **Provider top-5 cap** (:61,:248-264): caps, never zeroes, a provider.
+7. **Free strictness** (:429-433): non-`isFree` models hidden under Free
+   (zai null-price static, all chutes/deepseek/gemini paid statics).
+
+Verdict: not a single defect; the visible providers per stage = survivors
+of gates 1-7 + score competition. The manual Change-Model modal shows the
+full ungated connected set (page.tsx:642-656) for comparison.
+
+## 3. Q4 — Balanced paid Qwen on File Discovery; Quality free everywhere
+
+- **Balanced/Discovery:** value = stageScore − log10(1+cost·100)·12
+  (:287-310). Discovery has the SMALLEST workload (12K in/1K out,
+  stageTokenProfiles.ts:26) ⇒ paid candidates' penalty is smallest there,
+  while weights {coding3, speed3} (:37) favor Qwen-class coding/speed
+  scores. A paid Qwen wins Discovery iff quality lead > penalty. Prior LIVE
+  measurement (state.md §INVESTIGATION Sept-25, lines 555-563) showed
+  exactly this: Qwen122b 88.75−2.18=86.57 > free 85.00 on discovery, while
+  on every other stage the paid model's quality was BELOW the free winner
+  outright (free wins without needing the penalty). Formula is per-stage →
+  cross-stage divergence is expected output, not a bug.
+- **Other stages:** free quality wins outright (penalty 0 anyway).
+- **Quality picks free everywhere by spec** (:328-354): tolerance 5 pts of
+  best + $0 cost wins among qualified; corroborated live (state.md §5,
+  lines 565-572: no paid model beat the free winner by >5 pts on any stage).
+- Constants BALANCED_COST_SCALE 100 / MULTIPLIER 12 (:285-286) and
+  tolerance 5 (:328) are documented tuning knobs, not defects (state.md:499).
+
+## 4. Q5 — "Custom Override": actual precedence (code + preferences)
+
+- **Persistence truth:** `user_model_preferences.stage_overrides` (one entry
+  per configured stage, preferences.ts:70-78). The modal's "Custom Override"
+  CHECKBOX is display-only: `handleSavePreference` persists an entry for
+  every stage with a selected model REGARDLESS of `isOverride`
+  (page.tsx:214-231), and reload re-derives `isOverride = !!override`
+  (:125) — so every saved row (including setup-generated picks, marked
+  true at :169) renders the "Custom Override" badge (:454-458). Unchecking
+  the checkbox then saving does NOT remove the entry. **Badge ≠ manual-
+  only; checkbox is decorative (confirmed defect — see root causes).**
+- **Runtime precedence (verified):** auto mode → saved override is chain
+  head: `stage override > manual > strategy assignment > autoChain`
+  (model-router/index.ts:247, :289-337; routing.ts:72-75). So YES — saved
+  stage overrides take precedence over the selected policy in auto mode.
+- **Exceptions (policy beats override):**
+  1. Strict Free (LIVE selected_strategy==='free' + auto, gateway.ts:75):
+     paid overrides are DROPPED with a warn (stageSelection.ts:514-520);
+     chain = free candidates only (model-router:267-287); `unavailable`
+     marker fails the stage structurally (:268-272).
+  2. Manual mode: overrides ignored entirely (routing.ts:72-75 gate).
+  3. Stale overrides: dropped by reconcile (overrideReconcile.ts:74-78)
+     at GET /api/models; runtime reads the raw row but GET self-heals
+     persistence (route.ts:87-100).
+
+## 5. Q6 — policy change: recompute vs retain; UI vs runtime parity
+
+- **Recompute:** applying a setup chip RECOMPUTES all 5 picks client-side
+  and REPLACES the whole stage_overrides map (page.tsx:160-191) — old
+  overrides/manual edits do NOT survive a setup switch; selected_strategy
+  updated atomically in the same PUT. Retention only happens when
+  `stage_overrides` is omitted from a PUT (serialization drops undefined →
+  column untouched; preference route :55-61 callers in analysis flows rely
+  on this, route comment :48-53).
+- **UI vs runtime — same effective PRIMARY selection after a setup:** UI
+  rows = persisted overrides; runtime chain head = same live overrides ✓.
+- **Divergences (confirmed):**
+  a. Strict-Free runtime drops paid overrides the UI still displays
+     (stageSelection.ts:514-520 vs page badge) — deliberate, warns.
+  b. **Fallback hops are invisible to the UI and NOT catalog-based:**
+     autoChain = static MODEL_REGISTRY (41 entries; providers opencode/
+     openrouter/chutes/zai/deepseek/gemini — **NO openai**, model-registry
+     grep) with **hardcoded Chutes-preferred model lists prepended**
+     whenever chutes is available (config.ts:114-150, :200-226), free-first
+     sort only in rankModels (:104-107). A Balanced/Quality primary failure
+     can therefore land on a hardcoded paid Chutes Qwen the /models page
+     never showed (state.md:496 flagged engine/catalog unification as
+     future work).
+  c. Strategy source split: chain strategy = analysis-row snapshot
+     (gateway.ts:66) vs strict-Free gate = live preference (:75) —
+     policy switches mid-analysis flip enforcement but not the snapshot
+     (overrides being complete usually masks this).
+  d. Runtime can reach env-configured providers the UI never lists
+     (buildAvailableProviders model-router:220-231 env counts; catalog/UI
+     require DB connection — discoverModels:110-121, page:73).
+  e. Edge: a stage whose automatic pool is EMPTY (e.g. no ≥200K model for
+     Evidence) persists NO override under Balanced/Quality (pick null →
+     page:183 gate) → UI shows "No config" while runtime falls back to the
+     ungated autoChain (config requiredContext = max(2×tokens,32K) only,
+     :212/:230).
+
+## 6. Q7 — per-provider exclusion status (code + existing data only)
+
+Provider universe = 7 (service.ts:26-34 = registry.ts:15-100). Connected
+state below derived from the 05:29 catalog build ("Static after filtering:
+14" ⇒ all five static-holding providers connected; openrouter per prior
+live audits) — NO DB read performed this task; openai connection unknown.
+
+| Provider | Static rows | Live fetcher | Engine registry (41) | Code-established stage-selection facts |
+|---|---|---|---|---|
+| chutes | 5 paid (registry.ts:114-193) | ✓ | ✓ + hardcoded preferred lists (config:114-150) | Qwen3-32B 32K fails root-cause+evidence gates; 131K rows fail evidence 200K; 262K/1M rows pass all |
+| openrouter | **0 (live-only)** | ✓ (live.ts:26) | ✓ (24 entries) | any fetch failure ⇒ provider vanishes from selections; non-text families excluded (normalizers:238-243); free models come only from explicit-zero live pricing |
+| opencode | 4 `isFree:true` (registry:285-352) | ✓ | ✓ | 128K ⇒ fails evidence only; **blocked ONLY as classifier model** (index.ts:223-234) — NOT excluded from stage selection/runtime free pools (:227-230) |
+| gemini | 2 paid (registry:232-264) | ✓ | ✓ | 1M ctx ⇒ passes every gate |
+| deepseek | 2 paid (registry:199-230) | ✓ | ✓ | 131K ⇒ fails evidence |
+| zai | 1, price null/null ⇒ unknown, **not free** (registry:266-283; priceSource unknown index.ts:131) | ✓ | ✓ | 128K ⇒ fails evidence; unknown price ⇒ worst Balanced tier (Infinity, stageSelection:300-301), Quality last-resort (:346-347) |
+| openai | **0 (live-only)** | ✓ (live.ts:61) | **✗ ABSENT from MODEL_REGISTRY** | catalog/UI-capable when connected, but NEVER participates in autoChain/strategy fallbacks; live fetch failure ⇒ zero models (no static fallback) |
+
+## 7. Confirmed root causes
+
+- **RC-1 (by design, UX confusion):** stage rows show one provider/stage;
+  gate ladder §2 (context/family/cap/Free/zero-catalog) hides providers
+  with no in-UI explanation.
+- **RC-2 (by design, spec-correct):** Balanced cross-stage divergence =
+  per-stage value formula + smallest cost profile on Discovery; Quality
+  free-everywhere = tolerance+cost rule (§3; corroborated live).
+- **RC-3 (defect, display/persistence):** "Custom Override" badge appears
+  on every saved stage row (setup-generated included) and the modal
+  checkbox does not control persistence (page.tsx:214-231 vs :125/:454) —
+  badge/checkbox misrepresent what actually overrides policy.
+- **RC-4 (defect, UI/runtime parity):** runtime fallback chain is the
+  static MODEL_REGISTRY + hardcoded Chutes-preferred lists (config.ts:
+  114-150,:200-226), openai missing entirely — fallbacks can contradict
+  the displayed setup and the catalog; UI shows no fallback surface.
+- **RC-5 (edge defect):** empty stage pool ⇒ no override persisted ⇒ UI
+  "No config" but runtime executes an ungated autoChain model (§5e).
+- **RC-6 (split-brain, low impact):** strategy snapshot (analysis row) vs
+  live strict-Free gate vs env-reachable providers (§5c-d) — intentional
+  per comments but a real divergence source.
+
+## 8. Smallest safe fixes — separate follow-up tasks (NONE implemented)
+
+1. **Task A (RC-3, smallest):** make the override flag truthful — persist
+   `isOverride` (or drop the checkbox): when the modal checkbox is
+   unchecked, omit that stage from `stage_overrides` on save
+   (page.tsx:214-231) and render badge/status from a persisted origin
+   instead of `!!override` (:125). One component, no schema change
+   (origin can be derived: badge only when entry ≠ current setup recompute,
+   or add optional `origin` field in the JSON column — decision point).
+2. **Task B (RC-4):** catalog-based fallback parity — replace the hardcoded
+   Chutes-preferred/autoChain source with catalog-derived candidates for
+   non-strict runs (state.md:496 unification), or minimally: log/surface
+   fallback identity in UI. Larger; keep separate from A.
+3. **Task C (RC-5):** handle empty-pool stages explicitly under
+   Balanced/Quality (e.g. persist a structured "no eligible model" marker
+   like strict-Free's `unavailable`, or block apply with a toast) so UI and
+   runtime agree.
+4. **Task D (RC-1):** per-stage exclusion reasons in the Configure modal
+   (e.g. "128K context < 200K required", "not free", "family duplicate")
+   computed from existing STAGE_CONTEXT_MIN/pool code — display-only.
+5. **Not a fix:** Balanced/Quality constants + tolerance — product tuning
+   decision only (state.md:499, §10 of prior investigation).
+
+## Validation performed
+
+Pure reads: stageSelection.ts, overrideReconcile.ts, preferences.ts,
+strategy-selection.ts, preference route, routing.ts, gateway.ts,
+models route, page.tsx (895 lines), connection/service.ts, live.ts,
+registry.ts, toCatalogModel.ts, stageTokenProfiles.ts, config.ts,
+model-router/index.ts, model-intelligence/index.ts:86-230, normalizers/
+config greps, model-registry provider grep, state.md prior entries.
+No tests run (no test-dependent claims), no network/DB, no code changes
+besides this file, no secrets/raw model outputs touched.
+
+## Task A — Custom Override checkbox/badge fix (IMPLEMENTED)
+
+RC-3 fix from §8.1. Origin persisted as an optional `origin?: 'setup' |
+'manual'` field INSIDE each `stage_overrides` JSON entry — no schema change
+(JSON column already carries `unavailable`). Decisions locked in:
+
+- **Checkbox = persistence.** `isOverride` now genuinely gates whether a
+  stage is written: unchecked → stage omitted from the map → entry removed
+  on save (full-map PUT overwrites; `{}` clears all; `undefined` key absent
+  preserves column — verified route/preferences pass-through unchanged).
+  Previously the builder saved any row with provider+model regardless of
+  the checkbox, so unchecking changed only the badge, never persistence.
+- **Badge + "Custom" status key on `origin === 'manual'`** (page.tsx),
+  not `isOverride`. Setup rows get `origin: 'setup'` → status "Active",
+  no badge. Manual modal apply stamps `'manual'` (changed selection, or
+  unchanged legacy re-apply), unchecked → `undefined`.
+- **Legacy entries (pre-fix, no origin):** badge hidden, status "Active";
+  a modal Apply restamps `'manual'`. Known limitation, chosen over guessing
+  provenance (decision (ii)); runtime unaffected either way.
+- **Single builder** `buildStageOverrides()` + `resolveOverrideOrigin()`
+  in `lib/ai/catalog/stageOverrides.ts` — shared by setup apply and Save
+  Preference (was two duplicated inline blocks in page.tsx).
+- **Reconcile preserves origin:** `overrideReconcile.ts` kept-branch now
+  spreads `origin` (before: `{provider, model}` rebuilt on EVERY
+  /api/models GET → would strip origin immediately). Unavailable markers
+  unchanged (never carry origin). Runtime precedence untouched — routing/
+  strategy/gateway read only provider/model/unavailable.
+
+Files changed: `app/models/page.tsx` (StageModel+Preference+loadStageModels
+origin passthrough, handleSetupSelect stamps 'setup' + builder, handleSave
+builder, handleApplyStageChange origin rule, badge :441, status :421),
+`lib/ai/catalog/overrideReconcile.ts` (+`StageOverrideOrigin`, kept-branch),
+`lib/ai/catalog/stageOverrides.ts` (NEW), `lib/ai/preferences.ts` (entry
+types + cast), `app/api/models/preference/route.ts` (body type),
+`app/api/models/route.ts` (cast + drop now-unneeded reconcile cast),
+`stage-overrides.spec.ts` (NEW, 17 checks).
+
+Verification (baselines pre-existing): `npx tsc --noEmit` exit 0;
+`npx --no-install tsx stage-overrides.spec.ts` → ALL PASS (17/17);
+`npx --no-install tsx classify-diagnostics.spec.ts` → ALL PASS (33/33);
+`npm run lint` → 40 problems (12 errors, 28 warnings) = pre-change baseline,
+no new findings. No network/DB writes, no discovery/classification/runtime
+code touched, no schema change, no secrets.
+
+Known limitations (accepted): legacy manual overrides show "Active" until
+re-applied via modal (which stamps `'manual'`); a row unconfigured in the
+modal shows its transient model as "Active" until reload (entry correctly
+absent from persistence); setup-pick unavailable markers persist without
+origin by design.
+
+## Task B — UI-to-runtime fallback consistency audit (READ-ONLY; RC-4 scope)
+
+Method: pure reads of the full selection/fallback chain, no application
+code or DB changes, no network/discovery/classification/catalog rebuilds,
+no credentials touched; `skills.md` absent (glob re-checked). Line refs
+verified against the current working tree (post-Task-A state). CONFIRMED
+behavior (B.1–B.3) is kept separate from hypotheses (B.4); fixes in B.5
+are proposals only — none implemented.
+
+### B.1 Effective selection trace (CONFIRMED)
+
+1. Display: /models rows render `preference.stage_overrides` via
+   loadStageModels (page.tsx:123-130); model resolution for a row =
+   getConfiguredStageModel (page.tsx:274-278, catalog `available`-filtered)
+   with display fallbacks getModelDisplay (page.tsx:391-399) and
+   getBestModelForStage (page.tsx:266-271, returns the provider's FIRST
+   available model); status/badge from `origin` (page.tsx:410-431, :441-445);
+   library rows only from DB-connected providers (page.tsx:73-77).
+2. Runtime read: resolveAnalysisRouting (routing.ts:59-128) loads LIVE
+   preference + credentials; auto → chain head = live stage_overrides
+   (:72-75); marker flag (:79-83); manual → single manual model (:85-113).
+3. Gateway (gateway.ts:53-177): chain-composition strategy = ANALYSIS-ROW
+   snapshot `model_strategy` (:61-66; snapshotted at analysis creation,
+   balanced/quality→custom, analyses/route.ts:53-56, :71); strictFree =
+   LIVE `selected_strategy === 'free'` AND auto mode (:75); canonical
+   catalog load per run (:94-102) → `confirmedFreeIds` from price.isFree
+   (:104-108); strict plan via prepareStrictFreeRun (:111-119); overrides
+   always from the LIVE preference (routing:72-75).
+4. Chain build (model-router:250-340):
+   - strictFree: `[freeOverride?, ...freeCandidates]` ONLY (:267-287);
+     unavailable marker → structured throw (:268-272); empty → structured
+     throw (:281-285); autoChain + strategy engine skipped entirely
+     (runWithFallback passes []/undefined, :351-362).
+   - non-strict: stageOverride > manual > strategy assignment > autoChain
+     (:289-337). autoChain = selectModelsForTask over static MODEL_REGISTRY
+     (config.ts:180-245; registry = 41 entries / 6 providers, NO openai —
+     grep-verified); strategy assignments = same static registry
+     (strategy-selection.ts:22, :356-389; override param passed as
+     `undefined` by the router, :360-362 — overrides ride the chain head
+     instead).
+5. Execution loop (model-router:380-478): availability gate (:380-383);
+   recoverable errors advance the chain — model-not-found (:449-456),
+   context_too_large (:466-473), rate-limit/timeout/5xx/network/
+   provider_error fall through (:475-476); auth/other invalid-request
+     throw (:432-464). `checkContextBudget` (:153-184) has ZERO callers
+   (grep-verified) — no pre-run context swap exists.
+6. Post-run: ACTUAL model persisted per stage (gateway.ts:156-170 →
+   analysis-selection.ts:34-69) and shown live by ProgressOverlay
+   (:77-84, :151-163). Fallback flagged ONLY for manual mode
+   (gateway:147-154); auto-mode hops are recorded (stages[] shows the
+   real model) but never flagged, and /models never updates.
+
+### B.2 CONFIRMED divergence paths (runtime can differ from /models)
+
+P1 — Fallback hops after primary failure (all modes).
+Trigger: primary fails recoverably (429/5xx/timeout/model-gone/context
+overflow).
+Where: model-router:380-478; non-strict chain :289-337; autoChain source
+config.ts:180-245 — hardcoded Chutes-preferred lists (:112-167) prepended
+whenever chutes ∈ availableProviders (:200-226), NOT free-filtered and
+NOT context-gated (:205-224); benchmark env override (:187-198); ranked
+tail free-first-but-paid-included (rankModels :104-107; context-ungated
+last-resort :233-242).
+Classification: strictFree → Free-SAFE (free-only chain,
+stageSelection:462-473 + model-router:267-287). Otherwise UI-MISLEADING —
+executed model ≠ displayed, auto hops unflagged, ProgressOverlay:160
+still claims "BugWiser picked the best model for this stage". Under
+strategy 'free' this chain is reachable only via manual mode (P3/P4),
+where the Chutes head CAN be paid.
+
+P2 — Strict-Free silently drops a displayed paid override.
+Trigger: live strategy free + auto, override not catalog-confirmed-free
+(hand-picked paid model in Configure while Free active; or price flipped;
+or override absent from catalog).
+Where: stageSelection.ts:514-520 (warn-only) ← gateway:111-119.
+Classification: Free-ENFORCED (correct); UI-MISLEADING — the row keeps
+showing Active/Custom on a model runtime ignores; only a server console.warn.
+
+P3 — Manual mode + disconnected provider → silent auto run with FALSE UI.
+Trigger: manual saved via analysis/new (app/analysis/new/page.tsx:79-102),
+then that provider disconnected; next run.
+Where: routing.ts:85-98 returns runArgs WITHOUT manualModel while its own
+reason string claims "No fallback to a different model" (:95) →
+buildRunChain takes the strategy branch (model-router:308-337) → a
+registry/Chutes model executes; `manualFallbackOccurred` stays false
+(gateway:147-148 requires a non-null selected) → ProgressOverlay:158
+shows "Manual mode — your selected model is running."
+Classification: UI-ACTIVELY-FALSE **and Free-POLICY-RISK** — strictFree is
+false in manual mode (gateway:75), so if the engine 'free' assignment for
+the task is missing (engine is registry-bound; user's free catalog models
+need not be among the 41 registry entries) or fails, the chain starts at
+the UNFILTERED paid Chutes-preferred head (config:200-226) while the
+user's active strategy is Free and no user model is running at all.
+
+P4 — Manual mode + connected: recoverable failure → paid fallback.
+Where: model-router:300-307 (chain = manual + autoChain); manual is
+excluded from strictFree BY DESIGN (gateway:73-74).
+Classification: design-documented for the manual PRIMARY; the paid
+autoChain tail under strategy 'free' remains an unaddressed Free nuance;
+surfaced honestly (gateway:147-154 → overlay:158).
+
+P5 — Env-configured providers reachable at runtime but hidden in UI.
+Trigger: env keys set without DB connection.
+Where: env-first credentials (service.ts:115-122); chain availability
+counts env (model-router:220-231; registry.ts:229-248); UI connected
+status is DB-only (service.ts:74-102, comment :76-79); catalog/library
+scoped to DB connections (model-intelligence:110-121, :158-162;
+page:73-77).
+Classification: UI-MISLEADING (runtime can use a provider displayed as
+"disconnected" and models absent from the library); Free-SAFE —
+env-only models are absent from the catalog ⇒ never in confirmedFreeIds ⇒
+excluded from strict candidates and 'free' strategy picks
+(stageSelection:481-488 conservative).
+
+P6 — Static-registry strategy engine ≠ the catalog /models displays.
+Trigger: any stage WITHOUT an override (row shows "Not configured")
+under auto/custom/balanced/quality analysis rows.
+Where: strategy-selection.ts (registry import :22; buildAutoAssignments
+:356-389; free/free_paid/fully_paid/custom/auto modes :55-301) using
+static scores, not the live/classified catalog shown in the Model
+Library; openai can never be engine-picked (absent from registry) though
+shown as a connected provider.
+Classification: UI-MISLEADING (lite) — /models never shows the model that
+will run; overlay:160 claims "best" from static registry weights;
+registry drift vs live catalog feeds P1 fallbacks.
+
+P7 — Row-snapshot vs live strategy split-brain (RC-6 re-confirmed).
+Trigger: selected_strategy changed after analysis creation.
+Where: chain strategy = snapshot (gateway:66, :131; analyses:53-56) vs
+strictFree gate = live (gateway:75) vs overrides = live (routing:72-75).
+Classification: Free-SAFE in auto mode (gate is live); chain composition
+can lag the /models display; low impact.
+
+P8 — Preference-read failure degrades strict Free.
+Trigger: getModelPreference DB error → swallows error and returns
+defaults (selection_mode 'auto', strategy 'auto') — preferences.ts:40-47.
+Where: gateway:75 strictFree=false; non-strict then honors paid overrides
+(no free validation) + paid autoChain.
+Classification: Free-POLICY-RISK — code-confirmed branch; the DB-error
+trigger itself is rare/unverified (see H2).
+
+P9 — Manual-mode rows on /models are inert; Save silently flips mode.
+Trigger: selection_mode 'manual' (written only by analysis/new:89-91;
+/models never renders selection_mode — grep).
+Where: runtime ignores EVERY stage override in manual mode
+(routing.ts:72-75, :85) while /models shows rows, per-stage costs,
+Configure UI and badges normally; "Save Preference"/setup apply force
+`selection_mode: 'auto'` (page.tsx:183, :212) with no disclosure.
+Classification: UI-MISLEADING both directions (inert display + silent
+mode flip — the flip may be intended, but it is silent).
+
+P10 — Unavailable marker consumed only under strict Free.
+Trigger analysis: strategy and markers are always co-written by /models
+PUTs (page:183/:213; route keeps stored strategy when omitted,
+preference/route:48-53), so marker + non-free AUTO is unreachable via the
+current UI; marker + MANUAL is reachable and folds into P9 (rows inert).
+Where: marker honored only under strictFree (gateway:134;
+model-router:268-272); non-strict marker entry has no provider →
+resolveStageOverride null (routing:45) → auto select.
+Classification: Free-SAFE for auto-free; display note only under manual.
+
+P11 — Stale override attempted before reconcile self-heal.
+Trigger: model/provider vanished; a run happens before anyone opens /models
+(GET reconciles + persists, models/route:77-100; runtime never
+reconciles — routing reads the raw row).
+Where: chain head = phantom (routing:72-75) → not-found → next hop
+(model-router:449-456, :475-476).
+Classification: transient race (after GET both sides agree); costs
+latency/quota; Free-SAFE under strict (revalidated, stageSelection:515).
+
+P12 — Empty-pool Balanced/Quality stage (RC-5 re-confirmed).
+Trigger: setup apply where buildAutomaticPool is empty for a stage —
+selectForStage returns null for balanced/quality, unavailable marker only
+for free (stageSelection:402-410, :406-408, :430-432).
+Where: null pick → no entry persisted (Task A builder omits) → row shows
+"Not configured"/"No config"; toast still claims all five stages applied
+(page:190-195); runtime runs the P6 registry auto pick.
+Classification: UI-MISLEADING — setup intent silently unenforced, no
+marker, runtime ≠ the setup formula.
+
+P13 — No pre-run context validation.
+checkContextBudget (model-router:153-184) has no callers (grep); context
+problems only surface as mid-chain context_too_large hops (:466-473).
+Classification: informational; no direct display divergence.
+
+### B.3 Free-policy summary (CONFIRMED)
+
+- AUTO mode + live strategy 'free' is airtight: free-only chain, override
+  validated against catalog price.isFree (or dropped), marker throws,
+  exhaustion throws, availability-gated (model-router:267-287, :481-502;
+  stageSelection:504-523; gateway:75, :110-119). Unknown-priced, env-only,
+  and absent models are conservatively non-free (stageSelection:481-488).
+- Every Free-relevant gap sits OUTSIDE that gate: manual mode (P3 = real
+  risk + false copy; P4 = design-documented) and P8 (DB-error
+  degradation). The hardcoded Chutes lists (config:200-226) and benchmark
+  env override (:187-198) are unreachable under strictFree because
+  autoChain is forced to [] (model-router:351-352).
+
+### B.4 Hypotheses (NOT confirmed — no DB read / no runtime test)
+
+- H1: legacy `analyses.model_strategy` rows containing 'balanced'/'quality'
+  (predating the analyses route:53-56 mapping) would make
+  buildStageAssignments throw (strategy-selection.ts:398-401) → stage
+  failure. No evidence such rows exist.
+- H2: P8 trigger frequency — unknown whether getModelPreference errors
+  occur in practice (error is swallowed and console.logged).
+- H3: openai connection state is unknown (prior audit note); if
+  DB-connected, P6 means engine/auto picks never use it while its models
+  are visible and configurable in the UI.
+
+### B.5 Smallest safe fixes (PROPOSALS ONLY — nothing implemented)
+
+F1 (primary, RC-4) — catalog-derived fallback candidates.
+  The gateway already loads the canonical catalog every run
+  (gateway:94-102). Add one exported pure helper in stageSelection.ts
+  mirroring getFreeStageCandidates (:462-473) WITHOUT the price.isFree
+  filter — reuse buildAutomaticPool (:223-266) + scoreOrderedPool
+  (:362-372, currently unexported) — e.g. `getStageCandidates`. Pass the
+  result through a new OPTIONAL RunRequest field; runWithFallback uses it
+  in place of selectModelsForTask when present (model-router:351-359),
+  keeping config.ts:180-245 as the fallback when the catalog is empty
+  (self-hosted/env-only safety, P5). Effect: fallback hops become exactly
+  the gated, scored models /models' library shows; hardcoded Chutes and
+  benchmark lists leave the default path WITHOUT introducing any new
+  hardcoded names; strictFree and the strategy layer untouched — no
+  router redesign. Verify with a pure spec over buildRunChain inputs
+  (tsx hand-rolled, same harness as stage-overrides.spec.ts).
+F2 (honesty, cheap) — flag auto-mode fallbacks. RunResponse already
+  carries fallbackCount/attemptedProviders (model-router:79-82); include
+  per-stage fallbackCount in recordStageAssignment's selection payload
+  (analysis-selection:34-69, gateway:156-167) and change
+  ProgressOverlay:160 to "Auto mode — recovered via fallback (n hop[s])"
+  when flagged. Existing data only; /models untouched.
+F3 (fail closed, small) — fix P3: routing.ts:85-98, when the manual
+  provider lacks credentials, return a structured `manualUnavailable`
+  signal that gateway turns into a thrown stage error (matching the
+  existing reason text), instead of dropping manualModel and letting the
+  auto chain run. Removes the false overlay copy AND its Free risk.
+F4 (display only) — /models: surface `preference.selection_mode` (already
+  in the payload, page.tsx:50) as an info banner when 'manual' ("Manual
+  mode active — stage configuration below is not used at runtime.");
+  optionally stop forcing `selection_mode: 'auto'` (page:183, :212) or at
+  least disclose the flip in the success toast.
+F5 (optional hardening, do last) — make preference-read failure fail
+  closed for Free (propagate the error or return null and let gateway
+  treat null as strict) so P8 cannot execute paid models.
+Explicit non-goals: strict-Free chain composition stays as-is (already
+catalog-consistent); no new hardcoded provider/model names; no router
+redesign.
+
+### B.6 Validation performed
+
+Pure reads: routing.ts, gateway.ts, model-router/index.ts, config.ts,
+strategy-selection.ts, stageSelection.ts (:40-79, :213-446, :440-523),
+connection/service.ts, providers/registry.ts, preferences.ts,
+model-intelligence/index.ts (grep), analyses/route.ts, models/route.ts,
+app/models/page.tsx, app/analysis/new/page.tsx, analysis-selection.ts,
+ProgressOverlay.tsx; greps: MODEL_REGISTRY composition (41 entries,
+providers = chutes/deepseek/gemini/opencode/openrouter/zai, no openai),
+checkContextBudget callers (0), selection_mode writers, prior state.md
+sections. No tests run (no code changed); no network/DB; no secrets.
+Files changed this task: this file only.
+
+---
+
+## Task C — Manual-mode Free-policy fix (P3 from Task B audit)
+
+### C.1 Scope
+
+Task C only: fix the confirmed P3 risk (manual mode + disconnected provider →
+silent automatic run with false "your selected model is running" copy), with
+focused regression tests. F1/F2/F4/F5 from Task B were NOT implemented. No
+router redesign, no hardcoded provider/model names in product code, no
+discovery/classification/generation/catalog changes, no external calls, no
+DB writes, no secrets.
+
+### C.2 P3 trace confirmed (end to end)
+
+1. Manual selection saved: app/analysis/new/page.tsx:79-102
+   (selection_mode:'manual', provider, model; selected_strategy omitted so
+   the stored strategy — e.g. 'free' — is preserved).
+2. Analysis row snapshots selected_strategy as model_strategy
+   (app/api/analyses/route.ts:53-56, :71).
+3. Provider later disconnected (removeUserConnection deletes the
+   provider_connections row; no env key for that provider) →
+   resolveUserCredentials (connection/service.ts:104-158) no longer contains
+   the provider.
+4. OLD routing.ts:85-98 (disconnected branch): returned runArgs WITHOUT
+   manualModel while selection.reason claimed "No fallback to a different
+   model" — contradictory; mode reported 'manual' with provider/model null.
+5. gateway.ts:75 strictFree = live selected_strategy==='free' AND auto mode →
+   false in manual mode (by design, gateway.ts:73-74: the manual primary is
+   outside Strict Free) → Strict Free guarantee OFF.
+6. runWithFallback (model-router): manualModel null → autoChain from config
+   (config.ts:180-245): Chutes-preferred PAID head when available
+   (config.ts:200-226, unfiltered by free/context), else rankModels
+   (config.ts:104-107 — free-first, paid remain). strategy-selection 'free'
+   stage assignments are registry-bound and can be EMPTY (a user's free
+   catalog models need not be among the 41 MODEL_REGISTRY entries).
+7. Result: a potentially PAID model executed while the effective strategy was
+   'free'; manualFallbackOccurred stayed false (gateway.ts:147-154 needs a
+   non-null manual selection) → ProgressOverlay.tsx:158 showed "Manual mode —
+   your selected model is running." while a different model actually ran.
+
+Answer to Step 2 question: YES — risk confirmed. Disconnected manual
+credentials could cause paid execution under an effective free strategy with
+false UI copy.
+
+### C.3 Strict Free vs 'free' (documented distinction)
+
+- Strict Free (gateway.ts:75): live selected_strategy==='free' AND auto mode;
+  free-only chain + validated overrides + structured throws
+  (model-router:267-287, stageSelection:504-523). Hard guarantee. OFF in
+  manual mode by design.
+- Engine 'free' strategy (non-strict, strategy-selection): free-first
+  assignment/ordering only; paid candidates remain in the chain.
+- rankModels free-first (config.ts:104-107): ordering preference only.
+- Catalog price.isFree / confirmedFreeIds (stageSelection:481-488): catalog
+  free authority.
+Manual mode sits outside Strict Free by design for the manual PRIMARY — that
+does NOT extend to silently substituting automatic candidates; that was the
+P3 gap.
+
+### C.4 Fix (smallest safe)
+
+lib/ai/routing.ts only:
+- The disconnected manual branch now THROWS instead of returning the silent
+  shape: `Model selected but provider "<p>" is not connected. No fallback to a
+  different model. Reconnect the provider or switch to Auto mode.`
+  (original reason text preserved + actionable hint). Fail-closed and
+  strategy-independent (identical behavior for free and non-free alike),
+  matching the text the old code already displayed. The error propagates
+  from generate() → analysis stage catch (lib/analysis/root-cause.ts:133-155
+  rethrows, :240-246 persists error_message) → visible in the ProgressOverlay
+  error display. gateway.ts untouched — resolveAnalysisRouting has a single
+  caller (gateway.ts:57, verified by grep).
+- Added optional seam RoutingDependencies { resolveCredentials?,
+  loadPreference? } (typeof of the two existing functions) as a third
+  optional parameter of resolveAnalysisRouting, so tests exercise the REAL
+  function; production callers pass nothing → identical behavior
+  (?? default). No behavior change for gateway.
+- Deliberately NOT changed (out of Task C scope):
+  - manual + connected + recoverable failure → autoChain fallback
+    (model-router:300-307) — documented design (Task B P4), preserved.
+  - auto mode, strictFree gate, strategy branches, gateway
+    manualFallbackOccurred, ProgressOverlay copy (F2), strict-free marker
+    path (F5) — untouched.
+  - No provider/model names hardcoded; no DB writes/secrets/discovery.
+
+### C.5 Tests (manual-credential-fallback.spec.ts — new, tsx harness, 9 checks)
+
+1. disconnected manual + free strategy → throws (message names provider,
+   says "not connected" / "No fallback").
+2. identical error for ALL strategies (free, free_paid, fully_paid, auto,
+   balanced, quality, custom) — strategy independence.
+3. disconnected manual throws even when OTHER providers are connected
+   (no substitution).
+4. throws even with task undefined (not task-scoped).
+5. connected manual + free → manualModel routed, providerTokens passed,
+   per-stage overrides ignored, strategy surfaced, no throw.
+6. connected manual + balanced → manualModel routed unchanged.
+7. auto + free, no override → auto branch unchanged (stageOverrides null;
+   strict-free decision stays in the gateway).
+8. auto + per-stage override → passed through unchanged.
+9. auto + unavailable marker → stageOverrideUnavailable true, stageOverrides
+   null (unchanged).
+Fixtures use 'openai'/'test-model' as generic test values (existing spec
+convention); product code contains no hardcoded names.
+
+### C.6 Validation results (exact)
+
+- npx tsc --noEmit → exit 0.
+- npx tsx manual-credential-fallback.spec.ts → 9 PASS / 0 FAIL, ALL PASS,
+  exit 0. (First run had 1 failure caused by a SPEC assertion bug — the auto
+  branch emits stageOverrides: null, not undefined — spec corrected; product
+  code unaffected; second run 9/9.)
+- npx tsx stage-overrides.spec.ts → ALL PASS (17/17).
+- npx tsx classify-diagnostics.spec.ts → ALL PASS (33/33).
+- npm run lint → 40 problems (12 errors, 28 warnings) = exact pre-existing
+  baseline; no new findings.
+- git status delta vs Task A set: + M lib/ai/routing.ts,
+  + ?? manual-credential-fallback.spec.ts (nothing else changed).
+
+### C.7 Remaining limitations
+
+- Legacy/corrupt rows (selection_mode:'manual' with null provider/model) fall
+  through to the auto branch and report mode 'auto'; unreachable via the API
+  (save validation preferences.ts:66-68 rejects manual without
+  provider+model) — not fixed here.
+- Manual + connected + recoverable failure still falls back to autoChain,
+  which under a 'free' strategy may include paid candidates (Task B P4,
+  documented design; policy tightening not authorized in Task C).
+- manualFallbackOccurred / ProgressOverlay copy for that connected-fallback
+  case still relies on gateway.ts:147-154 semantics (Task B F2, not
+  implemented).
+- The thrown message surfaces as the analysis error_message on the first
+  failing AI stage; no dedicated UI treatment (acceptable — visible
+  fail-closed).
+
+Files changed this task: lib/ai/routing.ts, manual-credential-fallback.spec.ts,
+think/state.md.
+
+---
+
+## Task D — Catalog-driven automatic fallback candidates
+
+### D.1 Scope
+
+Task D only: replace the hardcoded Chutes-preferred default fallback
+candidates with catalog-derived candidates. F2/F4/F5 NOT implemented. No
+router redesign, no new hardcoded provider/model names, no discovery /
+classification / catalog rebuild / generation, no external API calls, no
+DB writes, no secrets.
+
+### D.2 Data-source viability (step 3): CONFIRMED
+
+The gateway already loads ONE catalog per generate() run —
+getOrBuildCatalog(userId).models.map(toCatalogModel), gateway.ts catalog
+block — for every run except the strict-Free unavailable-marker branch
+(which needs no candidates). This change consumes that SAME in-memory
+array: zero additional discovery, classification, rebuilds, network calls,
+or DB writes were added (getOrBuildCatalog still invoked exactly once per
+generate()).
+
+### D.3 Trace evidence (step 2)
+
+- config.ts (before): selectModelsForTask = benchmark env block → CHUTES
+  MODE (6 hardcoded CHUTES_* arrays + getChutesPreferred; Chutes-preferred
+  head UNFILTERED by context/free, remainder registry-ranked free-first) →
+  default rankModels (MODEL_REGISTRY, context-gated, free-first via
+  confirmedFreeIds) → empty-pool all-configured fallback.
+- model-router/index.ts: runWithFallback:356 calls selectModelsForTask for
+  every non-strict run (autoChain); buildRunChain:290-340 appends autoChain
+  as fallback tail after stage override / manual / strategy assignment;
+  execution gate :381-383 skips candidates whose provider lacks credentials
+  (env or providerTokens).
+- stageSelection.ts: buildAutomaticPool (STAGE_CONTEXT_MIN gate → family
+  grouping → provider top-5) + scoreOrderedPool (stageScore desc,
+  valueScore, stable id) are pure and already power getFreeStageCandidates
+  (Strict Free) — the same pool logic reused for non-strict candidates.
+- Only caller of selectModelsForTask: model-router (grep, 1 hit).
+- Runtime task strings are exactly the 5 StageKeys (grep of generate()
+  calls), so every runtime stage receives stage-aware candidates.
+
+### D.4 The change (4 files)
+
+1. catalog/stageSelection.ts: NEW getAutomaticStageCandidates(catalog,
+   stageId) — same canonical pool as getFreeStageCandidates (stage context
+   gate, family grouping, provider cap, score order) WITHOUT the
+   price.isFree filter, returning {provider, model, contextWindow};
+   returns [] for unknown stage keys / empty catalogs.
+2. gateway.ts: in the existing catalog branch, non-strict runs derive
+   automaticCandidates from the already-loaded catalogModels (string
+   provider cast to ProviderName — same pattern as freeCandidates) and pass
+   it to runWithFallback. Strict-Free runs never compute it.
+3. model-router/index.ts: RunRequest gains optional automaticCandidates,
+   passed as 6th arg to selectModelsForTask (strictFree still short-circuits
+   autoChain to []).
+4. config.ts: DELETED the 6 CHUTES_* arrays, getChutesPreferred, and the
+   CHUTES MODE block (~65 lines of hardcoded provider/model names).
+   selectModelsForTask gains optional automaticCandidates: when present and
+   non-empty → filter by credentials (availableProviders or
+   isProviderConfigured), dynamic context (max(2×estimatedTokens, 32k)),
+   and excludeModels; order confirmed-free first (same unconditional
+   free-first semantics rankModels already had, keyed on confirmedFreeIds);
+   return. If everything filters out → fall through to the existing
+   registry-ranked default (the new path can never produce an empty pool
+   that the old path wouldn't). Benchmark env block untouched (still
+   checked first). Provider credential checks preserved twice:
+   construction-time filter + existing execution gate
+   (model-router:381-383).
+
+### D.5 Strict Free guarantees preserved (step 5)
+
+- strictFree still bypasses selectModelsForTask entirely (autoChain=[],
+  model-router:351-352) → catalog candidates can never enter a strict-Free
+  chain (tested).
+- getFreeStageCandidates / prepareStrictFreeRun untouched: price.isFree
+  only; unknown/null pricing never treated as free (tested); empty pool and
+  unavailable marker still throw the structured no-free-model error
+  (tested).
+- Non-strict catalog candidates include paid models BY DESIGN — unchanged
+  non-strict semantics (paid fallbacks were always reachable via
+  rankModels).
+
+### D.6 Tests (automatic-candidates.spec.ts — new, 13 checks)
+
+- Paid vs free eligibility: catalog pool contains paid + free +
+  unknown-priced models in stage-score order; strict-free pool still
+  free-only with unknown pricing never free; free-first reorder when
+  confirmedFreeIds provided; input order (paid first) preserved when no
+  free ids set.
+- Empty pools: unknown stage key → []; empty catalog → []; empty or absent
+  automaticCandidates → registry default path identical (deepEqual).
+- Context eligibility: below-STAGE_CONTEXT_MIN excluded (16k vs 128k stage
+  min; 128k vs evidence 200k); dynamic 2×estimatedTokens gate drops a 64k
+  candidate at 50k estimated tokens.
+- Unchanged outside the affected path: benchmark env precedence;
+  strict-Free chain never includes autoChain entries; strict-Free
+  fail-closed throws (empty pool + marker); manual primary with catalog
+  autoChain as tail; credential-less provider candidates dropped with
+  registry fallback.
+
+### D.7 Validation results (exact)
+
+- npx tsc --noEmit → exit 0.
+- npx tsx automatic-candidates.spec.ts → 13 PASS / 0 FAIL, ALL PASS,
+  exit 0 (first run; no spec fixes needed).
+- npx tsx manual-credential-fallback.spec.ts → ALL PASS (9/9).
+- npx tsx stage-overrides.spec.ts → ALL PASS (17/17).
+- npx tsx classify-diagnostics.spec.ts → ALL PASS (33/33).
+- npm run lint → 40 problems (12 errors, 28 warnings) = exact baseline.
+- git status delta vs Task C: + M lib/ai/catalog/stageSelection.ts,
+  M lib/ai/config.ts, M lib/ai/gateway.ts, M lib/ai/model-router/index.ts,
+  + ?? automatic-candidates.spec.ts.
+
+### D.8 Limitations
+
+- Chutes primacy is gone from the normal path: Chutes models now appear
+  only where the catalog/registry ranks them (they remain in
+  MODEL_REGISTRY, so degraded no-catalog runs still reach them via
+  rankModels).
+- Degraded run (catalog load failed, non-strict): automaticCandidates=[] →
+  registry-ranked default — unchanged except the removed hardcoded Chutes
+  segment; no new failure mode.
+- Strategy-mode primaries (buildStageAssignments) remain registry-derived
+  (out of Task D scope). Task B P6/RC-5 partially mitigated: runs whose
+  assignment pool was EMPTY now get a catalog-derived autoChain instead of
+  an empty chain, but the per-stage primary pick itself is still
+  registry-based.
+- Manual connected-fallback tail is now catalog-driven; P4 semantics
+  otherwise unchanged (F2/F4/F5 not implemented).
+- The catalog stage pool caps at 5 candidates per provider
+  (MAX_CANDIDATES_PER_PROVIDER) — a shorter tail than the old full-
+  registry list; intentional, the same cap Strict Free already used.
+
+Files changed this task: lib/ai/catalog/stageSelection.ts, lib/ai/config.ts,
+lib/ai/gateway.ts, lib/ai/model-router/index.ts,
+automatic-candidates.spec.ts, think/state.md.
+
+## Task E — Make automatic model fallback visible
+
+### E.1 Scope (as instructed)
+
+- Persist existing runtime fallback metadata into model_selection; distinguish
+  selected vs actual model after fallback in the UI; focused tests
+  (initial / fallback / exhausted attempt); record in state.md; report exact
+  validation; stop.
+- NOT in scope: manual-mode UI copy (F2), preference-read error fix (F4),
+  router redesign, error-path changes, new hardcoded provider/model names,
+  discovery/classification/catalog rebuilds, external API/DB writes,
+  credentials in code.
+
+### E.2 Root cause (why fallback was invisible)
+
+1. model_selection.stages[task] is written only AFTER stage success
+   (gateway recordStageAssignment) — during fallback attempts the overlay
+   had stale/absent data; runtime counters (fallbackCount,
+   attemptedProviders) existed only on the in-memory RunResponse.
+2. Stage assignment records carried only {provider, model, fit} — no attempt
+   trail, so no UI could tell initial vs fallback vs exhausted.
+3. app/analysis/[id]/page.tsx rendered ModelTierPipeline with a HARDCODED
+   fallback chain (nemotron/ling/mimo/muse, 5 sites) plus
+   provider={record.ai_provider || 'opencode-zen'} — disconnected from real
+   attempts (and 'opencode-zen' hardcoded).
+4. ProgressOverlay auto-mode copy never mentioned fallback (manual mode had
+   manualFallbackOccurred copy only).
+
+### E.3 Implementation
+
+- types/index.ts: AnalysisModelSelection.stages value gains optional
+  fallbackCount?: number and attempted?: {provider, model}[] (error strings
+  stripped by the writer).
+- lib/ai/analysis-selection.ts: StageAssignmentRecord gains the same fields.
+- lib/ai/gateway.ts: recordStageAssignment success-path stage arg now passes
+  routed.fallbackCount and routed.attemptedProviders mapped to
+  {provider, model}. Failure path untouched — router throws before
+  recordStageAssignment, so exhausted attempts are NOT persisted in
+  production (see E.6); failure remains surfaced via error_message.
+- lib/ai/stageAttemptView.ts (new): pure deriveStageAttemptView →
+  state 'unknown' | 'initial' | 'fallback' | 'exhausted' with
+  {selected, actual, attempts, fallbackCount}. Rules: no stage → unknown;
+  no actual + attempted → exhausted (selected = first attempt, actual null);
+  attempted.length > 1 → fallback (selected = first attempt); length === 1
+  → initial; no trail + fallbackCount > 0 → fallback with selected null;
+  else initial.
+- components/analysis/ProgressOverlay.tsx: computes attemptView; the
+  auto-mode sub-line gains 'fallback' and 'exhausted' branches showing
+  selected vs actual. Manual ternary branches byte-identical (F2 honored,
+  verified via git diff). activeModel derivation unchanged.
+- app/analysis/[id]/page.tsx: new local stagePipelineProps(stageKey) reads
+  record.model_selection.stages[...] and returns {fallbackChain from
+  attempted, currentModel, activeModel, provider}; all 5 hardcoded
+  ModelTierPipeline sites replaced (relevant_file_discovery,
+  root_cause_analysis, evidence_extraction, solution_generation,
+  patch_generation). 'opencode-zen' and the 4 hardcoded model names removed
+  from page.tsx (grep confirms zero matches under app/).
+- components/analysis/ModelTierBadge.tsx: ModelTierPipeline chip semantics
+  rewritten for real attempt trails: idx < currentIdx → failed (red,
+  strikethrough), idx === currentIdx → active (green, pulse), after →
+  pending. Only consumer is page.tsx (verified by grep).
+- stage-attempt-view.spec.ts (new): 9 checks — initial attempt; subsequent
+  fallback (selected ≠ actual, trail preserved); deep 3-attempt chain;
+  exhausted with trail; exhausted deriving fallbackCount; legacy row without
+  metadata; fallbackCount without trail; null/undefined/empty-input unknown;
+  exhausted with empty trail → unknown.
+
+### E.4 Files changed this task
+
+types/index.ts, lib/ai/analysis-selection.ts, lib/ai/gateway.ts,
+lib/ai/stageAttemptView.ts (new), components/analysis/ProgressOverlay.tsx,
+app/analysis/[id]/page.tsx, components/analysis/ModelTierBadge.tsx,
+stage-attempt-view.spec.ts (new), think/state.md.
+
+### E.5 Validation results (exact)
+
+- npx tsc --noEmit → exit 0.
+- npx tsx stage-attempt-view.spec.ts → 9 PASS / 0 FAIL, ALL PASS, exit 0.
+- npx tsx manual-credential-fallback.spec.ts → ALL PASS (9/9).
+- npx tsx stage-overrides.spec.ts → ALL PASS (17/17).
+- npx tsx classify-diagnostics.spec.ts → ALL PASS (33/33).
+- npx tsx automatic-candidates.spec.ts → ALL PASS (13/13).
+- npm run lint → 40 problems (12 errors, 28 warnings) = exact baseline.
+- grep 'opencode-zen|nemotron-3.5-lightning-free' under app/ → no matches.
+- git status delta vs Task D: + M components/analysis/ModelTierBadge.tsx,
+  M components/analysis/ProgressOverlay.tsx, M app/analysis/[id]/page.tsx,
+  M lib/ai/analysis-selection.ts, M lib/ai/gateway.ts, M types/index.ts,
+  + ?? lib/ai/stageAttemptView.ts, + ?? stage-attempt-view.spec.ts.
+
+### E.6 Limitations
+
+- Exhausted-fallback persistence is NOT wired: on total failure the router
+  throws before recordStageAssignment, so model_selection never receives a
+  trail-without-success row in production. The 'exhausted' view state is
+  implemented and unit-tested (and would activate if a writer is later
+  added on the error path), but today exhausted attempts surface only via
+  analysis error_message — documented intentionally, no router changes
+  allowed this task.
+- During an in-flight stage attempt, stages[task] still reflects the prior
+  success/absence (write-after-success semantics unchanged); the overlay
+  shows the completed trail for the current stage once it records.
+- Manual-mode copy (F2) and preference-read error handling (F4) remain
+  outstanding by instruction.
+- Page pipelines for stages with no assignment (legacy analyses) render an
+  empty pipeline (no fabricated chain) instead of the old fake one —
+  intentional.
+
+Files changed this task: types/index.ts, lib/ai/analysis-selection.ts,
+lib/ai/gateway.ts, lib/ai/stageAttemptView.ts,
+components/analysis/ProgressOverlay.tsx, app/analysis/[id]/page.tsx,
+components/analysis/ModelTierBadge.tsx, stage-attempt-view.spec.ts,
+think/state.md.
+
+## Task F — Manual-mode UI + selection-mode save consistency
+
+### F.1 Scope
+
+Task F only (Task B F4 proposal): (a) indicate on /models when stage
+selections are inactive under manual mode; (b) stop silently switching
+selection_mode when saving unrelated preferences; (c) preserve existing
+manual/automatic routing behavior. No Task G, no routing/fallback changes,
+no preferences-system redesign, no hardcoded provider/model names, no
+discovery/classification/catalog/generation/external calls/DB writes, no
+secrets. skills.md re-checked absent (glob); AGENTS.md injected; Tasks
+A/C/D/E reviewed (A = origin/badge fix, C = routing manual fail-closed +
+RoutingDependencies seam, D = catalog automatic candidates, E = fallback
+visibility + per-stage attempt persistence).
+
+### F.2 selection_mode trace — why saves forced 'auto' (CONFIRMED)
+
+Load: GET /api/models → getModelPreference (preferences.ts:33-58: stored
+'manual' → 'manual'; missing row OR DB error → 'auto') → response
+preference (models/route.ts:107) → /models page state (page.tsx:105;
+Preference interface :51 carries selection_mode). The page NEVER READS it
+— corroborated by baseline lint: app/models/page.tsx:56:10 "'preference'
+is assigned a value but never used".
+
+Both /models save handlers HARDCODE it:
+- handleSetupSelect (page.tsx:188, was :183) — body literally
+  selection_mode: 'auto'
+- handleSavePreference (page.tsx:225, was :212) — same
+Why nothing corrects it server-side: PUT /api/models/preference REQUIRES
+selection_mode (preference/route.ts:45-47, 400 otherwise) and falls back
+to the STORED value only for selected_strategy (:49-54), not for mode.
+Then saveModelPreference (preferences.ts:64-74) coerces anything
+non-'manual' to 'auto' AND nulls provider+model for auto — so every /models
+save flipped manual→auto and destructively wiped the stored manual pair.
+Legitimate mode writers (unchanged): /analysis/new handleSaveModel
+(page:89, user-chosen via SelectedModelSummary toggle) and the
+/models GET reconcile self-heal (models/route.ts:90, preserves mode).
+
+### F.3 Manual mode vs stage overrides at runtime (CONFIRMED)
+
+routing.ts:81-84 resolves the per-stage override ONLY when
+selection_mode !== 'manual' → manual: stageOverride null;
+:88-92 forces stageOverrideUnavailable false; :94-114 returns a single
+manualModel with runArgs containing NO stageOverrides → the manual model
+runs every stage (recoverable-failure autoChain tail = documented design,
+Task B P4/C.7). Ergo EVERY /models stage row, setup, cost estimate and
+badge is inert under manual mode — Task B P9 confirmed both directions
+(inert display + silent flip).
+
+### F.4 Fix (smallest safe)
+
+Semantics evidence (not a guess): the task instruction forbids silent
+switching; the only mode-switch UI is the Auto/Manual toggle on
+/analysis/new (SelectedModelSummary); /models already receives the stored
+mode but never surfaces it (F.2) — so /models saves must PRESERVE the
+stored mode, and manual must be indicated instead of hidden. Two files +
+one new helper:
+
+- NEW lib/ai/preferenceMode.ts (pure, no I/O, no hardcoded names):
+  - buildPreferenceSaveBody({selectionMode, provider, model,
+    selectedStrategy, stageOverrides}) → PUT body that keeps the stored
+    mode; manual echoes the stored provider/model pair (server requires
+    both, preferences.ts:66-68, and /models has no manual model picker);
+    auto sends null pair (identical outcome to the old absent keys).
+  - deriveStageSelectionState(mode, manualPair) → {active, mode, banner,
+    inactiveStatusText, saveNote} — manual: banner naming the running
+    model + "saved but not used at runtime" + pointer to New Analysis;
+    auto: active, no banner/note.
+  - deriveStageStatus({configured, unavailable, origin, modeActive}) →
+    'unavailable' | 'unconfigured' | 'inactive' | 'custom' | 'active' —
+    original precedence preserved; the mode gate applies ONLY to the two
+    positive statuses (configured row under manual → 'inactive' instead of
+    'Custom'/'Active'; 'No free model'/'No config' stay truthful).
+- app/models/page.tsx:
+  - both save handlers now build bodies via buildPreferenceSaveBody with
+    the stored preference mode/pair — no hardcoded 'auto' remains
+    (grep-verified); useCallback deps extended with preference,
+    selectionState.
+  - amber role="status" banner rendered above the setup/stage sections
+    when deriveStageSelectionState(...).banner is set.
+  - getStatusDisplay rewritten as tone→{text,className} mapping (same
+    classes/texts as before, 'Inactive' amber added; unused `variant`
+    field dropped — render never read it).
+  - success toasts for Save Preference and setup apply gain the saveNote
+    description under manual (disclosure without switching).
+  - StageConfigPanel left enabled (config is validly SAVED for later auto
+    use; the banner discloses it is currently inert).
+- NOT changed: lib/ai/routing.ts (manual/auto resolution untouched),
+  preference routes/preferences.ts (no contract change — page now sends
+  valid bodies for the existing contract), /analysis/new, overlay copy,
+  catalog/discovery/classification.
+
+### F.5 Tests (preference-mode.spec.ts — new, tsx harness, 11 checks)
+
+Saving: (1) manual save preserves selection_mode + pair + strategy +
+overrides (never forced to auto); (2) manual body satisfies the server
+contract (mode valid, provider+model present — guards the 400); (3) auto
+save keeps auto + null pair (old behavior); (4) no stored preference
+(null/undefined) → auto; (5) manual with missing pair stays manual (server
+rejects loudly — no silent flip).
+Display: (6) manual state → inactive + banner names provider/model +
+saveNote; (7) manual without pair → banner has no dangling 'undefined';
+(8) auto/null → active, no banner/note.
+Row status: (9) configured row under manual → 'inactive' (never
+custom/active); (10) unavailable/unconfigured stay truthful under manual;
+(11) auto mode unchanged (custom/active/unavailable/unconfigured).
+
+### F.6 Validation results (exact)
+
+- npx tsc --noEmit → exit 0.
+- npx tsx preference-mode.spec.ts → 11 PASS / 0 FAIL, ALL PASS, exit 0
+  (first run; no spec fixes needed).
+- Existing specs all re-run after final restore: stage-attempt-view
+  9/9, manual-credential-fallback 9/9, stage-overrides 17/17,
+  classify-diagnostics 33/33, automatic-candidates 13/13 — ALL PASS.
+- npm run lint → 39 problems (12 errors, 27 warnings). Baseline was 40
+  (12 errors, 28 warnings). Diff methodology: page.tsx Task F edits were
+  temporarily reverted (file backed up to %TEMP%) → lint reproduced
+  EXACTLY 40 (12/28) → identified the vanished warning as
+  app/models/page.tsx:56:10 "'preference' is assigned a value but never
+  used" (Task F is the first code to READ that state) → implementation
+  restored (tsc 0 re-confirmed). Net: zero new findings, 12 errors
+  unchanged, one pre-existing warning legitimately resolved; no
+  preferenceMode.ts/preference-mode.spec.ts findings (grep-verified).
+- grep selection_mode: 'auto' hardcode in app/models/page.tsx → no
+  matches; lib/ai/routing.ts diff vs pre-Task-F → untouched this task.
+- No network, no DB writes, no discovery/classification/catalog rebuild,
+  no external API calls, no secrets in code or logs.
+- git status delta vs Task E: + ?? lib/ai/preferenceMode.ts,
+  + ?? preference-mode.spec.ts; M app/models/page.tsx (file already
+  modified since Task A; Task F adds the edits in F.4).
+
+### F.7 Limitations
+
+- Corrupt rows (selection_mode 'manual' with null provider/model — Task
+  C.7 class): a /models save now FAILS LOUDLY with the server's existing
+  400 ("Manual mode requires a provider and model selection.") instead of
+  silently flipping to auto; recovery is switching to Auto on New
+  Analysis (manual Save is disabled there without a model, so the user
+  cannot re-persist the broken state). Intentional per "no silent switch".
+- Setup apply under manual still persists new stage_overrides +
+  selected_strategy (saved for later auto use) — disclosed by banner +
+  toast note; mode preserved, not switched.
+- Under manual the "Estimated Cost per Analysis" card and per-row cost
+  sublines still reflect stage configs (inert at runtime) — explained
+  once by the banner, not itemized per row.
+- 'inactive' replaces 'Custom'/'Active' only for configured rows under
+  manual; the "Custom Override" provenance badge and sublines unchanged.
+- PUT contract unchanged (selection_mode still required) — no API
+  redesign; /analysis/new flow byte-identical.
+- Manual-mode overlay copy for the connected-fallback case and the
+  preference-read error handling (P8/F5) remain outstanding; Task G not
+  implemented.
+
+Files changed this task: app/models/page.tsx, lib/ai/preferenceMode.ts
+(new), preference-mode.spec.ts (new), think/state.md.
+
+## Task G — Preference-read failure handling (P8 / B.5-F5)
+
+### G.1 Scope
+
+Task G only: audit the preference-read failure path end-to-end, confirm or
+refute P8 (Free-policy risk), and — if confirmed — implement the smallest
+fail-safe fix. No routing-fallback architecture change (model-router
+untouched), no Tasks A–F behavior change (all six prior specs re-run
+unchanged), no UI/cleanup, no hardcoded names, no discovery/classification/
+catalog/generation/external calls/DB writes, no secrets. skills.md
+re-checked absent.
+
+### G.2 Exact trace (step 2)
+
+1. Loader — lib/ai/preferences.ts getModelPreference: TWO failure flavors.
+   (a) Postgrest error object → previously returned the SAME fabricated
+   defaults as a missing row ({selection_mode:'auto', selected_strategy:'auto',
+   no stage_overrides}) with only console.error — THE P8 source. (b) thrown
+   exception (no try/catch) → propagates: resolveAnalysisRouting's
+   Promise.all rejects → generate() rejects → analysis stage fails with
+   error_message — already fail-closed (tested, unchanged).
+2. routing.ts: loads preference via the loadPreference seam; on failure the
+   fabricated auto/auto lands in ResolvedRouting.selectedStrategy and
+   selection.mode; stage_overrides absent → stageOverride null
+   (routing:81-84); manual branch unreachable (fabricated provider/model
+   null) → auto branch. NEW: preferenceReadFailed propagated (:107, :121).
+3. gateway.ts: strategyMode = analysis-row SNAPSHOT model_strategy
+   (gateway:66; written at creation — analyses/route.ts:53-56 maps
+   balanced/quality→custom, :55 defaults missing to 'auto'; preflight can
+   insert NULL strategy — rawStrategy||'auto' only in memory). LIVE strategy
+   is consumed at exactly ONE place: the strictFree gate (grep-verified,
+   old gateway:75 → now :77).
+4. strictFree gate (old): `selectedStrategy === 'free' && mode === 'auto'`
+   → on read failure fabricated 'auto' → FALSE.
+5. Downstream of strictFree=false (gateway:120-126): automaticCandidates =
+   getAutomaticStageCandidates over the catalog (Task D — free-first
+   ORDERING only, paid models included) + strategy engine chain for
+   strategyMode (engine 'free' = free-first with paid tails, C.3) +
+   model-router non-strict buildRunChain (:248: stageOverride > manual >
+   strategy assignment > autoChain) whose fallback hops reach paid models.
+   With strictFree=true the router instead runs prepareStrictFreeRun's
+   catalog-confirmed free-only chain and bypasses autoChain + engine
+   entirely (model-router:268, :349-366, :483-497 structured throws on
+   empty/unavailable).
+6. Second manifestation (write path): PUT /api/models/preference with
+   selected_strategy omitted (analysis/new handleSaveModel) fell back to
+   `getModelPreference(...).selected_strategy` (old route:53-54) — during a
+   read failure that fallback is the fabricated 'auto' → upsert PERMANENTLY
+   overwrites stored 'free' with 'auto', after which strictFree is
+   legitimately false forever.
+
+### G.3 Confirmation (step 3): RISK CONFIRMED
+
+A preference-read error CAN cause a Free-intended analysis to execute a
+paid model: stored selected_strategy='free' → read error → fabricated
+strategy 'auto' → strictFree false → paid candidates reachable via Task D
+automaticCandidates / engine tails / non-strict fallback hops. Path is
+code-confirmed; trigger frequency remains H2 (unknown, no DB to measure).
+The strategy-clobber write path (step 2.6) additionally makes the
+degradation PERMANENT. Postgrest-flavor read errors are the P8 trigger;
+thrown-exception flavor was already fail-closed.
+
+### G.4 Distinctions (step 4)
+
+- Missing preference / first-time user: no error, no row → defaults,
+  NOT flagged → gate behavior byte-identical to before (non-strict default).
+- Valid stored preference: values returned verbatim, no flag; live 'free'
+  + auto → strict (unchanged); manual → manual branch (unchanged).
+- Malformed/corrupt preference: READ SUCCEEDS (no flag); existing coercion
+  kept — mode `=== 'manual'` check, strategy truthy-passthrough with `||
+  'auto'`; a corrupt row can never claim 'free' unless it IS 'free'; no
+  change made (readable ≠ failed read).
+- Database/read failure: Postgrest error → NOW flagged readFailed=true →
+  strict (the fix); thrown exception → propagates (already fail-closed,
+  tested).
+- Explicit Free: strict unchanged. Explicit Manual: outside strictFree by
+  design (Task C/B) unchanged; a read failure fabricates mode 'auto' so a
+  manual user's run now executes FREE-only models instead of arbitrary/
+  paid ones (see G.8).
+
+### G.5 Fix (smallest fail-safe)
+
+- lib/ai/preferences.ts:
+  - error branch returns `{...defaults, readFailed: true}` (:71); the
+    missing-row branch is byte-identical (no flag) — first-time users
+    unaffected. ModelPreference gains optional readFailed (never persisted:
+    saveModelPreference builds an explicit row).
+  - PreferenceRow / PreferenceRowLoader seam + loadPreferenceRow default
+    (identical query, Task C-style DI) — testability only; all production
+    callers use the default.
+  - NEW pure resolveSavedStrategy(requested, stored): requested wins (the
+    `??` short-circuit preserved exactly); omitted + stored OK → stored
+    strategy; omitted + readFailed/missing → {ok:false} refusal.
+- lib/ai/routing.ts: ResolvedRouting.preferenceReadFailed (both branches,
+  :107/:121); NEW pure isStrictFreeSelection (:134-138) =
+  `(selectedStrategy === 'free' || preferenceReadFailed) && mode === 'auto'`
+  — B.5-F5's "unknown ⇒ strict".
+- lib/ai/gateway.ts:77: gate now calls isStrictFreeSelection (comment
+  block updated); SNAPSHOT strategyMode (:66) and chain composition
+  (gateway:138 strategy + strictFree/freeCandidates plumbing) untouched —
+  the explicit known strategy still drives non-strict chains exactly as
+  before.
+- app/api/models/preference/route.ts: omitted-strategy fallback reads the
+  stored preference ONCE and refuses with 503 "…nothing was changed. Try
+  again." when the read failed (resolveSavedStrategy) instead of writing
+  fabricated 'auto' over an explicit stored strategy; provided-strategy
+  saves perform NO read (byte-identical happy path).
+- Rejected alternatives (documented): (i) propagating the error from
+  getModelPreference everywhere — changes unrelated behavior (/models GET
+  500s, saves fail) per instruction; (ii) strict only when the snapshot
+  says 'free' — leaves holes for analyses whose model_strategy is
+  NULL/'auto' (analyses/route.ts:55) while live was 'free', so paid could
+  still unlock; unknown ⇒ strict is the only airtight gate.
+- Unreachable-write check: models/route.ts reconcile self-heal cannot fire
+  on readFailed (defaults carry no stage_overrides → reconcile(null) →
+  changed:false — spec-verified 'null input -> no changes'), so no
+  corrupted-mode upsert from that path.
+
+### G.6 Tests (preference-read-failure.spec.ts — new, 15 checks)
+
+Read branches: error→defaults+flag; missing→defaults no flag; valid free→
+verbatim; malformed→no flag + existing coercion; loader rejection
+propagates. Routing: flag propagated (auto), false for normal auto AND
+manual fixtures. Gate: free+auto strict (unchanged); auto no-flag NOT
+strict (unchanged); readFailed+auto STRICT (fix, incl. free_paid/
+fully_paid inputs); manual always outside strict (Task C/B preserved);
+end-to-end failed-read → routing → isStrictFreeSelection true. Save:
+provided strategy wins (no read); omitted+stored-OK preserves stored
+(free + null-requested variants); omitted+readFailed/missing refused with
+"nothing was changed".
+
+### G.7 Validation results (exact)
+
+- npx tsc --noEmit → exit 0 (one intermediate TS2322 on the new
+  PreferenceRow typing fixed with a cast before completion).
+- npx tsx preference-read-failure.spec.ts → 15 PASS / 0 FAIL, ALL PASS,
+  exit 0 (first run; includes the expected [prefs] console.error line).
+- All six existing specs re-run AFTER the change — ALL PASS:
+  preference-mode 11/11, stage-attempt-view 9/9, manual-credential-fallback
+  9/9 (ResolvedRouting field addition safe — field-level asserts only),
+  stage-overrides 17/17, classify-diagnostics 33/33,
+  automatic-candidates 13/13.
+- npm run lint → 39 problems (12 errors, 27 warnings) = exact Task F
+  baseline; zero findings in preferences.ts, routing.ts, gateway.ts,
+  preference/route.ts, or the new spec (grep-verified).
+- git status delta vs Task F: M lib/ai/preferences.ts, M lib/ai/routing.ts,
+  M lib/ai/gateway.ts, M app/api/models/preference/route.ts (all already
+  modified by earlier tasks; Task G adds the edits in G.5), +
+  ?? preference-read-failure.spec.ts.
+- No network, no DB reads/writes (seam injected in every test), no
+  discovery/classification/catalog rebuild, no generation, no secrets.
+
+### G.8 Limitations
+
+- Manual + read failure still fabricates mode 'auto' (the user's manual
+  model cannot be recovered from a failed read); it now executes
+  FREE-only models (fail-safe) instead of arbitrary/paid ones. Fully
+  preserving manual intent would require failing the run on unknown
+  preference — that changes unrelated behavior and was not authorized.
+- Paying-strategy user + transient read failure: forced conservative
+  (free-only chain, or a structured "no free model" stage failure when the
+  catalog has no confirmed-free model) instead of paid execution —
+  intentional fail-closed cost of unknown ⇒ strict.
+- Corrupt-but-readable rows unchanged (garbage strategy passes through;
+  gate honors only exact 'free'); legacy manual+null rows still fall to
+  auto (Task C.7, out of scope).
+- H2 (read-error frequency) still unmeasured; the fix makes the failure
+  mode safe, not rarer.
+- GET /api/models and GET /api/models/preference still return fabricated
+  defaults (now carrying readFailed:true) on a failed read — display-only,
+  unchanged per "no UI changes"; the flag is available for later UI use.
+
+Files changed this task: lib/ai/preferences.ts, lib/ai/routing.ts,
+lib/ai/gateway.ts, app/api/models/preference/route.ts,
+preference-read-failure.spec.ts (new), think/state.md.
+
+## STOP
