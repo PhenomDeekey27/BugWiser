@@ -1,5 +1,5 @@
 import { RunRequest } from './model-router';
-import { resolveUserCredentials } from './connection/service';
+import { resolveUserCredentials, resolveLocalEndpoint } from './connection/service';
 import { getModelPreference, type SelectedStrategy } from './preferences';
 import type { ProviderName } from './providers/registry';
 
@@ -60,6 +60,8 @@ function resolveStageOverride(
 export interface RoutingDependencies {
   resolveCredentials?: typeof resolveUserCredentials;
   loadPreference?: typeof getModelPreference;
+  /** Consulted ONLY for a manual selection of the `local` provider. */
+  resolveLocalEndpoint?: typeof resolveLocalEndpoint;
 }
 
 export async function resolveAnalysisRouting(
@@ -93,7 +95,20 @@ export async function resolveAnalysisRouting(
     preference.stage_overrides?.[task]?.unavailable === true;
 
   if (preference.selection_mode === 'manual' && preference.provider && preference.model) {
-    if (!credentials[preference.provider]) {
+    // Connection check: every provider EXCEPT `local` is connected by its
+    // resolved API key. `local` is connected by its STORED ENDPOINT (base
+    // URL) — a keyless local connection is valid, while a stored key without
+    // a usable endpoint can never execute. Not connected ⇒ the SAME fail-closed
+    // error as every other provider (Task C: no silent substitution, identical
+    // for every strategy).
+    let providerConnected: boolean;
+    if (preference.provider === 'local') {
+      const endpoint = await (dependencies.resolveLocalEndpoint ?? resolveLocalEndpoint)(userId);
+      providerConnected = !!endpoint?.baseUrl;
+    } else {
+      providerConnected = !!credentials[preference.provider];
+    }
+    if (!providerConnected) {
       throw new Error(
         `Model selected but provider "${preference.provider}" is not connected. No fallback to a different model. Reconnect the provider or switch to Auto mode.`
       );

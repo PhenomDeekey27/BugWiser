@@ -575,6 +575,72 @@ export function normalizeZAIModel(raw: Record<string, unknown>): ModelDefinition
   return finalize('zai', modelId, draft);
 }
 
+// ── Local (generic OpenAI-compatible endpoint) ──
+// The /models payload of a self-hosted server is usually minimal: id /
+// object / created / owned_by, sometimes display_name and max_model_len
+// (vLLM-style). There is NO assumed pricing, context, or capability metadata:
+//   - context: live only when the payload exposes context_length/max_model_len,
+//     otherwise honest default (finalize's 128K, contextSource 'default');
+//   - pricing: read ONLY when a pricing block is present. A pricing block
+//     follows the OpenRouter-style schema (prompt/completion, USD per token →
+//     per 1M). Absent pricing ⇒ unknown + null + NEVER free (the catalog's
+//     explicit-zero / registry-confirmed free rules are preserved — a local
+//     model is not "externally free" just because nobody bills for it);
+//   - capabilities: shared deterministic ID signals only, at the SAME
+//     thresholds the OpenCode/Z.AI/OpenAI normalizers use; no payload evidence
+//     ⇒ 'unknown' provenance (never a silent true default).
+// No specific local server software is assumed or named.
+
+export function normalizeLocalModel(raw: Record<string, unknown>): ModelDefinition | null {
+  const modelId = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (!modelId) return null;
+
+  const ctxRaw =
+    typeof raw.max_model_len === 'number'
+      ? raw.max_model_len
+      : typeof raw.context_length === 'number'
+        ? raw.context_length
+        : null;
+  const contextWindow =
+    ctxRaw != null && Number.isFinite(ctxRaw) && ctxRaw > 0 ? ctxRaw : null;
+
+  const pricing = raw.pricing as Record<string, unknown> | undefined;
+  const hasPricingField = pricing != null && ('prompt' in pricing || 'completion' in pricing);
+  const inputRaw = toPriceNumber(pricing?.prompt);
+  const outputRaw = toPriceNumber(pricing?.completion);
+  const priced = hasPricingField && (inputRaw != null || outputRaw != null);
+  const inputPrice = toPerMillion(inputRaw);
+  const outputPrice = toPerMillion(outputRaw);
+  const isFree = isExplicitlyFree(inputRaw, outputRaw, hasPricingField);
+
+  const coding = codingFamilySignal(modelId) >= 0.5;
+  const reasoning = reasoningFamilySignal(modelId) >= 1;
+  const draft = {
+    displayName:
+      (typeof raw.display_name === 'string' && raw.display_name) ||
+      (typeof raw.name === 'string' && raw.name) ||
+      modelId,
+    inputPrice,
+    outputPrice,
+    isFree,
+    priceSource: (priced ? 'live' : 'unknown') as PriceSource,
+    freeAuthority: (isFree ? 'explicit-zero' : 'none') as FreeAuthority,
+    contextWindow,
+    contextSource: (contextWindow != null ? 'live' : null) as ContextSource | null,
+    maxOutputTokens: typeof raw.max_output_tokens === 'number' ? raw.max_output_tokens : null,
+    flags: { coding, reasoning, vision: false, toolCalling: false, structuredOutput: false },
+    provenance: {
+      ...UNKNOWN_PROVENANCE,
+      coding: coding ? ('derived' as const) : ('unknown' as const),
+      reasoning: reasoning ? ('derived' as const) : ('unknown' as const),
+    } as CapabilityProvenanceMap,
+  };
+  // No static local rows exist, so this is currently a no-op — kept for
+  // symmetry with every other provider (and correct if one is ever added).
+  applyStaticFallback('local', modelId, draft);
+  return finalize('local', modelId, draft);
+}
+
 // ── Dispatch boundary ──
 
 const NORMALIZERS: Record<ProviderName, (raw: Record<string, unknown>) => ModelDefinition | null> = {
@@ -585,6 +651,7 @@ const NORMALIZERS: Record<ProviderName, (raw: Record<string, unknown>) => ModelD
   gemini: normalizeGeminiModel,
   deepseek: normalizeDeepSeekModel,
   zai: normalizeZAIModel,
+  local: normalizeLocalModel,
 };
 
 /**

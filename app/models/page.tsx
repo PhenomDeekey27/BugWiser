@@ -44,7 +44,7 @@ const STAGES = [
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; /** Strict Free: no confirmed-free model available for this stage. */ unavailable?: boolean; origin?: StageOverrideOrigin; };
 
-export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; }
+export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; /** Non-secret endpoint display metadata; set for connected 'local'. */ baseUrl?: string | null; }
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; /** Actual score origin for this row (absent on older payloads). */ scoreOrigin?: 'ai' | 'deterministic'; }
 
@@ -244,12 +244,12 @@ export default function ModelsPage() {
     }
   };
 
-  const handleConnect = async (providerId: string, apiKey: string) => {
+  const handleConnect = async (providerId: string, apiKey: string, options?: { baseUrl?: string }) => {
     try {
-      const res = await fetch('/api/models/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: providerId, apiKey }) });
+      const res = await fetch('/api/models/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: providerId, apiKey, ...(options?.baseUrl ? { baseUrl: options.baseUrl } : {}) }) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to connect');
-      toast.success(`${providerId} connected.`);
+      toast.success(providerId === 'local' ? 'Local endpoint connected.' : `${providerId} connected.`);
       await refresh();
     } catch (e) {
       toast.error((e as Error).message || 'Connection failed');
@@ -599,7 +599,7 @@ function getStageTokenProfile(stageId: string): StageTokenProfile {
   return STAGE_TOKEN_PROFILES[stageId as StageKey] ?? STAGE_TOKEN_PROFILES.relevant_file_discovery;
 }
 
-function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect }: { providers: CatalogProvider[]; models: CatalogModel[]; onConnect: (providerId: string, apiKey: string) => Promise<void>; onDisconnect: (providerId: string) => Promise<void>; }) {
+function ConnectedProvidersSection({ providers, models, onConnect, onDisconnect }: { providers: CatalogProvider[]; models: CatalogModel[]; onConnect: (providerId: string, apiKey: string, options?: { baseUrl?: string }) => Promise<void>; onDisconnect: (providerId: string) => Promise<void>; }) {
   const [showConnectPanel, setShowConnectPanel] = useState(false);
   const connected = providers.filter((p) => p.status === 'connected');
   const available = providers.filter((p) => p.status !== 'connected');

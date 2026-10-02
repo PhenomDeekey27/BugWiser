@@ -4,11 +4,12 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { LocalProviderConnectForm } from './LocalProviderConnectForm';
 import type { CatalogProvider } from '@/app/models/page';
 
 interface ProviderCardProps {
   provider: CatalogProvider;
-  onConnect: (providerId: string, apiKey: string) => Promise<void>;
+  onConnect: (providerId: string, apiKey: string, options?: { baseUrl?: string }) => Promise<void>;
   onDisconnect: (providerId: string) => Promise<void>;
   modelCount?: number;
 }
@@ -79,7 +80,14 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
 
       {connected ? (
         <div className="flex items-center justify-between">
-          <span className="text-xs text-bw-peach">{provider.serverConfigured ? 'Configured via server' : 'Your key'}</span>
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <span className="text-xs text-bw-peach">{provider.serverConfigured ? 'Configured via server' : 'Your key'}</span>
+            {provider.providerId === 'local' && provider.baseUrl && (
+              <span className="text-[11px] font-mono text-bw-peach truncate" title={provider.baseUrl}>
+                {provider.baseUrl}
+              </span>
+            )}
+          </div>
 <Button
              variant="outline"
              size="sm"
@@ -90,6 +98,8 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
             {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
           </Button>
         </div>
+      ) : provider.providerId === 'local' ? (
+        <LocalProviderConnectForm provider={provider} onConnect={onConnect} />
       ) : authType === 'api_key' ? (
         <div className="space-y-2">
           {!showKey ? (

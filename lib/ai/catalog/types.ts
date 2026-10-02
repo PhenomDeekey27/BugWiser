@@ -8,7 +8,10 @@ export type ProviderName =
   | 'openai'
   | 'gemini'
   | 'deepseek'
-  | 'zai';
+  | 'zai'
+  // Generic OpenAI-compatible endpoint configured per user (base URL + optional
+  // API key) — see lib/ai/connection/local.ts. No server software is assumed.
+  | 'local';
 
 export type ProviderAuthType = 'api_key' | 'oauth' | 'none';
 

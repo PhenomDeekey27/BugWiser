@@ -6,7 +6,8 @@
 // boundary). Fetchers fetch, normalize each entry, and drop nulls (excluded entries).
 
 import type { ProviderName, ModelDefinition } from './types';
-import { envKeyForProvider } from '@/lib/ai/connection/service';
+import { envKeyForProvider, resolveLocalEndpoint } from '@/lib/ai/connection/service';
+import { probeLocalModelsList, type TestConnectionDeps } from '@/lib/ai/connection/testConnection';
 import { normalizeProviderModel } from './normalizers';
 
 type RawEntry = Record<string, unknown>;
@@ -21,9 +22,18 @@ function normalizeAll(providerId: ProviderName, entries: unknown[]): ModelDefini
   return out;
 }
 
+/** Credentials/context every provider fetcher receives. */
+interface ProviderFetchContext {
+  apiKey: string;
+  /** Only meaningful for the local provider (its endpoint is per connection). */
+  baseUrl?: string;
+  /** Test-only HTTP injection (mocked boundary); production passes nothing. */
+  probeDeps?: TestConnectionDeps;
+}
+
 // ── Provider-specific fetch functions (transport + envelope parsing only) ──
 
-async function fetchOpenRouter(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchOpenRouter({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const baseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -34,7 +44,7 @@ async function fetchOpenRouter(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('openrouter', data?.data || []);
 }
 
-async function fetchChutes(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchChutes({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const baseUrl = process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -46,7 +56,7 @@ async function fetchChutes(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('chutes', models);
 }
 
-async function fetchOpenCode(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchOpenCode({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const baseUrl = process.env.OPENCODE_ZEN_BASE_URL || 'https://opencode.ai/zen/v1';
   const res = await fetch(`${baseUrl}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -58,7 +68,7 @@ async function fetchOpenCode(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('opencode', models);
 }
 
-async function fetchOpenAI(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchOpenAI({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const res = await fetch('https://api.openai.com/v1/models', {
     headers: { Authorization: `Bearer ${apiKey}` },
     next: { revalidate: 3600 },
@@ -68,7 +78,7 @@ async function fetchOpenAI(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('openai', data?.data || []);
 }
 
-async function fetchGemini(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchGemini({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + apiKey, {
     next: { revalidate: 3600 },
   });
@@ -77,7 +87,7 @@ async function fetchGemini(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('gemini', data?.models || []);
 }
 
-async function fetchDeepSeek(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchDeepSeek({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   const res = await fetch('https://api.deepseek.com/v1/models', {
     headers: { Authorization: `Bearer ${apiKey}` },
     next: { revalidate: 3600 },
@@ -87,7 +97,7 @@ async function fetchDeepSeek(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('deepseek', data?.data || []);
 }
 
-async function fetchZAI(apiKey: string): Promise<ModelDefinition[]> {
+async function fetchZAI({ apiKey }: ProviderFetchContext): Promise<ModelDefinition[]> {
   // Z.AI uses OpenAI-compatible API — same canonical base URL as provider validation (lib/ai/providers/registry.ts)
   const baseUrl = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
   const res = await fetch(`${baseUrl}/models`, {
@@ -99,11 +109,40 @@ async function fetchZAI(apiKey: string): Promise<ModelDefinition[]> {
   return normalizeAll('zai', data?.data || []);
 }
 
+// ── Local (generic OpenAI-compatible endpoint) ──
+// Discovery reuses the Task J probe — the SAME URL validation, SSRF screening,
+// per-hop redirect re-validation, timeout, and response-shape rules as the
+// connection test (one HTTP security layer, no second implementation).
+// Duplicate model IDs are dropped here (first entry wins) so a misbehaving
+// server cannot produce repeated catalog entries.
+export async function fetchLocalModels(ctx: ProviderFetchContext): Promise<ModelDefinition[]> {
+  if (!ctx.baseUrl) throw new Error('Local catalog: no base URL configured');
+  const probe = await probeLocalModelsList(
+    { baseUrl: ctx.baseUrl, apiKey: ctx.apiKey || undefined },
+    ctx.probeDeps ?? {}
+  );
+  if (!probe.ok) {
+    // probe.error is constructed by Task J (status/reachability/shape only) —
+    // never the API key and never a raw response body.
+    throw new Error(`Local catalog: ${probe.error ?? 'models endpoint unavailable'}`);
+  }
+  const seen = new Set<string>();
+  const unique = probe.entries.filter((entry) => {
+    const id =
+      entry && typeof entry === 'object' ? (entry as { id?: unknown }).id : undefined;
+    if (typeof id !== 'string' || !id.trim()) return true; // normalizer drops these
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return normalizeAll('local', unique);
+}
+
 // ── Provider fetch registry ──
 // Maps each provider to its fetch function + env var fallback
 
 const PROVIDER_FETCHERS: Partial<Record<ProviderName, {
-  fetch: (apiKey: string) => Promise<ModelDefinition[]>;
+  fetch: (ctx: ProviderFetchContext) => Promise<ModelDefinition[]>;
   envKey?: string;
   baseUrl?: string;
 }>> = {
@@ -114,6 +153,7 @@ const PROVIDER_FETCHERS: Partial<Record<ProviderName, {
   gemini: { fetch: fetchGemini },
   deepseek: { fetch: fetchDeepSeek },
   zai: { fetch: fetchZAI },
+  local: { fetch: fetchLocalModels },
 };
 
 // ── Unified entry point ──
@@ -124,23 +164,44 @@ export async function fetchLiveModels(
   const resolved = await import('@/lib/ai/connection/service').then((m) => m.resolveUserCredentials(userId));
   const outputs: { providerId: ProviderName; models: ModelDefinition[] }[] = [];
 
-  // Fetch from EVERY provider that has a configured key — in PARALLEL.
-  // Each provider fails independently into its own slot.
-  const tasks: Promise<void>[] = [];
-  for (const [providerId, fetcher] of Object.entries(PROVIDER_FETCHERS) as Array<[ProviderName, typeof PROVIDER_FETCHERS[ProviderName]]>) {
-    if (!fetcher) continue;
-    const apiKey = resolved[providerId] || envKeyForProvider(providerId);
-    if (!apiKey) continue;
+  // Local is connection-scoped (per-user base URL + optional key) — resolved
+  // once for this rebuild, never from a server env var.
+  const localEndpoint = await resolveLocalEndpoint(userId);
 
+  const tasks: Promise<void>[] = [];
+  const push = (providerId: ProviderName, promise: Promise<ModelDefinition[]>): void => {
     tasks.push(
-      fetcher.fetch(apiKey)
+      promise
         .then((models) => {
           outputs.push({ providerId, models });
         })
         .catch((err) => {
+          // Task J probe errors carry status/shape only — no keys/bodies.
           console.warn(`[live-catalog] ${providerId} fetch failed:`, err);
         })
     );
+  };
+
+  // Fetch from EVERY provider that has a configured key — in PARALLEL.
+  // Each provider fails independently into its own slot.
+  for (const [providerId, fetcher] of Object.entries(PROVIDER_FETCHERS) as Array<[ProviderName, typeof PROVIDER_FETCHERS[ProviderName]]>) {
+    if (!fetcher) continue;
+
+    if (providerId === 'local') {
+      // No connected endpoint ⇒ discovery stays off (graceful no-op, not an
+      // error). A keyless endpoint is valid: empty apiKey is allowed here.
+      if (!localEndpoint) continue;
+      push(
+        'local',
+        fetcher.fetch({ apiKey: localEndpoint.apiKey || '', baseUrl: localEndpoint.baseUrl })
+      );
+      continue;
+    }
+
+    const apiKey = resolved[providerId] || envKeyForProvider(providerId);
+    if (!apiKey) continue;
+
+    push(providerId, fetcher.fetch({ apiKey }));
   }
   await Promise.all(tasks);
 

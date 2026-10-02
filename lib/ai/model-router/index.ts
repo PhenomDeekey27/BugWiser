@@ -75,6 +75,14 @@ export interface RunRequest {
    */
   confirmedFreeIds?: Set<string>;
   automaticCandidates?: AutomaticCandidate[];
+  /**
+   * The user's resolved local endpoint (stored base URL + optional decrypted
+   * key), or null/absent when no local provider is connected. Its presence —
+   * not an API key — is what makes the `local` provider available for
+   * execution: the base URL is the ONLY address a local request may target,
+   * and a keyless local connection (no `apiKey`) is valid.
+   */
+  localEndpoint?: { baseUrl: string; apiKey?: string } | null;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -202,18 +210,26 @@ export function logAttempt(
 
 const providerInstances = new Map<string, AIProvider>();
 
-function instanceKey(provider: ProviderName, model: string, apiKey: string | undefined): string {
+function instanceKey(provider: ProviderName, model: string, apiKey: string | undefined, baseUrl?: string): string {
   const keySuffix = apiKey ? apiKey.slice(-8) : 'env';
-  return `${provider}:${model}:${keySuffix}`;
+  // The local instance is per-ENDPOINT: different stored base URLs (or a
+  // re-registered endpoint) must never share a cached instance. Other
+  // providers keep the existing key shape byte-identically.
+  return `${provider}:${model}:${keySuffix}${baseUrl ? `:${baseUrl}` : ''}`;
 }
 
 function getOrCreateProvider(
   entry: TaskModelEntry,
-  apiKey: string | undefined
+  apiKey: string | undefined,
+  localEndpoint?: { baseUrl: string; apiKey?: string } | null
 ): AIProvider {
-  const key = instanceKey(entry.provider, entry.model, apiKey);
+  const baseUrl = entry.provider === 'local' ? localEndpoint?.baseUrl : undefined;
+  const key = instanceKey(entry.provider, entry.model, apiKey, baseUrl);
   if (!providerInstances.has(key)) {
-    providerInstances.set(key, createProviderInstanceWithApiKey(entry.provider, apiKey));
+    providerInstances.set(
+      key,
+      createProviderInstanceWithApiKey(entry.provider, apiKey, baseUrl ? { baseUrl } : undefined)
+    );
   }
   return providerInstances.get(key)!;
 }
@@ -228,6 +244,11 @@ function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
     const token = request.providerTokens?.[p];
     if (token && token.length > 0) available.add(p);
   }
+  // `local` has NO env key and its availability is defined by the STORED
+  // endpoint (base URL), never by an API key: a connected keyless endpoint
+  // must be executable, and a disconnected/unreachable-stored provider must
+  // never be (its candidates are skipped by the execution gate below).
+  if (request.localEndpoint?.baseUrl) available.add('local');
   return available;
 }
 
@@ -389,8 +410,20 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
       continue;
     }
 
-    const apiKey = request.providerTokens?.[entry.provider];
-    const provider = getOrCreateProvider(entry, apiKey);
+    // Fail-closed (defense in depth): a `local` candidate executes ONLY
+    // through its stored per-user endpoint — never through an env key and
+    // never through another provider's endpoint. The availability gate above
+    // already excludes `local` when no endpoint was resolved; this keeps the
+    // invariant next to instance construction.
+    if (entry.provider === 'local' && !request.localEndpoint?.baseUrl) {
+      continue;
+    }
+
+    const apiKey =
+      entry.provider === 'local'
+        ? (request.localEndpoint?.apiKey ?? request.providerTokens?.[entry.provider])
+        : request.providerTokens?.[entry.provider];
+    const provider = getOrCreateProvider(entry, apiKey, request.localEndpoint);
     const startTime = Date.now();
 
     try {

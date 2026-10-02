@@ -1,0 +1,20 @@
+[2026-10-02T08:19:40.773Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
+[2026-10-02T08:19:41.380Z] WARN Win+O could not be registered (hotkey conflict or policy).
+[2026-10-02T08:20:00.451Z] INFO Launched: "D:\llamaquant.bat" "qwen3.5-4b" (pid 9620)
+[2026-10-02T08:23:00.974Z] ERROR Model startup failed for "Qwen 3.5 4B".
+
+Launcher:
+  D:\llamaquant.bat qwen3.5-4b
+
+Port:
+  8000
+
+Reason:
+  Server did not become ready within 180000ms. Last error: fetch failed
+
+Check:
+  - BAT path and launcher arguments
+  - model file exists
+  - llama-server binary path inside the BAT
+  - CUDA / runtime errors in the launcher log
+Launcher log: D:\IssuePilot\.coder\logs\qwen3.5-4b.log

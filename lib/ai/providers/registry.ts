@@ -1,4 +1,5 @@
 import { AIProvider } from './base';
+import { LocalProvider } from './local';
 import { OpenCodeZenProvider } from './opencode';
 import { GeminiProvider } from './gemini';
 import { DeepSeekProvider } from './deepseek';
@@ -7,7 +8,17 @@ import { OpenRouterProvider } from './openrouter';
 import { ChutesProvider } from './chutes';
 import { OpenAIProvider } from './openai';
 
-export type ProviderName = 'gemini' | 'deepseek' | 'zai' | 'opencode' | 'openrouter' | 'chutes' | 'openai';
+export type ProviderName =
+  | 'gemini'
+  | 'deepseek'
+  | 'zai'
+  | 'opencode'
+  | 'openrouter'
+  | 'chutes'
+  | 'openai'
+  // Generic OpenAI-compatible local endpoint (per-user base URL + optional key).
+  // It has no env-configured instance — see lib/ai/connection/local.ts.
+  | 'local';
 
 export interface ProviderHealthState {
   provider: ProviderName;
@@ -82,9 +93,24 @@ export function createProviderInstance(providerName: ProviderName): AIProvider {
         outputLimit: 8192,
       });
 
+    case 'local':
+      // The local provider is configured per user (base URL + optional key),
+      // never from server env — there is no process-wide instance to build.
+      throw new Error('Local provider has no env-configured instance — a per-user endpoint is required.');
+
     default:
       throw new Error(`Unknown provider: ${providerName}`);
   }
+}
+
+/**
+ * Extra per-instance configuration. `baseUrl` is required for the `local`
+ * provider: a locally hosted endpoint is configured per USER connection
+ * (stored base URL + optional key), never from server env, so no
+ * process-wide instance exists for it.
+ */
+export interface ProviderInstanceOptions {
+  baseUrl?: string;
 }
 
 // Construct a provider instance using an explicit API key (e.g. a user-supplied
@@ -92,7 +118,8 @@ export function createProviderInstance(providerName: ProviderName): AIProvider {
 // is supplied.
 export function createProviderInstanceWithApiKey(
   providerName: ProviderName,
-  apiKey?: string
+  apiKey?: string,
+  options?: ProviderInstanceOptions
 ): AIProvider {
   const key = apiKey && apiKey.length > 0 ? apiKey : envApiKey(providerName);
   switch (providerName) {
@@ -147,6 +174,22 @@ export function createProviderInstanceWithApiKey(
       return new OpenAIProvider({
         apiKey: key,
         baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+        model: '',
+        contextLimit: 128_000,
+        outputLimit: 8192,
+      });
+    case 'local':
+      // Execution goes through the user's STORED endpoint (base URL from the
+      // local connection). Without it there is nothing to call — this path
+      // must never fall back to an env var or another provider's endpoint.
+      if (!options?.baseUrl) {
+        throw new Error(
+          'Local provider execution requires the stored per-user base URL — a connected local endpoint is needed.'
+        );
+      }
+      return new LocalProvider({
+        baseUrl: options.baseUrl,
+        apiKey: key || undefined,
         model: '',
         contextLimit: 128_000,
         outputLimit: 8192,

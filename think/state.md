@@ -5971,4 +5971,694 @@ Files changed this task: lib/ai/preferences.ts, lib/ai/routing.ts,
 lib/ai/gateway.ts, app/api/models/preference/route.ts,
 preference-read-failure.spec.ts (new), think/state.md.
 
+## Batch 1 — Local LLM Provider: Tasks H + I + J
+
+**Status:** ✅ COMPLETED (October 2, 2026). Stopped after H+I+J as instructed —
+no K/L/M, no catalog integration, no model-selection UI. `skills.md` re-checked
+absent (glob). Working tree was clean before this batch.
+
+### H — Audit findings (read-only; extension points identified)
+
+**Provider connections / credential storage**
+- `lib/ai/connection/service.ts` — `provider_connections` table
+  (`user_id, provider, encrypted_api_key, status, connected_at`, upsert on
+  `user_id,provider`); `saveUserConnection` / `removeUserConnection` /
+  `resolveUserCredentials` / `getProviderConnections`; env keys outrank DB
+  keys; per-user in-memory credential cache; credentials never reach the
+  browser (only boolean `connected` + masked last-4). `PROVIDER_NAMES` (7) +
+  `ENV_VAR_BY_PROVIDER: Record<ProviderName, string>`.
+- `lib/ai/connection/encryption.ts` — encrypt/decrypt at rest.
+
+**Provider configuration / identity**
+- `lib/ai/providers/registry.ts` — `ProviderName` union (7 names),
+  `createProviderInstance`, `createProviderInstanceWithApiKey` (used by the
+  connect route's pre-save validation), `checkProviderHealth`,
+  `isProviderConfigured`, `envApiKey`. Base URLs conventionally INCLUDE the
+  version segment (`…/v1`); every client does `fetch(baseUrl + '/models')`.
+- `lib/ai/providers/base.ts` — `AIProvider.healthCheck(): Promise<boolean>`.
+- All 7 provider clients: `healthCheck` = GET `${baseUrl}/models` with
+  `Authorization: Bearer <key>`, returns `response.ok` only; `generate` =
+  POST `${baseUrl}/chat/completions`.
+
+**Existing connection/test API (verification+registration COMBINED)**
+- `POST /api/models/connect` — auth → body validation → `validateCredentials`
+  (`createProviderInstanceWithApiKey(...).healthCheck()`) → `saveUserConnection`
+  → fire-and-forget `rebuildCatalogOnce`. FAILED validation returns 400 and
+  nothing is persisted. This is the semantic the local flow must preserve.
+- `DELETE /api/models/connections/[provider]` — delete row + deduped rebuild.
+
+**/models provider UI**
+- `app/models/page.tsx` (handleConnect → POST connect) +
+  `components/models/ProviderCard.tsx` (key entry, Connect/Disconnect) +
+  `app/api/models/route.ts` GET (PROVIDER_DEFINITIONS ∩ DB-connected rows).
+
+**Model catalog / discovery / availability**
+- `lib/ai/model-intelligence/index.ts` `discoverModels` — only DB-connected
+  providers flow into `fetchLiveModels` → `PROVIDER_FETCHERS` (`live.ts`,
+  per-provider `baseUrl + /models` fetchers) → `normalizeProviderModel` →
+  static merge → classify → `storeCatalog`; fingerprint =
+  `buildProviderFingerprint(connected)`.
+- `lib/ai/catalog/registry.ts` `PROVIDER_DEFINITIONS` (7);
+  `lib/ai/catalog/types.ts` `ProviderName` (duplicate 7-name union).
+- Availability: UI = DB rows only; runtime = env keys + DB
+  (`resolveUserCredentials`, model-router `buildAvailableProviders`).
+
+**Routing/fallback** — `routing.ts`, `gateway.ts`, `model-router/index.ts`,
+`config.ts`, `stageSelection.ts` (Strict Free, catalog candidates, strategy
+engine): NOT touched by this batch (verified by empty `git diff`).
+
+**Existing OpenAI-compatible integrations** — openai/openrouter/chutes/
+opencode/deepseek/zai clients all use the `baseUrl + /models` healthCheck and
+`baseUrl + /chat/completions` generate; `fetchChutes` also accepts a bare-array
+models payload. No SSRF/URL-validation utility exists anywhere in the repo
+(grep: isPrivateHost/ssrf/safeFetch/validateUrl → 0 hits); the only URL-parsing
+conventions are `new URL()` in the GitHub client and the auth callback's
+`new URL(next, origin)`.
+
+**Extension points chosen for the local provider (intended architecture —
+no separate local router or selection system):**
+1. Identity + config → NEW `lib/ai/connection/local.ts` (`LOCAL_PROVIDER_ID`,
+   `LocalProviderConfig`) in the SAME connection layer as existing
+   credentials (Task I).
+2. Verification → NEW `testLocalConnection` mirroring the connect route's
+   `validateCredentials` semantics (test ≠ register; failure ⇒ never
+   persisted) + NEW `POST /api/models/test-connection` alongside
+   `/api/models/connect` (Task J).
+3. Later plugs (deliberately NOT batch 1): `'local'` added to the two
+   `ProviderName` unions + `PROVIDER_NAMES`; a `base_url` storage column (or
+   JSON config) on `provider_connections` registered via `saveUserConnection`;
+   a `PROVIDER_FETCHERS` entry in `live.ts`; `PROVIDER_DEFINITIONS` + ProviderCard
+   UI ("Add Local LLM"); then existing catalog/discovery → model selection →
+   routing/fallback consume it unchanged.
+
+### I — Local provider foundation (`lib/ai/connection/local.ts`)
+
+- `LOCAL_PROVIDER_ID = 'local'`; `LocalProviderConfig { provider, baseUrl,
+  apiKey? }` — generic OpenAI-compatible endpoint; NO hardcoded server
+  software (llama.cpp / Ollama / LM Studio / vLLM / Mimo appear nowhere).
+- `normalizeLocalBaseUrl(raw)`: trim → parse → **http/https only** (ftp:,
+  file:, javascript:, data: rejected with scheme-specific messages) →
+  **reject embedded credentials** (user:pass@ — secrets belong in the
+  API-key field) → drop query + fragment → strip trailing slashes (never
+  `//models`) → strip a pasted `/models` endpoint suffix → keep any non-root
+  path the user typed (no silent `/v1` guessing; endpoint probing resolves
+  the convention). Returns `{ok, baseUrl} | {ok:false, error}`; errors never
+  echo URL contents.
+- `buildLocalProviderConfig`: identity + normalized URL + OPTIONAL key
+  (empty/whitespace keys OMITTED, never stored as ''). Produces NO
+  "connected" state — a config alone is inert, is never persisted here, and
+  touches no catalog/routing code.
+- `hasVersionSegment(baseUrl)` — decides `/models` vs `/v1/models` probing.
+- `blockedLocalTargetReason(baseUrl)` — SSRF screen (see Security below).
+
+### J — Test connection (`lib/ai/connection/testConnection.ts` + app route)
+
+**Core `testLocalConnection({baseUrl, apiKey?}, {fetchFn?, timeoutMs?})`**
+(fetchFn injectable → unit-testable without network; default global fetch):
+1. Normalize URL (invalid ⇒ structured failure, no HTTP) → SSRF screen.
+2. Candidates: `<base>/models`; plus `<base>/v1/models` when the base has no
+   version segment (root `http://host:8000` probes both).
+3. GET only — **no generation request** (matches the healthCheck-only existing
+   architecture). `Accept: application/json`; `Authorization: Bearer` only
+   when an API key was supplied (many local servers need none).
+4. `redirect: 'manual'`, ≤3 hops, each hop re-screened by
+   `blockedLocalTargetReason` (a redirect cannot smuggle the request to a
+   blocked address). Node/undici's manual-redirect status+Location behavior
+   verified empirically before relying on it.
+5. Timeout: 5s default (configurable) — ref'd timer race +
+   `AbortSignal.timeout`; timeout/network errors classified WITHOUT echoing
+   raw error/cause text (also neutralizes a mock/prod error that carries a
+   secret in its message).
+6. **Verification (200 alone is NOT enough):** body must parse as an OpenAI
+   models list — bare array (existing fetchChutes convention) or
+   `{ data: [...] }` — with ≥1 extractable string `id`. Outcomes:
+   - 200 + valid list + ids → `success:true, compatibility:'openai-compatible'`
+     + `modelsEndpoint` + `modelIds`.
+   - 200 + `{data:[]}` → `success:false` (an empty endpoint cannot be used or
+     registered), `compatibility:'openai-compatible'`, "empty model list"
+     error.
+   - 200 + wrong shape / invalid JSON / entries without ids →
+     `compatibility:'not-compatible'`.
+   - 404 on every candidate → `compatibility:'not-compatible'` (reachable but
+     no OpenAI models endpoint).
+   - 401/403 → `success:false, compatibility:'unverified'` + "check the API
+     key" (response body NEVER read or echoed).
+   - other non-2xx (500 etc.) → `unverified` + "HTTP <status>".
+   - connection refused / unreachable / timeout → `unverified` + readable msg.
+   - invalid or blocked URL → structured failure before any HTTP call.
+7. Result contract: `{ success, providerType:'local', baseUrl (normalized;
+   '' if unnormalizable), modelsEndpoint, modelIds, compatibility:
+   'openai-compatible'|'not-compatible'|'unverified', error }` — NEVER
+   contains the API key, Authorization header, or raw response bodies (only
+   extracted IDs / generic messages).
+
+**Route `POST /api/models/test-connection`** (thin; same patterns as
+`/api/models/connect`): Supabase auth (401) → body parse/shape (400) →
+`testLocalConnection` → HTTP 200 with the structured result (the test RAN;
+success/failure is data). **No DB reads or writes, no catalog rebuild, no
+persistence.** Only `err.message` is logged (constructed constant/URL
+messages — never the key).
+
+### Files changed this batch (ALL NEW — `git diff` on tracked files is EMPTY)
+
+- `lib/ai/connection/local.ts` (new, Task I)
+- `lib/ai/connection/testConnection.ts` (new, Task J)
+- `app/api/models/test-connection/route.ts` (new, Task J)
+- `local-provider-connection.spec.ts` (new, tests)
+- `think/state.md` (this record)
+
+### Tests + validation results (exact)
+
+- `npx tsc --noEmit` → exit 0 (run after all files existed; tsconfig includes
+  `**/*.ts`, so the spec is type-checked too).
+- `npx tsx local-provider-connection.spec.ts` → **31 PASS / 0 FAIL, ALL PASS,
+  exit 0** (mocked HTTP boundary only — zero real network calls, zero DB).
+  Coverage: valid local URL (incl. `/v1`, trailing slashes, pasted endpoint,
+  query/fragment), invalid URL (garbage/empty/ftp/javascript/file),
+  credentials-in-URL rejection, optional API key (no header when absent,
+  Bearer when present, omitted when blank), successful compatible endpoint +
+  model IDs, bare-array response, 401, 403, connection refused, timeout
+  (settles <5s, does not hang), malformed `/models` JSON, non-OpenAI 200 body,
+  entries without IDs, 404 on both endpoints, `/v1` fallback probe, versioned
+  base NOT probing `/v1/v1/models`, empty model list, HTTP 500, invalid input
+  with 0 HTTP calls, safe same-host redirect followed, redirect-to-metadata
+  refused (blocked target never fetched), SSRF link-local/metadata blocking +
+  local/LAN/public allowed, secrets absent from success/failure/network-error
+  results (JSON.stringify scan), full structured contract keys, and "only GET
+  `/models` paths are ever requested".
+- A–G regression specs re-run — ALL PASS, exact counts unchanged:
+  stage-overrides 17/17, classify-diagnostics 33/33,
+  manual-credential-fallback 9/9, automatic-candidates 13/13,
+  stage-attempt-view 9/9, preference-mode 11/11,
+  preference-read-failure 15/15 (107 checks total).
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = exact
+  pre-change baseline; grep of lint output for the new files → 0 findings.
+- `git status` → only the 4 new untracked files + this doc; `git diff` empty ⇒
+  no accidental unrelated changes; zero existing files modified (Strict Free,
+  fallback, routing, catalog scoring, provider routing untouched by
+  construction).
+
+### Security considerations
+
+- **SSRF:** auth required (route 401s unauthenticated callers). Scheme
+  allowlist (http/https); embedded-credential URLs rejected;
+  `blockedLocalTargetReason` refuses link-local `169.254.0.0/16` (cloud
+  metadata incl. `169.254.169.254` — URL parsing canonicalizes decimal/octal/
+  hex IPv4 forms so literal bypasses land in the check), IPv6 `fe80::/10`,
+  and `metadata.google.internal`. Loopback + private ranges are ALLOWED —
+  reaching user-chosen local/LAN servers is the entire point of the feature.
+  Redirects are followed manually (≤3 hops) with per-hop re-screening.
+  Residual risks (documented, not fully solvable app-side): DNS rebinding
+  (hostname re-resolves between screening and connect — no DNS pinning), and
+  redirects/responses usable as blind SSRF probes — mitigated because
+  responses are shape-filtered and raw bodies are never returned or logged.
+- **Secrets:** API key optional; only ever placed in the outbound
+  `Authorization` header to the validated target; never logged, never in any
+  result/error/JSON; URL-embedded credentials rejected so keys cannot hide in
+  URL strings; non-2xx bodies are never read; only `err.message` is logged
+  server-side (constructed messages, no key material).
+- **No generation traffic:** connection tests only ever GET the models
+  endpoint (spec-enforced).
+
+### Persistence behavior (registration rule)
+
+- **Failed test → nothing persisted.** The batch contains NO persistence path
+  at all: `local.ts`/`testConnection.ts` import no DB client, the route does
+  no reads/writes, `saveUserConnection` is never called, no
+  `provider_connections` row can be created or flipped, and no catalog
+  rebuild is triggered. Entering a URL can never mark a provider
+  connected/usable, and nothing enters the active catalog.
+- **Successful test → returns verified info only** (`success`, normalized
+  `baseUrl`, `modelsEndpoint`, `modelIds`, `compatibility`) for the UI to
+  consume when registering in a later task. The existing
+  verification+registration semantics of `POST /api/models/connect`
+  (validate BEFORE save; failure ⇒ 400, nothing saved) are preserved
+  untouched — this batch only adds the test step a future local-register
+  flow will require.
+
+### Known limitations / accepted trade-offs
+
+- `compatibility` for 401/403/5xx/timeout is `unverified` (reachable, but the
+  models-list shape could not be confirmed) — deliberately neither "compatible
+  from status alone" nor "incompatible".
+- Empty-but-compatible endpoints fail the test (cannot be registered
+  usefully) while still truthfully reporting `openai-compatible` so the UI
+  can explain why.
+- `modelsEndpoint` records the candidate that was verified (a redirect's
+  final URL is followed and validated but not echoed back).
+- Per-hop timeout budget: up to 4 requests × timeoutMs worst case for a
+  pathological redirect chain (each hop independently capped).
+- Manual-redirect handling relies on Node/undici exposing status+Location
+  (verified empirically on Node 24).
+- No DNS pinning / no outbound proxy allowlist — residual rebinding risk
+  documented above.
+- Route-level 401/400 mapping is verified by reading only — the spec tests the
+  core directly because the route requires a live Supabase session (same
+  posture as all existing routes).
+
+### Remaining for K onward (NOT started at Batch 1 — completed in Batch 2 below; routing integration remains)
+
+- Register a verified local provider: extend `ProviderName` (both unions),
+  handle a keyless provider in `PROVIDER_NAMES`/`ENV_VAR_BY_PROVIDER`/
+  `resolveUserCredentials`, add `provider_connections` storage for
+  `base_url`, registration endpoint gated on a successful test, disconnect.
+- `PROVIDER_FETCHERS` entry in `live.ts` + normalizer support so existing
+  catalog/discovery ingests local models.
+- `PROVIDER_DEFINITIONS` + /models UI ("Add Local LLM": URL → optional key →
+  Test Connection → register on success) and model-selection integration.
+- Routing/fallback consumption of the local provider via the EXISTING chain
+  (no separate local router).
+
+## Batch 2 - Local LLM Provider: Tasks K + L + M
+
+> K = registration through the existing connection architecture (gated on a
+> successful connection test), L = catalog/discovery integration, M = the
+> Local LLM flow on `/models`. Explicitly OUT of scope per instruction:
+> N+ routing integration, stage selection changes, Strict Free, fallback
+> chains, scoring — no separate local router was created.
+
+### Task K - Registration (existing `provider_connections` architecture)
+
+- **Both `ProviderName` unions** gained `| 'local'`:
+  `lib/ai/catalog/types.ts` and `lib/ai/providers/registry.ts`. Both
+  `createProviderInstance` and `createProviderInstanceWithApiKey` got
+  explicit `case 'local'` throws (no env-configured instance exists; the
+  execution path is not wired until N+ — see limitations).
+- **`lib/ai/connection/service.ts`:**
+  - `ENV_VAR_BY_PROVIDER.local = ''` (env key always `''` ⇒ local can never
+    look env-configured) and `PROVIDER_NAMES` includes `'local'` so the
+    connection-status and credential loops cover it.
+  - `saveLocalUserConnection(userId, {baseUrl, apiKey}, dbOverride?)` —
+    re-normalizes the URL (a raw value can never be stored), encrypts the
+    key (NULL when keyless), upserts the single `(user_id, provider)` row
+    with `status='connected'` in the EXISTING table
+    (`onConflict: 'user_id,provider'` ⇒ re-registration replaces, never
+    duplicates), clears the credential + endpoint caches.
+  - `resolveLocalEndpoint(userId, dbOverride?)` → `{baseUrl, apiKey?}` from
+    the connected row; decrypt-tolerant (bad ciphertext ⇒ endpoint without a
+    key, never an exception); own cache cleared in
+    `clearUserCredentialsCache`; cache bypassed when `dbOverride` is passed
+    (tests always read through).
+  - Test seam: optional `dbOverride` also added to `getProviderConnections`
+    and `removeUserConnection` (production behavior byte-identical — the
+    client construction stays in its original position so catch semantics
+    are unchanged).
+- **`lib/ai/connection/registerLocal.ts` (NEW):** `registerLocalConnection`
+  = normalize (`buildLocalProviderConfig`) → **connection TEST** (Task J
+  `testLocalConnection`, injectable `testFn`/`testDeps`) → **save only on
+  success** (injectable `saveFn`). Failure ⇒ structured
+  `{ok:false, baseUrl, modelCount:0, compatibility, error}` and NOTHING was
+  persisted; an invalid URL fails before any HTTP. Also
+  `disconnectLocalConnection` delegating to the existing
+  `removeUserConnection` (delete row + cache clear ⇒ connected flips false ⇒
+  fingerprint change on the next rebuild).
+- **`POST /api/models/connect`:** `VALID_PROVIDERS` includes `'local'`;
+  the local branch validates `baseUrl` (required string) / `apiKey` (optional
+  string), runs `registerLocalConnection`, returns
+  `400 { error: 'Provider validation failed: …', compatibility }` on failure
+  and `{ok, provider:'local', status:'connected', modelCount}` on success,
+  then schedules the same fire-and-forget `rebuildCatalogOnce` (extracted to
+  `scheduleCatalogRebuild`, semantics unchanged for non-local). The non-local
+  flow (validate-before-save via `healthCheck`, 400 on failure) is untouched.
+- **Migration `015_provider_connections_local_endpoint.sql` (NEW — NOT YET
+  APPLIED to the live database; must be run before local registration works
+  in production):** `ADD COLUMN IF NOT EXISTS base_url TEXT` +
+  `ALTER COLUMN encrypted_api_key DROP NOT NULL` (keyless rows). Migration
+  009 has no provider CHECK constraint, so `'local'` rows are insertable;
+  RLS/read policies from 009 apply unchanged.
+- **Disconnect** uses the existing generic
+  `DELETE /api/models/connections/[provider]` unchanged (works for local
+  once the union includes it).
+
+### Task L - Catalog / discovery
+
+- **`lib/ai/connection/testConnection.ts`:** the entire HTTP body extracted
+  into exported `probeLocalModelsList(input, deps)` → `LocalModelsProbe`
+  (`ok/baseUrl/modelsEndpoint/entries/modelIds/compatibility/error`);
+  `testLocalConnection` is now a thin mapping onto the UNCHANGED
+  `LocalConnectionTestResult` contract — all 31 Task J checks still pass
+  byte-identical. ONE HTTP security layer (normalization, SSRF screening,
+  per-hop redirect re-validation, timeout, shape verification) serves both
+  the connection test AND discovery.
+- **`fetchLocalModels(ctx)`** (`lib/ai/catalog/live.ts`) reuses the probe
+  (`baseUrl` + optional key + injectable `probeDeps` for tests), dedupes
+  duplicate model IDs (first wins), and throws the Task J reason on failure.
+- **All 7 existing fetchers** changed signature from `apiKey` to a context
+  object `{apiKey, baseUrl?, probeDeps?}` (transport/envelope logic
+  untouched); `PROVIDER_FETCHERS.local` registered (map is `Partial`, so an
+  entry is sufficient).
+- **`fetchLiveModels`** resolves `resolveLocalEndpoint(userId)` ONCE per
+  rebuild: no connected endpoint ⇒ local silently skipped (graceful no-op);
+  keyless endpoints allowed (empty apiKey); local NEVER falls back to env
+  keys. Failures land in the existing per-provider catch slot (Task J
+  messages carry no secrets).
+- **`normalizeLocalModel` + `NORMALIZERS.local`**
+  (`lib/ai/catalog/normalizers.ts`):
+  - absent pricing ⇒ `priceSource:'unknown'`, nulls, `isFree:FALSE`,
+    `freeAuthority:'none'` (unknown ≠ free — explicit-zero /
+    registry-confirmed rules preserved);
+  - OpenRouter-style `pricing.prompt/completion` (USD per token) ⇒ ×1e6 per
+    1M, `'live'`; explicit `0/0` ⇒ free `'explicit-zero'`; one-sided ⇒ not
+    free with honest partial numbers;
+  - context: `max_model_len`/`context_length` ⇒ `'live'`, else finalize's
+    honest 128K default (`contextSource:'default'`);
+  - capabilities: shared ID-family signals only, at the same thresholds as
+    the other normalizers; provenance `'derived'`/`'unknown'` (never assumed
+    true); `displayName = display_name || name || id`;
+    `applyStaticFallback('local', …)` is a no-op (no static local rows) but
+    kept for symmetry.
+- **`PROVIDER_DEFINITIONS`** gained the local entry: `displayName:'Local LLM'`,
+  `authType:'api_key'`, `serverConfigured:false`, `docsUrl:''`
+  (deliberately empty — no single official docs site for "any server";
+  never invented), `exposesCatalogApi:true`.
+- **`GET /api/models`** attaches non-secret `baseUrl` (via
+  `resolveLocalEndpoint`) to the connected local provider only.
+- **`CLASSIFIER_BLOCKED_PROVIDERS = new Set(['opencode','local'])`**
+  (`lib/ai/model-intelligence/index.ts`): the classifier can run without a
+  request user (null-user path) where a per-user endpoint is unreachable —
+  local is excluded from server-side generation-model choice only.
+  `selectFreeModelForClassification` is exported and spec-tested; user-facing
+  Free selection, `price.isFree`, `confirmedFreeIds` and strict-Free runtime
+  are UNAFFECTED (the block is provider-scoped, no replacement preference).
+
+### Task M - `/models` UI flow
+
+- **`components/models/localProviderFlow.ts` (NEW)** — pure reducer state
+  machine (no React/HTTP), phases:
+  `idle | testing | verified | no-models | failed | registering | registered`.
+  - `canTest` = base URL present, no request in flight, not terminal.
+  - `canRegister` = `phase === 'verified' && modelCount > 0` — a
+    reachable-but-empty endpoint (`no-models`) can NEVER register.
+  - Any field edit after a test invalidates the verification back to
+    `idle` ("register exactly what was tested"); field edits are ignored
+    while `testing`/`registering`/`registered` (double-fire guards too).
+  - `register-failure` → back to `verified` with the error (retry with the
+    same valid test); `clear-api-key` drops only the secret, never the phase.
+- **`components/models/LocalProviderConnectForm.tsx` (NEW)** — base URL +
+  optional API key inputs, **Test Connection** (POST `/api/models/test-connection`)
+  → status line distinguishing "Endpoint verified — N models found" from
+  "verified, but it lists no models" (Connect stays disabled) and failures →
+  **Connect** (POST `/api/models/connect` via `onConnect(providerId, apiKey,
+  {baseUrl})`), enabled only when the gate passes; the API key field is
+  cleared after submission.
+- **`ProviderCard`** renders the form for `providerId === 'local'` when
+  disconnected (other providers unchanged); the connected local card shows
+  the base URL in mono (never a key).
+- **`app/models/page.tsx`:** `CatalogProvider.baseUrl?: string | null`;
+  `handleConnect(providerId, apiKey, options?: {baseUrl})` includes `baseUrl`
+  only when provided; toast special-cased for local
+  ("Local endpoint connected.") so every existing provider toast text is
+  byte-identical; `ConnectedProvidersSection` prop type updated.
+
+### Tests (all pure; mocked HTTP/DB boundaries — no real network, no DB, no secrets)
+
+- **NEW `local-provider-registration.spec.ts` (20 checks):** gating (test
+  success ⇒ save invoked once with the normalized URL/key; failed test /
+  invalid URL / empty model list ⇒ zero saves, incl. a full-stack run with
+  the real probe + mocked fetch; save failure surfaces after a successful
+  test), persistence (upsert on `(user_id,provider)` with `status='connected'`,
+  `base_url` normalized, ciphertext ≠ plaintext + decrypt roundtrip, JSON of
+  the payload contains no plaintext, keyless ⇒ NULL, invalid URL ⇒ no DB
+  call, DB error ⇒ failure, re-register ⇒ both writes carry the same
+  onConflict), resolution (key roundtrip, keyless ⇒ no `apiKey` property,
+  no row / missing `base_url` ⇒ null, undecryptable ciphertext tolerated),
+  status + disconnect (default false, connected ⇒ true, `status='error'` ⇒
+  false; delete filters `{user_id, provider:'local'}`;
+  `disconnectLocalConnection` uses the remove path), registry sanity (no env
+  key for local, `PROVIDER_DEFINITIONS` has exactly all 8 providers incl.
+  'Local LLM', instance construction throws for `local`).
+- **NEW `local-provider-discovery.spec.ts` (16 checks):** fetcher (normalized
+  `ModelDefinition[]`, duplicate-ID dedupe first-wins, probe failure throws
+  with reason and no partials, SSRF blocked target ⇒ 0 HTTP calls, blocked
+  redirect never fetched, keyless ⇒ no Authorization / key ⇒ `Bearer`,
+  missing baseUrl ⇒ 0 HTTP calls), normalizer (unknown pricing ⇒ NOT free +
+  nulls + `'unknown'`, per-token ⇒ per-million `'live'`, explicit 0/0 ⇒
+  free `'explicit-zero'`, one-sided ⇒ not free, `max_model_len` /
+  `context_length` ⇒ live context, ID-derived capabilities with honest
+  provenance, nothing-known ⇒ `metadataConfidence:'low'`, malformed entries ⇒
+  null), classifier (a local free model is never selected — non-local picked,
+  or `null` when local is the only candidate — while `isFree` itself stays
+  true: the block is classification-only).
+- **NEW `local-provider-ui-flow.spec.ts` (16 checks):** the full reducer
+  contract: both gates, invalidation on any post-test edit, double-fire
+  guards, terminal `registered`, retry after register failure, secret
+  clearing, happy path, reset.
+- **Regression:** all prior specs re-run — ALL PASS with exact counts
+  unchanged: stage-overrides 17/17, classify-diagnostics 33/33,
+  manual-credential-fallback 9/9, automatic-candidates 13/13,
+  stage-attempt-view 9/9, preference-mode 11/11,
+  preference-read-failure 15/15, local-provider-connection 31/31
+  (107 + 31 checks total).
+
+### Validation
+
+- `npx tsc --noEmit` → clean.
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = exact
+  pre-change baseline; every error verified pre-existing at HEAD in code this
+  batch did not touch (`app/api/analyses/route.ts` `any`s;
+  `app/models/page.tsx` lines 114/128/148/519; `model-intelligence` line 156
+  `prefer-const`); grep of lint output for the new/changed files → 0 findings.
+- Secret scan of the full diff (`sk-…`, `ANON_KEY`, `SERVICE_ROLE`, `Bearer …`
+  patterns) → 0 hits.
+- `git diff` reviewed file-by-file: only intended changes; **Strict Free,
+  stage selection, fallback chains, scoring, and model-router untouched**
+  (`buildAvailableProviders` still the hardcoded 7-provider list by design).
+
+### Security considerations (batch-specific)
+
+- **The server re-runs the full Task J test inside `registerLocalConnection`**
+  — the client's Test Connection is UX only; a bypassed client cannot
+  persist an untested URL, and SSRF screening applies to registration too.
+- **Stored:** normalized base URL (plaintext, non-secret, echoed back only to
+  its owner) + AES-256-GCM ciphertext (or NULL). Plaintext keys are never
+  persisted, never returned (GET exposes `baseUrl` only), never logged.
+- Migration 015 relaxes `NOT NULL` only — no RLS/policy changes.
+
+### Known limitations / accepted trade-offs
+
+- **Migration 015 is NOT applied to the live database yet** — run it before
+  local registration goes live (the upsert writes `base_url` / NULL keys and
+  will fail otherwise).
+- **Local is NOT routable yet (N+ scope).** `buildAvailableProviders` keeps
+  its hardcoded 7-provider list, so a manually/stage-selected local model is
+  skipped at the availability gate (safe: `getOrCreateProvider` is never
+  reached, no throw) and a chain consisting only of local models ends in the
+  existing structured "all candidates skipped" error. Provider-instance
+  construction for `local` throws by design until N+ wires per-user endpoint
+  execution.
+- Route-level 401/400 mapping for the local connect branch is verified by
+  reading only (routes need a live Supabase session) — same posture as all
+  existing routes; the core is spec-tested through `registerLocalConnection`.
+- `resolveUserCredentials` will surface a local row's decrypted key as
+  `resolved.local` — inert (discovery uses `resolveLocalEndpoint`, routing
+  never constructs `local`, the classifier blocks it).
+- Client-side Test Connection is advisory; the server tests again on
+  registration (double HTTP by design).
+- Discovery with no local row is a silent skip — indistinguishable from
+  other providers without keys (no error surfaced, by design).
+- The connected card's model count comes from the catalog after the rebuild;
+  a transient 0 right after registration is possible until the background
+  rebuild finishes.
+
+### Remaining work (N+, NOT started at Batch 2 — completed in Batch 3 below)
+
+- Routing/fallback consumption of local via the EXISTING chain: per-user
+  endpoint resolution in model-router, a provider instance that honors the
+  stored `baseUrl`, chain availability for `'local'`, stage-selection and
+  strict-Free interactions — no separate local router.
+- Apply migration 015 to the live database; end-to-end smoke of the UI flow
+  against a real OpenAI-compatible server.
+
+---
+
+## Batch 3 - Local LLM Catalog + Runtime Integration: Tasks N + O + P
+
+**Status:** ✅ COMPLETE (Tasks N + O + P only; validated; migration 015 still
+pending). NO separate local router was created — local participates through
+the EXISTING catalog / stage-selection / gateway / model-router.
+
+### Task N — Local models in the catalog + stage selection (audit; no product-code changes)
+
+Verified end-to-end by reading + tests; every stage of the pipeline was
+already wired by Batches 1/2:
+
+- Discovery: `PROVIDER_FETCHERS.local` (`lib/ai/catalog/live.ts`) →
+  `fetchLocalModels` (probe with the stored endpoint, first-wins dedupe,
+  honest 128K default) → `normalizeLocalModel` (`normalizers.ts`) →
+  provider definitions → `toCatalogModel` → `/api/models`
+  (`available:true`, connected filter) → `libraryBaseModels`
+  (`app/models/page.tsx`) → `selectStageModels`; and at run time
+  `getOrBuildCatalog` → `toCatalogModel` → `prepareStrictFreeRun` /
+  `getAutomaticStageCandidates`.
+- `CLASSIFIER_BLOCKED_PROVIDERS = {'opencode','local'}` only blocks local as
+  a classifier GENERATOR (diagnostics chat) — it does not exclude local
+  models from the catalog, ranking inputs, or stage selection.
+- Strategy engine (`strategy-selection.ts`) is `MODEL_REGISTRY`-based and has
+  no local rows BY DESIGN; local enters runs via `automaticCandidates`,
+  `stageOverrides`, and `freeCandidates` — unchanged.
+- Conclusion: no Task N product-code changes; the semantics are enforced and
+  proven by `local-catalog-strategy.spec.ts` (21 checks).
+
+### Pricing / free-authority policy decision (verified, no code change)
+
+- Unknown/null local pricing (the common self-hosted case) stays
+  `priceSource:'unknown'`, `price.isFree:false`, `freeAuthority:'none'`:
+  - NEVER enters the Free or Strict Free pools (`getFreeStageCandidates`,
+    the gateway `confirmedFreeIds` derivation, and `prepareStrictFreeRun`
+    override verification all exclude it).
+  - Balanced/Quality treat unknown cost as the WORST tier (existing
+    `Infinity` penalty semantics) — unknown can only win when every
+    candidate is unknown (existing documented tie rule).
+- A local endpoint that advertises explicit `0/0` pricing is confirmed free
+  via the EXISTING `explicit-zero` authority — same semantics as external
+  models. No new "local free" authority was invented; the honest-unknown
+  limitation is documented here instead of taking a shortcut.
+- Consequence (accepted): a genuinely free but UNPRICED local model loses
+  Free/Quality/Balanced comparisons against confirmed-free/known-priced
+  models until the server advertises pricing. Model Library and manual
+  selection are unaffected (the full catalog is always available).
+
+### Task O — Runtime execution through the EXISTING gateway/router
+
+New:
+
+- `lib/ai/providers/local/client.ts` — `LocalProvider implements AIProvider`
+  mirroring `providers/openai/client.ts`: same POST
+  `${base}/chat/completions` body/response/error contract
+  (`Local endpoint error ${status}: ${body}`), `Authorization` sent ONLY when
+  a key is stored, endpoint candidates follow the SAME version-segment rule
+  as the Task J probe (an unversioned base tries `/chat/completions` then
+  `/v1/chat/completions` on 404), `getModelInfo` 128_000/8192, `healthCheck`
+  GET `models` with the same 404 fallback. NO timeouts added — existing
+  generation clients have none and that behavior is preserved.
+- `lib/ai/providers/local/index.ts` — re-exports.
+
+Changed:
+
+- `providers/registry.ts`: `ProviderInstanceOptions {baseUrl?}` + optional
+  third param on `createProviderInstanceWithApiKey`; `case 'local'` throws
+  without `options.baseUrl` (A–M contract byte-identical: without options it
+  still throws), else constructs `LocalProvider` from the stored base URL +
+  optional key (`envApiKey('local')` is always empty — never another
+  provider's env key). `createProviderInstance('local')` still throws (no
+  process-wide instance exists).
+- `model-router/index.ts`: `RunRequest.localEndpoint?: {baseUrl, apiKey?} |
+  null`; `instanceKey` appends `:baseUrl` for local ONLY (per-endpoint
+  instance cache; other providers keep the existing key shape
+  byte-identically); `getOrCreateProvider(entry, apiKey, localEndpoint)`;
+  `buildAvailableProviders` adds `'local'` iff `localEndpoint.baseUrl` —
+  presence of the ENDPOINT, not a key, defines availability; fail-closed
+  per-attempt gate: a local candidate without an endpoint is skipped before
+  instance construction; local apiKey = `localEndpoint.apiKey ??
+  providerTokens.local`.
+- `gateway.ts`: resolves `const localEndpoint = await resolveLocalEndpoint
+  (userId)` ONCE per run (after userId; cached in the connection layer) and
+  passes it into `runWithFallback`.
+- `routing.ts`: manual-mode connection check — `local` is connected by its
+  stored endpoint (`resolveLocalEndpoint` via the injectable
+  `RoutingDependencies.resolveLocalEndpoint`, consulted ONLY for
+  `provider==='local'`), every other provider unchanged; the Task C
+  fail-closed error message is byte-identical.
+- `buildRunChain` / strict-Free chain logic, Task E fallback metadata,
+  scoring, and stage selection were NOT modified.
+
+### Tests (Task P — both new specs; mocked boundaries; no real network/DB/secrets)
+
+- **NEW `local-catalog-strategy.spec.ts` (21 checks):** discovery → catalog
+  flow (live discovery through `toCatalogModel`, dedupe first-wins, honest
+  unknown pricing → `estimateCostUsd` status `'unknown'` never $0,
+  explicit-zero authority), context gates for ALL five stages (64K/128K/256K
+  fixtures vs `STAGE_CONTEXT_MIN`, incl. evidence 200K vs the 128K default),
+  disconnected provider excluded (connection fake + fingerprint + zero HTTP),
+  provider caps (`MAX_CANDIDATES_PER_PROVIDER`) + family grouping applied to
+  local, Free/Balanced/Quality semantics (unknown-priced local never wins
+  Free; known-priced beats unknown at equal capability; explicit-zero local
+  wins on cost; all-unknown tie rule), and STRICT FREE safety (unknown-priced
+  local never in `getFreeStageCandidates`/`confirmedFreeIds`, unconfirmed
+  override dropped, catalog with only unknown-priced locals ⇒ empty pool).
+- **NEW `local-runtime-execution.spec.ts` (14 checks):** global-fetch stub +
+  routing dependency fakes — stored base URL is the ONLY address targeted
+  (exactly one call; URL/body/temperature/max_tokens contract), keyless sends
+  no `Authorization` / keyed sends `Bearer` to its own endpoint only,
+  unversioned base 404 → `/v1` fallback (probe parity), `automaticCandidates`
+  route a local model with no override, missing endpoint ⇒ structured
+  `No configured providers available` error + ZERO HTTP + no key in errors,
+  registry factory contracts (throws without `options.baseUrl`;
+  `createProviderInstance('local')` throws), manual routing connected-keyless
+  runs / disconnected fails with the UNCHANGED Task C error, auto stage
+  override flows through `runArgs`, local 500 → fallback to a non-local
+  provider with `fallbackCount`/`attemptedProviders` → `deriveStageAttemptView`
+  (state `'fallback'`, selected/actual/attempts exact), local 401 ⇒ auth is
+  NOT fallback-worthy + key never leaks + exactly one call, STRICT FREE
+  executes a verified free local candidate / empty pool fails structured
+  BEFORE any HTTP, and `isStrictFreeSelection` semantics.
+
+### Validation (exact)
+
+- All 13 suites run: **ALL PASS** — the 11 A–M suites byte-identical
+  (stage-overrides 17, classify-diagnostics 33, manual-credential-fallback 9,
+  automatic-candidates 13, stage-attempt-view 9, preference-mode 11,
+  preference-read-failure 15, local-provider-connection 31,
+  local-provider-registration 20, local-provider-discovery 16,
+  local-provider-ui-flow 16 = 190 pre-existing checks) + the 2 new suites
+  (21 + 14 = 35) ⇒ **225 checks total**.
+- `npx tsc --noEmit` → clean.
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = exact baseline
+  (zero new; the new `local/client.ts` `_modelUsed` param and 6 unused spec
+  handler params were written away to keep the exact count).
+- Secret scan of the diff + all untracked files (`sk-…`, `ghp_`, `AKIA`, PEM
+  patterns) → 0 hits. Grep of changed product code for hardcoded model names
+  → 0 findings (spec fixtures are generic placeholders).
+- `git diff` reviewed file-by-file (gateway/routing/model-router/registry
+  diffs reproduced in this entry): only intended changes; Task C fail-closed
+  message, Task E fallback metadata, strict-Free chain logic, scoring, and
+  stage selection verified untouched (byte-identical behavior also proven by
+  the A–M suites).
+- `calculateTotal.spec.ts` is an EMPTY pre-existing directory (not a suite,
+  not in git; tsx exits non-zero resolving it as a folder) — ignored as in
+  previous batches.
+
+### Security considerations (batch-specific)
+
+- A local request can ONLY target the stored, normalized, SSRF-screened base
+  URL (screening from Batch J): never an env var, never another provider's
+  endpoint. Defense in depth: availability gate → per-attempt fail-closed
+  gate → factory `options.baseUrl` requirement.
+- Optional key: keyless connections execute with NO header; keys are never
+  logged and never appear in error messages (asserted in the 401 check).
+- Local has no env key (`envApiKey('local')` always empty), so cross-provider
+  credential reuse is impossible; `providerTokens.local` alone can never make
+  the provider available (the endpoint is required — asserted).
+- Migration 015 was NOT applied to the live DB (never applied automatically).
+
+### Known limitations / accepted trade-offs
+
+- **Migration 015 still not applied** — local registration fails on the live
+  DB until it runs (pre-migration `resolveLocalEndpoint` errors → null →
+  local inert/safe).
+- `gateway.generate` / route-level wiring verified by READING (DB-bound),
+  same posture as all existing routes; the exact composition (routing deps +
+  `runWithFallback` + `localEndpoint`) is spec-tested.
+- No per-request timeouts on local (mirrors every existing generation
+  client): a hung local server stalls the stage until the platform/network
+  layer times it out.
+- The shared auth error ends with "Check that LOCAL_API_KEY is set correctly"
+  (existing generic wording); cosmetic only — local has no env key and the
+  key itself never leaks (asserted).
+- Unknown-priced local never wins Free/Strict Free and ranks worst-cost in
+  Balanced/Quality against known-priced candidates (the policy decision
+  above); explicit `0/0` pricing unlocks the existing free path.
+- Provider instance cache is process-lifetime (existing pattern); a
+  re-registered base URL gets a fresh instance via the `:baseUrl` key suffix.
+- Strategy engine still has no local rows (by design — registry-based).
+
+### Remaining work (NOT started — out of Batch 3 scope)
+
+- Apply migration 015 to the live database.
+- End-to-end smoke: register a real OpenAI-compatible server → discovery →
+  workspace run against it (UI flow).
+- Optional polish (each needs its own review): friendlier local-specific
+  auth-error wording; a timeout policy for generation clients (shared
+  behavior change).
+
 ## STOP

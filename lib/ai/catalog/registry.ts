@@ -97,6 +97,21 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     docsUrl: 'https://www.z.ai',
     exposesCatalogApi: false,
   },
+  {
+    // Generic OpenAI-compatible endpoint hosted by the user (base URL +
+    // optional API key) — not a specific server product. No server env var:
+    // it is configured per user connection. docsUrl is intentionally empty
+    // (no single official docs site for "any local server").
+    providerId: 'local',
+    displayName: 'Local LLM',
+    authType: 'api_key',
+    status: 'disconnected',
+    connectedAt: null,
+    serverConfigured: false,
+    description: 'An OpenAI-compatible server you host yourself — provide its base URL and, if it needs one, an API key.',
+    docsUrl: '',
+    exposesCatalogApi: true,
+  },
 ];
 
 // A small helper to produce a price record without implying authoritative free

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getOrBuildCatalog } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
-import { getProviderConnections, isProviderConfiguredBysEnv } from '@/lib/ai/connection/service';
+import { getProviderConnections, isProviderConfiguredBysEnv, resolveLocalEndpoint } from '@/lib/ai/connection/service';
 import type { ProviderName } from '@/lib/ai/catalog/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
 import { reconcileStageOverrides, type StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
@@ -16,10 +16,11 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const [catalog, preference, connections] = await Promise.all([
+    const [catalog, preference, connections, localEndpoint] = await Promise.all([
       getOrBuildCatalog(user.id),
       getModelPreference(user.id),
       getProviderConnections(user.id),
+      resolveLocalEndpoint(user.id),
     ]);
 
     const connectedIds = new Set(
@@ -43,6 +44,8 @@ export async function GET() {
           hasPaidModels: providerModels.some((m) => !m.isFree),
           description: def.description,
           docsUrl: def.docsUrl,
+          // Non-secret display metadata for the local connection (never a key).
+          baseUrl: pid === 'local' ? (localEndpoint?.baseUrl ?? null) : undefined,
         };
       });
 

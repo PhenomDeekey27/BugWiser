@@ -5,6 +5,7 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback, RunResponse } from './model-router';
 import { resolveAnalysisRouting, isStrictFreeSelection } from './routing';
+import { resolveLocalEndpoint } from './connection/service';
 import { recordStageAssignment } from './analysis-selection';
 import { getOrBuildCatalog } from './model-intelligence';
 import { toCatalogModel } from './catalog/toCatalogModel';
@@ -52,6 +53,12 @@ async function getAnalysisUserId(analysisId: string): Promise<string> {
 
 export async function generate(params: GenerateParams): Promise<GenerateResult> {
   const userId = params.userId || (await getAnalysisUserId(params.analysisId));
+  // The user's stored local endpoint (base URL + optional decrypted key).
+  // Resolved ONCE per run (cached in the connection layer) so a local model
+  // can only ever execute through its own endpoint. null ⇒ the local provider
+  // is treated as disconnected everywhere downstream (candidates are skipped
+  // by the router's availability gate; no request is made).
+  const localEndpoint = await resolveLocalEndpoint(userId);
   // Resolve routing for THIS stage; auto mode picks up the user's saved
   // stage_overrides entry for params.task (manual mode is task-independent).
   const routing = await resolveAnalysisRouting(userId, params.task);
@@ -143,6 +150,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     stageOverrideUnavailable: strictFree && routing.stageOverrideUnavailable,
     confirmedFreeIds,
     automaticCandidates,
+    localEndpoint,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on

@@ -230,8 +230,16 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
  * seeing these models as confirmed free. Provider-aware by normalized provider
  * identity (never model-ID hardcoding), no provider ranking, no replacement
  * model preference.
+ *
+ * 'local' is blocked because the classifier runs WITHOUT a request user (see
+ * getOrBuildCatalog's null-user path): a user's self-hosted endpoint could
+ * never be reached safely from there — there is no user context to resolve the
+ * per-user base URL, and server env vars hold no local credential. Local
+ * models remain fully visible/selectable in the UI; only this internal
+ * classifier choice is excluded. No alternative model preference: selection
+ * simply skips the provider like any other ineligible entry.
  */
-const CLASSIFIER_BLOCKED_PROVIDERS: ReadonlySet<ProviderName> = new Set(['opencode']);
+const CLASSIFIER_BLOCKED_PROVIDERS: ReadonlySet<ProviderName> = new Set(['opencode', 'local']);
 
 /**
  * The classifier's generation model: confirmed-free (strict — a paid model can
