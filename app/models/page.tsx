@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -22,8 +22,15 @@ import {
 import type { GitHubUser } from '@/types';
 import { ProviderCard } from '@/components/models/ProviderCard';
 import { StageConfigPanel } from '@/components/models/StageConfigPanel';
-import { selectStageModels, type SetupChoice, type StageKey } from '@/lib/ai/catalog/stageSelection';
-import { buildStageOverrides, resolveOverrideOrigin } from '@/lib/ai/catalog/stageOverrides';
+import { markProviderConnected, markProviderDisabled, markProviderDisconnected, runConnect, runDisconnect } from '@/components/models/connectState';
+import { revalidateUntilSettled } from '@/components/models/catalogRevalidation';
+import {
+  buildStageCandidatePool,
+  bucketStageModels,
+  filterStageModels,
+} from '@/components/models/stageCandidates';
+import { selectStageModels, deriveAutomaticStagePicks, type SetupChoice, type StageKey } from '@/lib/ai/catalog/stageSelection';
+import { buildStageOverrides, resolveAppliedOverride } from '@/lib/ai/catalog/stageOverrides';
 import { buildPreferenceSaveBody, deriveStageSelectionState, deriveStageStatus } from '@/lib/ai/preferenceMode';
 import type { StageOverrideEntry, StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 import { describeScoringStatus } from '@/lib/ai/catalog/scoringStatus';
@@ -44,7 +51,7 @@ const STAGES = [
 
 type StageModel = { stageId: string; label: string; selectedProvider: string | null; selectedModel: string | null; isOverride: boolean; /** Strict Free: no confirmed-free model available for this stage. */ unavailable?: boolean; origin?: StageOverrideOrigin; };
 
-export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; description: string; docsUrl: string; /** Non-secret endpoint display metadata; set for connected 'local'. */ baseUrl?: string | null; }
+export interface CatalogProvider { providerId: string; displayName: string; authType: 'api_key' | 'oauth' | 'none'; status: 'disconnected' | 'connected' | 'error'; connectedAt: string | null; serverConfigured: boolean; /** Where the effective connection comes from: the user's own row, the server env credential, or null (unavailable/disabled). Safe metadata only. */ connectionSource?: 'user' | 'server' | null; /** Per-user tombstone: server env exists but this user disabled the provider. */ disabled?: boolean; description: string; docsUrl: string; /** Non-secret endpoint display metadata; set for connected 'local'. */ baseUrl?: string | null; }
 
 export interface CatalogModel { providerId: string; modelId: string; displayName: string; contextWindow: number; maxOutputTokens: number | null; price: { input: number | null; output: number | null; isFree: boolean }; /** Where the price came from: 'live' | 'registry' | 'unknown'. */ priceSource: string; /** ISO timestamp of the last price confirmation, null when unknown. */ priceFetchedAt: string | null; supportsReasoning: boolean; supportsToolCalling: boolean; supportsStructuredOutput: boolean; capabilities: string[]; availability: string; scores: { coding: number; reasoning: number; speed: number; longContext: number }; valueScore: number; tags: string[]; fit: number; stageFit: Record<string, number>; available: boolean; /** Actual score origin for this row (absent on older payloads). */ scoreOrigin?: 'ai' | 'deterministic'; }
 
@@ -66,6 +73,9 @@ export default function ModelsPage() {
   const [stageModels, setStageModels] = useState<Record<string, StageModel>>({});
   const [setupChoice, setSetupChoice] = useState<SetupChoice | null>(null);
   const [applyingSetup, setApplyingSetup] = useState<SetupChoice | null>(null);
+  // One revalidation loop at a time: a connect/disconnect can land while the
+  // initial page read is still revalidating.
+  const revalidatingRef = useRef(false);
   // Catalog-level classification flags from /api/models (absent/null handled
   // by describeScoringStatus — the badge renders nothing when unknown).
   const [scoring, setScoring] = useState<{ classifiedByAi?: boolean | null; classificationModel?: string | null }>({});
@@ -85,6 +95,38 @@ export default function ModelsPage() {
     preference ? { provider: preference.provider, model: preference.model } : null
   );
 
+  const automaticPicks = useMemo(
+    () => deriveAutomaticStagePicks(setupChoice, libraryBaseModels),
+    [setupChoice, libraryBaseModels]
+  );
+
+  /** Stage rows AS DISPLAYED: a saved/setup/manual override row when it holds
+   *  a selection (or a strict-Free marker), otherwise the DERIVED automatic
+   *  pick for the connected catalog. Derived rows keep isOverride=false / no
+   *  origin so they are never persisted — connecting a provider only changes
+   *  this view, it never creates stage_overrides entries. */
+  const displayStageModels = useMemo(() => {
+    const rows: Record<string, StageModel> = {};
+    for (const stage of STAGES) {
+      const sm = stageModels[stage.id];
+      if (sm && (sm.unavailable || (sm.selectedProvider && sm.selectedModel))) {
+        rows[stage.id] = sm;
+        continue;
+      }
+      const pick = automaticPicks[stage.id as StageKey];
+      rows[stage.id] = {
+        stageId: stage.id,
+        label: stage.label,
+        selectedProvider: pick?.provider ?? null,
+        selectedModel: pick?.model ?? null,
+        isOverride: false,
+        unavailable: pick?.unavailable === true,
+        origin: undefined,
+      };
+    }
+    return rows;
+  }, [stageModels, automaticPicks]);
+
   const loadData = useCallback(async () => {
     const supabase = (await import('@/lib/supabase/client')).createClient();
     const { data: { user: au } } = await supabase.auth.getUser();
@@ -97,7 +139,7 @@ export default function ModelsPage() {
     return { user: au, data };
   }, []);
 
-  const applyData = useCallback((payload: { user: { user_metadata?: Record<string, unknown> } | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; stageOverridesReconciled?: boolean; droppedStageOverrides?: string[]; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; }; }) => {
+  const applyData = useCallback((payload: { user: { user_metadata?: Record<string, unknown> } | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; stageOverridesReconciled?: boolean; droppedStageOverrides?: string[]; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; catalogPending?: boolean; }; }) => {
     const au = payload.user;
     const meta = au?.user_metadata ?? {};
     setUser({ login: (meta.user_name as string) || (meta.login as string) || 'user', name: (meta.full_name as string) || (meta.name as string) || null, avatarUrl: (meta.avatar_url as string) || '' });
@@ -134,18 +176,50 @@ export default function ModelsPage() {
     setStageModels(loaded);
   }, []);
 
-  const refresh = useCallback(async () => {
+  /** One catalog read + apply. Returns whether the served catalog still
+   *  predates the current connected-provider set (server-driven
+   *  `catalogPending`), so the caller can revalidate WITHOUT blocking. */
+  const refresh = useCallback(async (): Promise<boolean> => {
     try {
       const payload = await loadData();
       applyData(payload);
+      return payload.data.catalogPending === true;
     } catch (e) {
       setError((e as Error).message || 'Failed to load model catalog');
+      return false;
     } finally {
       setLoading(false);
     }
   }, [loadData, applyData]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  /** Follow-up reads until the background rebuild lands (bounded — see
+   *  catalogRevalidation.ts). Never blocks: the first snapshot is already on
+   *  screen and `loading` was cleared by the read that preceded this loop. */
+  const revalidate = useCallback(async () => {
+    if (revalidatingRef.current) return;
+    revalidatingRef.current = true;
+    try {
+      await revalidateUntilSettled({
+        fetchPending: () => refresh(),
+        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        onExhausted: () =>
+          toast.info('Model catalog still refreshing', {
+            description: 'Some provider data may be out of date. It will update on the next refresh.',
+          }),
+      });
+    } finally {
+      revalidatingRef.current = false;
+    }
+  }, [refresh]);
+
+  /** Read once, then revalidate in the background if the catalog is behind.
+   *  Used everywhere the page reloads provider/catalog state; callers that must
+   *  not block (connect/disconnect) invoke it detached. */
+  const refreshAndSettle = useCallback(async (): Promise<void> => {
+    if (await refresh()) await revalidate();
+  }, [refresh, revalidate]);
+
+  useEffect(() => { void refreshAndSettle(); }, [refreshAndSettle]);
 
   /** Syncs the setup selector + stage rows from a saved preference payload. */
   const applySavedPreference = useCallback((pref: Preference) => {
@@ -244,30 +318,61 @@ export default function ModelsPage() {
     }
   };
 
-  const handleConnect = async (providerId: string, apiKey: string, options?: { baseUrl?: string }) => {
-    try {
-      const res = await fetch('/api/models/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: providerId, apiKey, ...(options?.baseUrl ? { baseUrl: options.baseUrl } : {}) }) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to connect');
-      toast.success(providerId === 'local' ? 'Local endpoint connected.' : `${providerId} connected.`);
-      await refresh();
-    } catch (e) {
-      toast.error((e as Error).message || 'Connection failed');
-      throw e;
-    }
-  };
+  /** Shared by connect and disconnect: the mutation response is authoritative
+   *  for connection state, the catalog revalidation is detached. Identical
+   *  treatment for every provider — including the local endpoint. */
+  const runProviderMutation = useCallback((
+    action: 'connect' | 'disconnect',
+    providerId: string,
+    apiKey: string,
+    options?: { baseUrl?: string }
+  ): Promise<void> => {
+    const deps = {
+      post: async (body: { provider: string; apiKey: string; baseUrl?: string }) => {
+        const res = await fetch(
+          action === 'connect'
+            ? '/api/models/connect'
+            : `/api/models/connections/${providerId}`,
+          action === 'connect'
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+            : { method: 'DELETE' }
+        );
+        const ack = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, ack };
+      },
+      onConnected: (pid: string, ack: Parameters<typeof markProviderConnected>[2]) =>
+        setProviders((prev) => markProviderConnected(prev, pid, ack, options?.baseUrl)),
+      // ack.status 'disabled' ⇒ env-backed tombstone disconnect: the card must
+      // show Disabled/Reconnect immediately, not plain Disconnected.
+      onDisconnected: (pid: string, ack?: { status?: string }) =>
+        setProviders((prev) =>
+          ack?.status === 'disabled' ? markProviderDisabled(prev, pid) : markProviderDisconnected(prev, pid)
+        ),
+      refresh: () => refreshAndSettle(),
+      onSuccess: (pid: string) =>
+        toast.success(
+          action === 'disconnect'
+            ? `${pid} disconnected.`
+            : pid === 'local' ? 'Local endpoint connected.' : `${pid} connected.`
+        ),
+      onError: (message: string) =>
+        toast.error(message || (action === 'disconnect' ? 'Disconnect failed' : 'Connection failed')),
+    };
+    return action === 'connect'
+      ? runConnect(providerId, apiKey, options, deps)
+      : runDisconnect(providerId, deps);
+  }, [refreshAndSettle]);
 
-  const handleDisconnect = async (providerId: string) => {
-    try {
-      const res = await fetch(`/api/models/connections/${providerId}`, { method: 'DELETE' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Failed to disconnect');
-      toast.success(`${providerId} disconnected.`);
-      await refresh();
-    } catch (e) {
-      toast.error((e as Error).message || 'Disconnect failed');
-    }
-  };
+  const handleConnect = useCallback(
+    (providerId: string, apiKey: string, options?: { baseUrl?: string }) =>
+      runProviderMutation('connect', providerId, apiKey, options),
+    [runProviderMutation]
+  );
+
+  const handleDisconnect = useCallback(
+    (providerId: string) => runProviderMutation('disconnect', providerId, ''),
+    [runProviderMutation]
+  );
 
   const getStageCostEstimate = (model: CatalogModel | null, stageId: string): string => {
     if (!model) return 'Unknown';
@@ -278,7 +383,12 @@ export default function ModelsPage() {
     return label.startsWith('$') ? `~${label}` : label;
   };
 
+  /** Models of a provider that is still connected. A provider disconnected a
+   *  moment ago keeps its rows in the catalog snapshot until the background
+   *  rebuild lands; gating here makes its models disappear from every stage row
+   *  immediately instead of showing a model that can no longer run. */
   const getSelectedProviderModels = (providerId: string): CatalogModel[] => {
+    if (!connectedProviderIds.has(providerId)) return [];
     return models.filter((m) => m.providerId === providerId && m.available);
   };
 
@@ -292,6 +402,7 @@ export default function ModelsPage() {
    * not just the provider's first entry). Returns null when unconfigured. */
   const getConfiguredStageModel = (sm: StageModel | undefined): CatalogModel | null => {
     if (!sm || !sm.selectedProvider || !sm.selectedModel) return null;
+    if (!connectedProviderIds.has(sm.selectedProvider)) return null;
     return models.find((m) => m.providerId === sm.selectedProvider && m.modelId === sm.selectedModel && m.available) || null;
   };
 
@@ -302,7 +413,7 @@ export default function ModelsPage() {
     let total = 0;
     let hasUnknown = false;
     STAGES.forEach((stage) => {
-      const model = getConfiguredStageModel(stageModels[stage.id]);
+      const model = getConfiguredStageModel(displayStageModels[stage.id]);
       if (!model) {
         hasUnknown = true;
         return;
@@ -320,17 +431,26 @@ export default function ModelsPage() {
   const handleApplyStageChange = (stageId: string, provider: string, model: string, reason: string, isOverride: boolean) => {
     const stage = STAGES.find((s) => s.id === stageId);
     if (stage) {
-      const prev = stageModels[stageId];
-      const selectionChanged = (provider || null) !== (prev?.selectedProvider || null) || (model || null) !== (prev?.selectedModel || null);
+      // Baseline = the row AS SHOWN (an override row, else the derived
+      // automatic pick) so "changed" means what the user actually changed.
+      const displayed = displayStageModels[stageId];
+      const selectionChanged = (provider || null) !== (displayed?.selectedProvider || null) || (model || null) !== (displayed?.selectedModel || null);
+      // A concrete change always persists as a manual override; the checkbox
+      // alone no longer gates persistence (see resolveAppliedOverride).
+      const applied = resolveAppliedOverride({
+        checkbox: isOverride,
+        selectionChanged,
+        previousOrigin: stageModels[stageId]?.origin,
+      });
       const newStageModels = { ...stageModels };
       // Manual configuration always resolves an unavailable stage — the user
       // picked a concrete model, so the strict-Free marker is cleared.
-      newStageModels[stageId] = { stageId: stage.id, label: stage.label, selectedProvider: provider || null, selectedModel: model || null, isOverride: isOverride, unavailable: false, origin: resolveOverrideOrigin(isOverride, selectionChanged, prev?.origin) };
+      newStageModels[stageId] = { stageId: stage.id, label: stage.label, selectedProvider: provider || null, selectedModel: model || null, isOverride: applied.isOverride, unavailable: false, origin: applied.origin };
       setStageModels(newStageModels);
       setSelectedStageProvider(provider || '');
       setSelectedStageModel(model || '');
       setSelectedStageReason(reason);
-      setSelectedStageIsOverride(isOverride);
+      setSelectedStageIsOverride(applied.isOverride);
     }
     setShowStageModal(null);
   };
@@ -400,7 +520,7 @@ export default function ModelsPage() {
                     </div>
                    <div className="divide-y divide-border">
                      {STAGES.map((stage) => {
-                       const sm = stageModels[stage.id];
+                       const sm = displayStageModels[stage.id];
                        const selectedProvider = sm?.selectedProvider || '';
                        const providerModels = getSelectedProviderModels(selectedProvider);
                        const configuredModel = getConfiguredStageModel(sm);
@@ -657,33 +777,25 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
   const [localIsOverride, setLocalIsOverride] = useState(isOverride);
   const [modelSearch, setModelSearch] = useState('');
 
-  const connectedProviderModels = useMemo(() => {
-    return providers.filter((p) => p.status === 'connected').flatMap((p) => models.filter((m) => m.providerId === p.providerId && m.available));
-  }, [providers, models]);
+  const connectedProviderModels = useMemo(
+    () => buildStageCandidatePool(providers, models),
+    [providers, models]
+  );
 
-  const filteredModels = useMemo(() => {
-    const query = modelSearch.toLowerCase().trim();
-    if (!query) {
-      return connectedProviderModels;
-    }
-    return connectedProviderModels.filter((m) => 
-      m.displayName.toLowerCase().includes(query) ||
-      m.modelId.toLowerCase().includes(query) ||
-      m.providerId.toLowerCase().includes(query)
-    );
-  }, [connectedProviderModels, modelSearch]);
+  const filteredModels = useMemo(
+    () => filterStageModels(connectedProviderModels, modelSearch),
+    [connectedProviderModels, modelSearch]
+  );
 
-  const recommendedModels = useMemo(() => {
-    return filteredModels.sort((a, b) => b.valueScore - a.valueScore).slice(0, 4);
-  }, [filteredModels]);
+  const { recommended: recommendedModels, free: freeModels, other: paidModels } = useMemo(
+    () => bucketStageModels(filteredModels),
+    [filteredModels]
+  );
 
-  const freeModels = useMemo(() => {
-    return filteredModels.filter((m) => m.price.isFree).sort((a, b) => b.valueScore - a.valueScore);
-  }, [filteredModels]);
-
-  const paidModels = useMemo(() => {
-    return filteredModels.filter((m) => !m.price.isFree).sort((a, b) => b.valueScore - a.valueScore);
-  }, [filteredModels]);
+  const maxValueScore = useMemo(
+    () => connectedProviderModels.reduce((max, m) => Math.max(max, m.valueScore), Number.NEGATIVE_INFINITY),
+    [connectedProviderModels]
+  );
 
   const handleApply = () => {
     const reason = localReason || 'Recommended model';
@@ -739,7 +851,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                 <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
                 <div className="space-y-2">
                   {recommendedModels.map((model) => {
-                    const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
+                    const isBest = model.valueScore === maxValueScore;
                     return (
                        <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                          setLocalProvider(model.providerId);
@@ -810,13 +922,9 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
               {searchEmpty && (
                 <div className="text-center py-8">
                   <p className="text-bw-peach text-sm">No models found</p>
-                  <p className="text-bw-peach/60 text-xs mt-1">Try a different search term.</p>
-                </div>
-              )}
-              {!searchEmpty && filteredModels.length === 0 && (
-                <div className="text-center py-8">
-                  <p className="text-bw-peach text-sm">No models match your search</p>
-                  <p className="text-bw-peach/60 text-xs mt-1">Try searching by model name, ID, or provider.</p>
+                  <p className="text-bw-peach/60 text-xs mt-1">
+                    Try searching by model name, ID, or provider (e.g. a provider id).
+                  </p>
                 </div>
               )}
               {!searchEmpty && (
@@ -825,7 +933,7 @@ function StageChangeModal({ stageId, stage, providers, models, selectedProvider,
                     <h4 className="text-sm font-semibold text-bw-peach-light mb-3">Recommended</h4>
                     <div className="space-y-2">
                       {recommendedModels.map((model) => {
-                        const isBest = model.valueScore === Math.max(...connectedProviderModels.map(m => m.valueScore));
+                        const isBest = model.valueScore === maxValueScore;
                         return (
                            <button key={`${model.providerId}/${model.modelId}`} onClick={() => {
                              setLocalProvider(model.providerId);

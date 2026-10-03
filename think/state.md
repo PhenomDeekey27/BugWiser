@@ -6661,4 +6661,2118 @@ Changed:
   auth-error wording; a timeout policy for generation clients (shared
   behavior change).
 
+### STOP
+
+---
+
+## Task Q — Fix Local LLM connection state + stage model selection
+
+**Status:** ✅ COMPLETE (October 2, 2026). Two REAL production integration
+problems from the user's manual test. `skills.md` re-checked absent (glob).
+Working tree was clean (`0e1f76e`) before this task. Stopped after Q — no new
+feature started.
+
+No separate local selection system, no local router, no hardcoded model names,
+no catalog bypass, and NO Strict Free / pricing-policy change were introduced.
+
+### BUG 1 — the Connect UI could stay stuck on "Connecting…"
+
+#### Root cause (traced through the real code path, not guessed)
+
+The registration POST was never the thing the spinner was waiting on. The
+chain was:
+
+1. `components/models/LocalProviderConnectForm.tsx:75` — `await onConnect(...)`
+   (the submit handler's only `await`), so the "Connecting…" label
+   (`state.phase === 'registering'`, never cleared until this resolves) was
+   bound to whatever `onConnect` did.
+2. `app/models/page.tsx` `handleConnect` (old line 253) — `await refresh()`
+   **inside** the try, BEFORE returning.
+3. `app/models/page.tsx` `refresh` → `loadData` → `GET /api/models`.
+4. `app/api/models/route.ts:20` — `getOrBuildCatalog(user.id)` with
+   `forceRefresh = false`.
+5. `lib/ai/model-intelligence/index.ts:917` — the persisted catalog's
+   `providerFingerprint` no longer matches the (just-changed) connection set,
+   so the branch `const rebuilt = await rebuildCatalogOnce(userId)` fires a
+   **SYNCHRONOUS** rebuild on the request path.
+
+A forced rebuild is the full pipeline: `discoverModels` (live HTTP to every
+connected provider) → `aiClassify` (an LLM generation call) → `storeCatalog`
+(chunked upserts + cleanup + meta). None of that is part of connecting, but the
+whole of it sat between the click and the `register-success` dispatch.
+
+Consequences, all matching the report:
+- The button stayed on "Connecting…" for the entire rebuild (minutes when
+  external providers are slow/unreachable, effectively forever if the rebuild
+  hangs). **The promise did resolve — it just resolved far too late**, so this
+  is a coupling bug, not an unresolved-promise bug.
+- `setProviders` is only called from `applyData`, which only runs at the END of
+  `refresh()` ⇒ the card could not flip to "Connected" before then, which is
+  why the user reloaded repeatedly.
+- Nothing was swallowed: `handleConnect`'s `catch` rethrows, and
+  `LocalProviderConnectForm`'s `catch` already dispatches `register-failure`.
+
+#### Fix (smallest possible part: the client coupling only)
+
+- **NEW `components/models/connectState.ts`** (pure, no React/fetch):
+  - `runConnect(providerId, apiKey, options, deps)` — awaits ONLY
+    `deps.post(...)`; on success applies `onConnected` + `onSuccess`
+    synchronously and then starts `deps.refresh()` **detached** (rejections and
+    synchronous throws swallowed — a catalog-refresh problem is not a connect
+    failure); on failure calls `onError` and **rejects** so every caller clears
+    its loading state.
+  - `markProviderConnected(providers, providerId, ack, submittedBaseUrl)` —
+    the optimistic page-state patch. Non-secret fields only: status plus the
+    base URL the user just typed (the server echoes the same value on
+    `GET /api/models`). Model counts are deliberately NOT invented.
+  - `createConnectGate()` — single-flight latch so two clicks dispatched
+    before the re-render cannot fire a second registration request.
+- **`app/models/page.tsx`** — `handleConnect` is now a thin `useCallback`
+  wrapper over `runConnect` (same POST, same body, same toast strings, so every
+  existing provider's toast text is byte-identical).
+- **`components/models/LocalProviderConnectForm.tsx`** — `runRegister` wrapped
+  in `useCallback`, guarded by the ref latch, `gate.end()` in `finally`.
+
+Result: SUCCESS → the request finishes → `register-success` → the card already
+reads "Connected" (no reload). FAILURE → the promise rejects → "Connecting…"
+stops and the server's message is shown. Neither path can remain stuck, and
+the fix is NOT a forced reload.
+
+### BUG 2 — local models invisible in stage selection
+
+#### Root cause (same catalog-refresh race, server side — NOT a pricing filter)
+
+The stage modal's pool is derived entirely from the page's `providers` +
+`models` snapshot of `GET /api/models` (old `page.tsx:661`). Read end to end,
+every stage of that pipeline already handled local correctly (Task N's audit
+still holds): `PROVIDER_FETCHERS.local` → `normalizeLocalModel` →
+`toCatalogModel` (`available: true`) → `/api/models` → `buildStageCandidatePool`
+→ `selectForStage`. The modal applies **no** `isFree`/pricing filter to
+eligibility — Free/Paid is a display bucket only.
+
+The actual exclusion was the single-flight guard at
+`lib/ai/model-intelligence/index.ts:899`. `rebuildCatalogOnce` returned ANY
+in-flight build for the user, regardless of when it started:
+
+- t0 a background/staleness rebuild R1 is already running (started before the
+  local row existed; `fetchLiveModels` resolved no local endpoint ⇒ no local
+  models).
+- t1 Connect persists the `provider_connections` row and calls
+  `rebuildCatalogOnce` ⇒ **joins R1**, so no fresh build is ever scheduled.
+- t2 the page GET hits the fingerprint-mismatch branch ⇒ `await
+  rebuildCatalogOnce` ⇒ **R1 again** ⇒ a catalog with zero local rows is
+  served and stored.
+
+The `/api/models` response then reports `local` as **connected** (that list
+comes from `provider_connections`, not the catalog) while the local model rows
+are missing — precisely "visible as connected, absent from stage selection" —
+and it self-heals only on a later reload, which is why reloads were needed
+(and sometimes several). This also contradicts the older note at state.md:1348
+("the GET's fingerprint check triggers the SAME deduped rebuild … catalog
+reflects new set before response") — the dedupe could hand back a build that
+predated the change.
+
+#### Fix (smallest consistent change, at the freshness layer)
+
+- **`lib/ai/model-intelligence/index.ts`** — the single-flight entry now carries
+  a **generation**: `markCatalogDirty(userId)` bumps it,
+  `canReuseRebuild(entry, generation)` (exported, pure) only allows sharing a
+  build started at the SAME generation, and `rebuildCatalogOnce` clears only its
+  own entry. Concurrent dedupe is preserved exactly where it is safe (the
+  background refresh and the racing page GET still share ONE build); a build
+  that predates a connect/disconnect can no longer satisfy a later request.
+- **`app/api/models/connect/route.ts`** — `scheduleCatalogRebuild` is now
+  `async` and awaited **before** the response is returned, so `markCatalogDirty`
+  runs before any client GET can arrive (previously it was inside the dynamic
+  import's `.then()`). The rebuild itself stays off the response path.
+- **`app/api/models/connections/[provider]/route.ts`** — same dirty mark after
+  the row is deleted (mirror-image race).
+- **NEW `components/models/stageCandidates.ts`** (pure) — `buildStageCandidatePool`
+  / `filterStageModels` / `bucketStageModels` extracted from `StageChangeModal`
+  so the pool is directly testable. Semantics unchanged: every available model
+  of every CONNECTED provider, search over display name + model id + **provider
+  id**, Free/Paid as display buckets only. Two latent defects fell out:
+  `recommendedModels` used to `.sort()` the shared array **in place**, and the
+  "No models match your search" branch was unreachable (`!searchEmpty &&
+  filteredModels.length === 0`); the empty-state copy now mentions provider id.
+
+Net effect: after one connect, the single background refresh returns a catalog
+that CONTAINS the local models, so the stage modal lists them immediately —
+Balanced, Quality and manual override all reachable, with no reload.
+
+#### Correct behavior per context (Batch 3 pricing policy preserved verbatim)
+
+| Context | Unknown-priced local model | Why |
+|---|---|---|
+| Balanced | selectable; ranks worst-cost against known-priced candidates, wins when it is the only candidate | existing `Infinity` penalty + documented all-unknown tie rule (`pickBalanced`) |
+| Quality | selectable; same worst-cost tier inside the comparability tolerance | existing `pickQuality` |
+| Manual stage override | selectable, no free gate at all | `handleApplyStageChange` → `buildStageOverrides` |
+| **Strict Free / Free setup** | **excluded** | `pool.filter(m => m.price.isFree)`; `getFreeStageCandidates`, `confirmedFreeIds`, `prepareStrictFreeRun` untouched |
+| Explicit `0/0` local pricing | confirmed free via the EXISTING `explicit-zero` authority | unchanged |
+
+`lib/ai/catalog/stageSelection.ts`, `normalizers.ts`, `cost.ts`,
+`stageTokenProfiles.ts`, `gateway.ts`, `routing.ts`, `model-router/` and the
+strategy engine were **not modified at all** — this task never touched pricing,
+authority or scoring.
+
+### Exact files changed
+
+- NEW `components/models/connectState.ts` (129 lines) — connect lifecycle +
+  optimistic provider patch + single-flight gate.
+- NEW `components/models/stageCandidates.ts` (65 lines) — stage candidate pool /
+  search / display buckets.
+- NEW `local-connect-stage-visibility.spec.ts` (409 lines) — Task Q regression suite.
+- MODIFIED `app/models/page.tsx` — `handleConnect` via `runConnect`;
+  `StageChangeModal` uses the extracted helpers; `maxValueScore` memo;
+  unreachable branch removed.
+- MODIFIED `components/models/LocalProviderConnectForm.tsx` — `useCallback` +
+  register gate.
+- MODIFIED `lib/ai/model-intelligence/index.ts` — generation-aware
+  single-flight, `markCatalogDirty`, `canReuseRebuild`, `SingleFlightRebuild`.
+- MODIFIED `app/api/models/connect/route.ts` — awaited
+  `scheduleCatalogRebuild` that marks dirty before responding.
+- MODIFIED `app/api/models/connections/[provider]/route.ts` — dirty mark on disconnect.
+- MODIFIED `think/state.md` (this record).
+
+### Tests
+
+- **NEW `local-connect-stage-visibility.spec.ts` — 20 checks, ALL PASS**
+  (mocked HTTP via injected `post`, no React, no network, no DB, no secrets,
+  no real model calls):
+  - BUG 1: success resolves while the refresh is still blocked (raced against
+    the refresh promise); provider marked connected + base URL applied
+    immediately, in order, with exactly one POST; a rejected refresh and a
+    synchronously throwing refresh never surface as connect failures; a 400
+    rejects with the server message, never marks connected, never refreshes;
+    transport failure rejects (so callers clear loading); duplicate clicks
+    cannot fire a second request (gate + reducer phase); retry after
+    `register-failure` is allowed with the error shown; `markProviderConnected`
+    touches only the target row and invents no endpoint for non-local providers.
+  - BUG 2: a post-connect rebuild never joins a pre-connect build,
+    same-generation builds still share one, nothing-in-flight starts a build,
+    newer builds are never handed back; a connected local model is in the pool
+    and searchable by provider id and by model-id prefix; disconnected providers
+    and unavailable rows excluded; unknown pricing lands in the non-free bucket
+    and never in the free bucket; explicit `0/0` does; bucketing/search never
+    mutate the input.
+  - Selection semantics: manual override persists a local model; Balanced picks
+    a priced external over an unknown local but still picks an unknown local
+    when it is the only candidate; Quality likewise (priced peer still wins
+    inside tolerance); explicit-`0/0` local wins Free and appears in
+    `getFreeStageCandidates`; unknown-priced local is absent from
+    `getFreeStageCandidates`, `isConfirmedFreeModel` is false,
+    `prepareStrictFreeRun` drops the override, and Free setup returns
+    `unavailable: true`.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → clean (exit 0).
+- All 14 suites → **ALL PASS**: the 13 pre-existing A–P suites with unchanged
+  results (stage-overrides 17, classify-diagnostics 33,
+  manual-credential-fallback 9, automatic-candidates 13, stage-attempt-view 9,
+  preference-mode 11, preference-read-failure 15, local-provider-connection 31,
+  local-provider-registration 21, local-provider-discovery 16,
+  local-provider-ui-flow 16, local-catalog-strategy 21,
+  local-runtime-execution 14 = 225 checks) + the new
+  local-connect-stage-visibility 20 ⇒ **245 checks total**.
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = exact pre-change
+  baseline; grep of the lint output for every new/changed file → 0 new findings
+  (the 4 `app/models/page.tsx` findings are the pre-existing
+  use-before-declare `loadStageModels` block, just line-shifted).
+- Secret scan of the full diff (`sk-`, `ANON_KEY`, `SERVICE_ROLE`, `Bearer `,
+  `ghp_`, `AKIA`, `password`) → 0 hits. Grep of the new components for product
+  model names → 0 hits (spec fixtures are generic placeholders like
+  `local=server-a`).
+- `git status` → 7 modified + 3 untracked, all intended; `git diff` reviewed
+  file-by-file: no Strict Free, pricing, scoring, stage-selection, routing or
+  fallback-logic change (those files are absent from the diff).
+
+### Remaining limitations
+
+- Migration 015 is still not applied to the live DB (unchanged from Batch 2/3);
+  local registration cannot work in production until it runs.
+- The optimistic "Connected" card shows `0 models` until the background
+  refresh lands (the count is read from the catalog, not invented) — seconds,
+  not the previous minutes.
+- `markCatalogDirty` maps grow per user for the process lifetime (same
+  pre-existing pattern as `inFlightRebuilds` and the credential caches).
+- If a pre-change build R1 finishes AFTER the post-change build R2 and computed
+  the same fingerprint, R1's cleanup deletes nothing (delete-by-fingerprint)
+  and its upserts only touch its own rows, so R2's local rows survive. The
+  remaining hazard — a pre-change build persisting a NEW fingerprint while
+  missing the new provider's rows — is closed by the generation rule for the
+  request path but is not separately guarded inside `storeCatalog`.
+- Route-level wiring (`POST /api/models/connect`, `DELETE .../connections/local`)
+  is verified by reading + the pure cores, the same posture as every previous
+  batch (routes need a live Supabase session).
+- Not covered by tests: React rendering of the modal (the extracted pool is
+  tested directly instead).
+
 ## STOP
+
+---
+
+## Task R — Provider connect/disconnect latency + /models page load performance
+
+**Status:** ✅ COMPLETE (October 2, 2026). Three production latency/state
+problems reported from the real manual test (screenshot: the Local LLM card
+sitting on "Disconnecting…"). `skills.md` re-checked absent (glob). Builds
+directly on Task Q's `markCatalogDirty` / generation-aware single-flight.
+
+No page reload, no second catalog cache, no second provider-state system, no
+local-specific path, no routing/scoring/pricing/fallback change.
+
+### BUG 1 — disconnect stays in a loading state for too long
+
+**Root cause (exact).** Task Q fixed CONNECT but left DISCONNECT on the old
+code path, and it is the same defect:
+
+1. `components/models/ProviderCard.tsx` `handleDisconnect` sets
+   `busyDisconnect = true` and only clears it in `finally` after
+   `await onDisconnect(providerId)` resolves — that is what renders
+   "Disconnecting…".
+2. `app/models/page.tsx` `handleDisconnect` (old line 275-285) did
+   `await refresh()` **before** returning.
+3. `refresh()` → `GET /api/models` → `getOrBuildCatalog(user.id)` non-forced.
+4. `lib/ai/model-intelligence/index.ts:956` — the persisted fingerprint no
+   longer matches (the provider was just deleted), so
+   `const rebuilt = await rebuildCatalogOnce(userId)` performs a **SYNCHRONOUS
+   full rebuild on the request path**: `discoverModels` (live HTTP to every
+   remaining connected provider) → `aiClassify` (an LLM generation call) →
+   `storeCatalog` (chunked upserts + delete-by-fingerprint cleanup + meta).
+
+**Exact blocking operations the disconnect button was waiting on:** one
+`provider_connections` DELETE, one `provider_connections` SELECT
+(`getProviderConnections`, for the fingerprint), one `model_catalog_meta` +
+`model_catalog` SELECT (`loadCatalog`), live provider `/models` HTTP for every
+still-connected provider, the classifier generation call, and the full catalog
+re-store. Nothing of that is part of disconnecting.
+
+Also: the DELETE route itself was fine — the fire-and-forget rebuild never sat
+on its response path, so the client was the only thing making this slow.
+
+**Fix.** `runDisconnect` in `components/models/connectState.ts` shares the
+single `runProviderMutation` lifecycle with `runConnect`: the DELETE is the only
+awaited work; on success `markProviderDisconnected` flips the card immediately
+and the catalog refresh starts **detached**; on failure it surfaces the error
+and rejects so `busyDisconnect` clears. Identical treatment for every provider
+— the local endpoint uses the same code, there is no local branch.
+
+### BUG 2 — connect/disconnect state only appeared after a full page refresh
+
+**Root cause (state-source trace).** There is exactly ONE provider-state source
+(no duplication to fix):
+
+| Data | Source | Path to the UI |
+|---|---|---|
+| connected/disconnected | `provider_connections` (DB only; env keys deliberately do not keep a provider connected) | `/api/models` → `providers[]` → single `providers` state → `ProviderCard` badge |
+| provider model counts | catalog rows | `/api/models` → `models[]` → `ConnectedProvidersSection` |
+| model availability | catalog rows (`toCatalogModel.available`) | `libraryBaseModels`, stage pools |
+
+The problem was never a duplicate store — it was **when** `setProviders` ran.
+Before Task R, `refresh()` (the only writer of `providers`) was awaited inside
+the mutation handler, so the badge could not change until the whole catalog
+rebuild finished. A slow rebuild therefore looked identical to "no state
+update" and pushed the user toward reloading.
+
+**Fix (mutation-response-authoritative, catalog revalidation detached).**
+- `markProviderDisconnected` / `markProviderConnected` now apply on the
+  mutation response alone; `markProviderDisconnected` also drops the endpoint
+  display metadata with the connection.
+- Every model-consuming view already filters by the connected set
+  (`buildStageCandidatePool`, `libraryBaseModels`, `getSelectedProviderModels`),
+  so a disconnected provider's models vanish immediately. `getSelectedProviderModels`
+  and `getConfiguredStageModel` were additionally gated on `connectedProviderIds`
+  so a stage row stops displaying a model that can no longer run.
+- `ProviderCard.handleDisconnect` gained a `catch` (the parent now rejects) and
+  a single-flight gate, so the spinner always clears and a double click cannot
+  fire two DELETEs.
+
+### BUG 3 — the `/models` page itself is slow to load
+
+**Root cause.** `GET /api/models` called the AUTHORITATIVE
+`getOrBuildCatalog(user.id)`, whose fingerprint-mismatch branch (and its
+no-persisted-catalog branch) runs a full rebuild **on the render path**. Two
+independent triggers fired on ordinary navigation and after every connect or
+disconnect:
+
+- provider set changed since the last store → synchronous rebuild;
+- nothing persisted (first ever load, or after everything was disconnected) →
+  synchronous rebuild.
+
+Plus a background loop amplifier that state.md:231 already documented for an
+earlier incident: a catalog that fails to persist leaves `loadCatalog()` empty,
+so **every** request rebuilds (state.md recorded `~20s` per `/api/models`;
+state.md:963 recorded a real forced rebuild at **3.4s** with all 7 providers).
+Live discovery (`lib/ai/catalog/live.ts`) has no per-request timeout, and
+`aiClassify` sends the whole model listing through a free model, so both can
+dominate.
+
+**Architecture chosen — reuse what exists, split display from authoritative.**
+`getOrBuildCatalog` is what the RUNTIME consults (`lib/ai/gateway.ts:106`
+strict-Free free-authority, `app/api/analysis/preflight/route.ts:206`). A run
+must never plan against a catalog that predates the user's connections, so that
+function keeps its synchronous-rebuild guarantee **completely unchanged**.
+
+- NEW `getCatalogForDisplay(userId)` + the pure `planCatalogServe` planner:
+  stale-while-revalidate for the page. It serves the PERSISTED catalog
+  immediately, schedules a generation-aware `rebuildCatalogOnce` in the
+  background, and reports `pending`.
+- `/api/models` returns `catalogPending`; provider connection state continues to
+  come from the existing lightweight `getProviderConnections` DB read in the
+  SAME response — no new endpoint was needed, because the route already had a
+  cheap, authoritative connection source and was only mixing it with expensive
+  catalog construction.
+- NEW `components/models/catalogRevalidation.ts` — the client re-reads while
+  `catalogPending` is true, bounded (4 attempts × 1.5s ≈ 6s worst case), so
+  newly connected providers' models appear on their own. On exhaustion the page
+  keeps the last good snapshot and says so via a toast; no reload, no infinite
+  poll.
+
+**Data-safety guard added while doing this (self-caught).** Serving a stale
+snapshot would have made `/api/models` reconcile — and SELF-HEAL PERSIST —
+`stage_overrides` against data that is known to be behind. On a first-ever load
+the snapshot is empty, so every saved override would have been dropped and the
+deletion persisted. NEW pure `shouldReconcileOverrides` (in
+`lib/ai/catalog/overrideReconcile.ts`) skips reconciliation only in that case
+(pending AND empty AND providers connected); a genuinely empty catalog with zero
+connected providers still reconciles so the existing self-heal behaviour is
+preserved. Covered by two regression checks.
+
+### Catalog correctness — the Task Q race cannot come back
+
+- `markCatalogDirty` is still called by BOTH mutation routes immediately after
+  the DB write and before the response, so a rebuild requested after a mutation
+  never joins a pre-mutation build.
+- NEW `isGenerationSuperseded` + the `buildGeneration` parameter on
+  `getOrBuildCatalog`: a build overtaken by a mutation mid-flight now **skips
+  `storeCatalog` entirely**, so a superseded generation can never write rows or
+  a meta fingerprint and never becomes authoritative. The newer generation's
+  build (already scheduled by the mutation) does the storing.
+- The display path schedules rebuilds through the same `rebuildCatalogOnce`, so
+  there is still exactly ONE catalog cache, ONE single-flight map and ONE
+  generation counter per user.
+
+### Exact blocking operations: before → now
+
+| Operation | Before (on the blocking path) | Now |
+|---|---|---|
+| live provider `/models` HTTP (all connected providers) | blocked the connect spinner, the disconnect spinner, and every `/models` render after a fingerprint change | background rebuild only |
+| AI classification (`aiClassify`, an LLM generation call) | same | background rebuild only |
+| catalog re-store (chunked upserts + delete + meta) | same | background rebuild only |
+| `provider_connections` write | awaited (correct, unchanged) | awaited (correct, unchanged) |
+| `provider_connections` read / fingerprint check | awaited (unchanged, two indexed selects) | awaited (unchanged) |
+| `model_catalog` + `model_catalog_meta` read | awaited (unchanged) | awaited (unchanged) |
+| catalog rebuild itself | on the request path | detached / background, generation-aware |
+| follow-up reads | none | bounded revalidation loop, ≤ 4 × 1.5s |
+
+Connect/disconnect latency is now: **the mutation request and nothing else.**
+The catalog catches up in the background and the UI revalidates itself.
+
+### Files changed
+
+- `components/models/connectState.ts` (MODIFIED, 201 lines) — shared
+  `runProviderMutation` lifecycle, `runDisconnect`, `markProviderDisconnected`,
+  `ProviderMutationDeps`/`ConnectDeps`/`DisconnectDeps`.
+- `components/models/catalogRevalidation.ts` (NEW, 53 lines) — bounded
+  `revalidateUntilSettled` + its constants.
+- `components/models/ProviderCard.tsx` (MODIFIED) — disconnect `catch` +
+  single-flight gate.
+- `components/models/LocalProviderConnectForm.tsx` (MODIFIED) — Task Q gate (unchanged in R).
+- `app/models/page.tsx` (MODIFIED) — `refresh` returns `catalogPending`,
+  `revalidate` + `refreshAndSettle`, shared `runProviderMutation` wiring for
+  connect AND disconnect, connected-set gating for stage-row models.
+- `app/api/models/route.ts` (MODIFIED) — `getCatalogForDisplay`, `catalogPending`
+  in the response, `shouldReconcileOverrides` guard.
+- `lib/ai/model-intelligence/index.ts` (MODIFIED) — `getCatalogForDisplay`,
+  `planCatalogServe`, `isGenerationSuperseded`, `buildGeneration` store guard.
+  `getOrBuildCatalog`'s runtime semantics are otherwise byte-unchanged.
+- `lib/ai/catalog/overrideReconcile.ts` (MODIFIED) — `shouldReconcileOverrides`.
+- `provider-connection-latency.spec.ts` (NEW, 477 lines) — Task R regression suite.
+- `think/state.md` (this record).
+- Task Q files (`components/models/stageCandidates.ts`,
+  `local-connect-stage-visibility.spec.ts`, the connect/disconnect routes) are
+  still uncommitted in this working tree and unchanged by R.
+
+### Tests
+
+**NEW `provider-connection-latency.spec.ts` — 27 checks, ALL PASS.** Mocked HTTP
+via the injected `post`, no React, no network, no DB, no secrets, no real model
+calls.
+
+- BUG 1: disconnect resolves while the catalog refresh is still blocked (raced
+  against the refresh promise), with the exact event order
+  `post → onDisconnected → onSuccess → refresh:start`; a failed disconnect keeps
+  the provider connected (and its endpoint metadata) and skips the refresh; a
+  transport failure rejects; duplicate clicks cannot fire a second request.
+- BUG 2: a persisted disconnect removes the provider's models from every stage
+  candidate pool and from search immediately; connect/disconnect patches are
+  provider-agnostic and untouched rows keep identity; connect still resolves
+  before the refresh; a failed connect never marks connected and never
+  refreshes; a failed background refresh does not revert a persisted disconnect.
+- BUG 3: all four `planCatalogServe` cases (fresh match → no rebuild; fingerprint
+  mismatch → serve cached + background + pending; TTL-expired → same; nothing
+  persisted → empty + pending, never blocking); the decision flips for a local
+  connect/disconnect because the compared fingerprint changes; the revalidation
+  loop re-reads only until the flag clears and waits between reads; the loop is
+  bounded and reports exhaustion; a failing read stops the loop without throwing;
+  the override-reconciliation guard (all five cases) plus a check that
+  reconciling an empty snapshot would indeed have destroyed a saved override and
+  that it survives once the rebuild lands; manual overrides still round-trip
+  through `buildStageOverrides` + `reconcileStageOverrides`.
+- Catalog generation: `markCatalogDirty` advances the generation so a pre-change
+  build is refused while a post-change build is still shared; generations are
+  per user; `isGenerationSuperseded` detects an overtaken build.
+- Regression: a disconnected provider can never supply a Strict Free candidate;
+  Strict Free still drops an unconfirmed override and never falls back to paid;
+  an explicitly zero-priced model is still confirmed free.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → clean (exit 0).
+- **All 15 suites → ALL PASS, 273 checks total**: the 14 pre-existing A–Q suites
+  unchanged (stage-overrides 17, classify-diagnostics 33,
+  manual-credential-fallback 9, automatic-candidates 13, stage-attempt-view 9,
+  preference-mode 11, preference-read-failure 15, local-provider-connection 31,
+  local-provider-registration 21, local-provider-discovery 16,
+  local-provider-ui-flow 16, local-catalog-strategy 21, local-runtime-execution
+  14, local-connect-stage-visibility 20 = 246) + the new
+  provider-connection-latency 27.
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = exact pre-change
+  baseline; grep of the lint output for every new/changed file → 0 findings.
+- Diff inspected file-by-file: `lib/ai/catalog/stageSelection.ts`,
+  `normalizers.ts`, `cost.ts`, `stageTokenProfiles.ts`, `gateway.ts`,
+  `routing.ts`, `model-router/`, `providers/` and `strategy-selection.ts` are
+  **absent from the diff** ⇒ no Strict Free, scoring, fallback, pricing or
+  routing change. Secret scan of the diff → 0 hits. No hardcoded provider or
+  model names (only the provider-id literals the schema already uses; spec
+  fixtures are generic like `local-server-model`).
+- Unrelated working-tree entries NOT produced by this task and deliberately not
+  touched: `.coder/logs/coder.log` (modified), `.coder/current-task.md` and
+  `.coder/logs/qwopus-3.5.log` (untracked) — editor/agent tooling artifacts.
+
+### Performance measurements (real, not fabricated)
+
+- `runDisconnect` resolved in **0.0ms** (measured with `process.hrtime.bigint()`)
+  while an **800ms** catalog refresh was still in flight — i.e. the mutation
+  flow no longer pays for catalog work at all. This is a measurement of the
+  decoupled contract, not of a live rebuild.
+- Revalidation bound: `MAX_CATALOG_REVALIDATION_ATTEMPTS (4) ×
+  CATALOG_REVALIDATION_DELAY_MS (1500) = 6000ms` worst case before the page gives
+  up and informs the user.
+- No end-to-end `/api/models` wall-clock was measured: that needs a live Supabase
+  instance and real provider endpoints, which this task must not call. The
+  previously recorded real numbers from earlier work stand as the "before"
+  baseline: `~20s` for `/api/models` when `loadCatalog()` came back empty
+  (state.md:231) and `3.4s` for a forced rebuild with all 7 providers
+  (state.md:963). Those operations are now off the request path.
+
+### Remaining limitations
+
+- The RUNTIME catalog read is deliberately unchanged: `gateway.generate` and
+  preflight still take the authoritative synchronous path, so a run started
+  immediately after a connect can still wait for a rebuild. That is the correct
+  trade (a run must not plan against a pre-connection catalog) and it is not the
+  page-load path this task was about.
+- Live discovery (`lib/ai/catalog/live.ts`) still has no per-request timeout, so
+  a hung provider can stall a BACKGROUND rebuild and, with it, `catalogPending`
+  clearing. The page stays responsive and honest (`onExhausted` toast) instead.
+- While a rebuild is in flight the page shows the previous catalog; the new
+  provider's models arrive on revalidation (seconds). This is stated in the UI
+  rather than hidden.
+- `getCatalogForDisplay` and the route each read `provider_connections` (two
+  cheap indexed selects in parallel). Deliberately left as-is rather than
+  threading a shared read through the planner.
+- The optimistic patches change only connection status (+ endpoint display
+  metadata). Model counts stay catalog-derived, so a freshly connected provider
+  shows "0 models" for a moment.
+- `shouldReconcileOverrides` means a stale-but-populated snapshot can delay
+  dropping overrides for a disconnected provider until the rebuild lands. That
+  direction only ever under-drops, which is safe.
+- Route-level behaviour (`GET /api/models`, the two mutation routes) is verified
+  by reading plus the pure cores, the same posture as every previous batch.
+- React rendering itself is not unit-tested; the extracted pure cores are.
+- Migration 015 still not applied to the live DB (unchanged since Batch 2).
+
+## STOP
+
+---
+
+## TASK S — Integrate and verify Local LLM across ALL five analysis stages
+
+**Status:** ✅ COMPLETE (October 2, 2026). `skills.md` re-checked absent (glob).
+Builds directly on A–R; the Connect/Disconnect flow was already manually verified
+by the user. Stopped after S.
+
+No local-specific router, no local-specific stage logic, no hardcoded model or
+provider names, no Strict Free change, no catalog-generation change, and no
+Connect/Disconnect change (no regression was found there).
+
+### STEP 1 — Five-stage trace (UI selection → actual execution)
+
+Canonical stage ids (single set, five keys) and their per-stage generation
+params as they actually exist in `lib/analysis/*.ts`:
+
+| # | Stage | Stage id | maxTokens | Stage module |
+|---|---|---|---|---|
+| 1 | File Discovery | `relevant_file_discovery` | 2048 | `lib/analysis/relevant-files.ts:169` |
+| 2 | Root Cause Analysis | `root_cause_analysis` | 4096 | `lib/analysis/root-cause.ts:124` |
+| 3 | Evidence Extraction | `evidence_extraction` | 4096 | `lib/analysis/evidence.ts:124` |
+| 4 | Solution Generation | `solution_generation` | 4096 | `lib/analysis/solution.ts:129` |
+| 5 | Patch Generation | `patch_generation` | 8192 | `lib/analysis/patch.ts:135` |
+
+All five use `temperature: 0.3`, `responseFormat: { type: 'json_object' }` and
+call the ONE gateway `generate()` (`lib/ai/gateway.ts:54`). The complete,
+byte-identical spine for every stage (verified — no stage has bespoke
+execution code; there is no `lib/ai/orchestration/` at all):
+
+```
+app/analysis/[id]/page.tsx  →  app/api/analyses/[id]/{stage}/route.ts
+  → lib/analysis/{stage}.ts            (context build + generate)
+    → lib/ai/gateway.ts:54  generate()          ← ONE gateway, all 5 stages
+        gateway.ts:61  resolveLocalEndpoint(userId)      ← resolved ONCE per run
+        gateway.ts:64  resolveAnalysisRouting(userId, task)
+        gateway.ts:106 getOrBuildCatalog + toCatalogModel
+        gateway.ts:114 confirmedFreeIds (catalog price.isFree — the ONLY free authority)
+        gateway.ts:120 prepareStrictFreeRun  (strict Free)
+        gateway.ts:130 getAutomaticStageCandidates (non-strict)
+        gateway.ts:138 runWithFallback({ …, localEndpoint })
+          → model-router/index.ts:272 buildRunChain
+          → model-router/index.ts:237 buildAvailableProviders (local ⇔ endpoint)
+          → model-router/index.ts:418 local fail-closed endpoint gate
+          → model-router/index.ts:426 getOrCreateProvider
+            → providers/registry.ts:119 createProviderInstanceWithApiKey
+              → providers/local/client.ts:58 generate()  → POST {base}/chat/completions
+        gateway.ts:176 recordStageAssignment(buildStageAssignmentRecord(routed))
+          → analyses.model_selection.stages[task]
+```
+
+Per-stage detail (identical for all five except the noted values):
+
+- **UI model-selection source** — `app/models/page.tsx` `StageChangeModal`
+  (`:727`), pool from the pure `buildStageCandidatePool`
+  (`components/models/stageCandidates.ts:25`). It filters ONLY
+  `m.available && connected.has(m.providerId)` — no pricing filter, no context
+  filter, no provider allowlist. `filterStageModels` (`:40`) searches display
+  name + model id + **provider id**. `bucketStageModels` (`:64`) is display-only.
+  Automatic setup uses `selectStageModels`/`selectForStage`
+  (`lib/ai/catalog/stageSelection.ts:380/389`) over `libraryBaseModels`.
+- **Saved stage override** — `buildStageOverrides`
+  (`lib/ai/catalog/stageOverrides.ts:11`) → `user_model_preferences.stage_overrides`
+  (JSONB, migration 012) via `PUT /api/models/preference`
+  → `saveModelPreference` (`lib/ai/preferences.ts:88`). Read back in auto mode
+  only (`routing.ts:84`); stale-model reconciliation in
+  `lib/ai/catalog/overrideReconcile.ts:88`.
+- **Routing resolution** — `resolveAnalysisRouting` (`lib/ai/routing.ts:67`).
+  Stage id whitelisted at `routing.ts:31`. Manual-mode local connection is by
+  STORED ENDPOINT (`routing.ts:104-115`), fail-closed with the Task C message.
+- **Gateway entry point** — `generate()` (`gateway.ts:54`), one per stage.
+- **Model-router execution** — `runWithFallback` (`model-router/index.ts:364`);
+  its ONLY call site is `gateway.ts:138`. Chain precedence:
+  override > manual > strategy assignment > autoChain (`buildRunChain:272`).
+- **Provider/client used** — `createProviderInstanceWithApiKey('local', key,
+  { baseUrl })` → `LocalProvider` (`lib/ai/providers/local/client.ts:32`).
+  `createProviderInstance('local')` still throws: no env instance exists.
+- **Local endpoint resolution** — `resolveLocalEndpoint`
+  (`lib/ai/connection/service.ts:280`), cached per user; stored normalized
+  `base_url` + optional decrypted key (migration 015).
+- **Model ID passed to the local server** — `entry.model`, i.e. exactly the `id`
+  string from the server's `GET /models` (`live.ts` dedupe, `client.ts:60`).
+- **`model_selection.stages`** — `analyses.model_selection` JSONB (migration
+  010), written once per stage from the router's ACTUAL result
+  (`gateway.ts:176` → `analysis-selection.ts:36`). Record shape
+  `{ provider, model, fallbackCount, attempted:[{provider, model}] }`.
+
+### Resulting matrix
+
+| Stage | Selectable | Saved | Routed | Executed | Local Endpoint |
+|---|---|---|---|---|---|
+| File Discovery | ✅ `buildStageCandidatePool`, no gate | ✅ `buildStageOverrides` | ✅ `resolveAnalysisRouting` → `runArgs.stageOverrides` | ✅ `LocalProvider.generate` via `runWithFallback` | ✅ stored `base_url` + `/chat/completions` (`/v1` fallback) |
+| Root Cause | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Evidence Extraction | ✅ (manual + automatic **iff** context ≥ 200 000) | ✅ | ✅ | ✅ (override) / ✅ automatic when the server advertises ≥ 200 000 | ✅ |
+| Solution Generation | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Patch Generation | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**No stage was assumed from File Discovery** — each of the five was traced and
+is now covered by its own parameterized checks (26 checks × 5 stages).
+
+### STEP 2 — Eligibility findings (context gates honored, never bypassed)
+
+| Stage | `STAGE_CONTEXT_MIN` | Local eligible? |
+|---|---|---|
+| `relevant_file_discovery` | 32 000 | ✅ |
+| `root_cause_analysis` | 128 000 | ✅ at the honest 128 000 default (inclusive gate) |
+| `evidence_extraction` | **200 000** | ❌ at the 128 000 default — **documented limitation, gate kept** |
+| `solution_generation` | 32 000 | ✅ |
+| `patch_generation` | 32 000 | ✅ |
+
+Exact reason for the single exclusion: a local payload that exposes no
+`max_model_len` / `context_length` gets the honest 128 000 default from
+`finalize` (`lib/ai/catalog/normalizers.ts:200`, `contextSource:'default'`),
+which is below the 200 000 requirement `evidence_extraction` imposes at
+`stageSelection.ts:51`. **The filter was NOT removed.** Evidence extraction
+remains fully reachable for that model by the two routes that are not supposed
+to bypass the gate: the manual stage override (`buildStageOverrides` →
+`buildRunChain` places it first) and the automatic pool as soon as the endpoint
+advertises a ≥ 200 000 window (`normalizeLocalModel:598` honors it, proven by a
+test).
+
+Gates verified present and NOT bypassed for local:
+- context sufficiency — `buildAutomaticPool` `stageSelection.ts:234`;
+- runtime dynamic context gate — `config.ts:149`
+  (`max(estimatedTokens × 2, 32 000)`) applies to `automaticCandidates`;
+- provider availability — `buildAvailableProviders` `model-router:251`
+  (`local` ⇔ a stored endpoint, never a key);
+- per-attempt fail-closed endpoint gate — `model-router:418`;
+- factory requirement — `providers/registry.ts:185` (throws without
+  `options.baseUrl`);
+- manual-mode connection check — `routing.ts:104`;
+- family grouping (`modelFamilyKey`, provider-scoped, applied to local) and
+  `MAX_CANDIDATES_PER_PROVIDER = 5` flood cap — both asserted for local;
+- `CLASSIFIER_BLOCKED_PROVIDERS` (`model-intelligence/index.ts:242`) blocks
+  local only as the classifier's own GENERATOR (no request user exists there);
+  it does not affect any of the five stages.
+
+### STEP 3 — Strategy behavior (no strategy code touched)
+
+- **Balanced** — `pickBalanced` (`stageSelection.ts:287`): an unknown-priced
+  local model participates; known pricing always outranks unknown (the
+  existing `Infinity` worst-cost tier); an explicit `0/0` local model wins on
+  cost; local wins when it is the only candidate. Unchanged semantics.
+- **Quality** — `pickQuality` (`:329`): same participation; a priced peer wins
+  inside the 5-point comparability tolerance, a materially stronger local model
+  still wins. Unchanged.
+- **Manual stage override** — selectable for every eligible stage, no free gate
+  (`buildStageOverrides`).
+- **Strict Free — NOT weakened.** Unknown local pricing remains
+  `isFree:false` / `priceSource:'unknown'` / `freeAuthority:'none'`
+  (`normalizers.ts:614-627`). For all five stages an unknown-priced local model
+  is absent from `getFreeStageCandidates`, `isConfirmedFreeModel` is false,
+  `prepareStrictFreeRun` DROPS the saved override, and Free setup returns
+  `unavailable: true`. A local model that advertises explicit `0/0` enters
+  through the EXISTING `explicit-zero` authority — no new "local free" rule.
+
+### STEP 4 — Runtime execution findings
+
+All five stages reach `LocalProvider.generate` through the one existing
+`runWithFallback` chain. Verified per stage: correct stored base URL as the only
+address targeted (exactly one request, no other provider endpoint touched),
+correct model id in the body, per-stage `temperature` / `max_tokens` /
+`response_format`, OpenAI-compatible response + usage parsing, existing error
+handling (`Local endpoint error {status}`), the `/v1` candidate fallback for an
+unversioned base (parity with the discovery probe), optional API key behavior
+(keyless ⇒ NO `Authorization`; keyed ⇒ `Bearer` to its own endpoint only),
+existing timeout/retry behavior (unchanged — generation clients have no
+per-request timeout and none was added), and existing fallback policy
+(500 ⇒ fallback; 401 auth ⇒ NOT fallback-worthy and the key never appears in the
+error; empty completion ⇒ error, never a silent empty stage result).
+
+### STEP 5 — Fallback behavior + metadata (Task E preserved)
+
+- Local succeeds ⇒ `fallbackCount: 0`, `attempted: [local]`, view state
+  `initial`, selected === actual.
+- Local fails ⇒ the EXISTING policy applies (server error / context-shaped
+  rejection ⇒ next candidate; auth ⇒ hard throw). Metadata:
+  `fallbackCount: 1`, `attempted: [local, <actual>]`, view state `fallback`
+  with selected `local · <id>` and actual `<peer> · <id>`.
+- A SKIPPED candidate (disconnected local) is not a fallback hop: existing
+  router semantics count 0 and record only executed attempts. Verified, not
+  assumed.
+- No local-specific fallback rule was introduced; `buildRunChain` and
+  `isStrictFreeSelection` are untouched.
+
+### STEP 6 — `model_selection.stages` for all five stages
+
+The record is derived ONLY from the router's `RunResponse`, never from the
+catalog or the saved preference, so stale catalog/provider data can never
+overwrite what actually ran. To make that guarantee testable the inline object
+literal in `gateway.generate` was extracted into a pure, exported
+`buildStageAssignmentRecord(routed)` (`lib/ai/analysis-selection.ts:36`) —
+**behavior-preserving**, same fields, same casts, same single call site.
+Verified per stage: the executed local model is recorded with `fallbackCount 0`;
+after a fallback the record holds the ACTUAL peer, never the selected local one.
+
+### Tests
+
+**NEW `local-five-stage-integration.spec.ts` — 176 checks, ALL PASS.** Fully
+parameterized from ONE `STAGES` table (id, label, maxTokens, module) with shared
+helpers — no duplicated per-stage implementation. HTTP is mocked at the global
+fetch boundary; credentials/preferences use injected fakes. NO real network, NO
+real database, NO real model calls, NO secrets.
+
+- 5 global checks: the spec table matches `STAGE_WEIGHTS` /
+  `STAGE_CONTEXT_MIN` keys; every stage module's `task`/`maxTokens` is asserted
+  against `lib/analysis/*.ts` on disk (prevents fixture drift); every stage
+  module imports the single gateway and never calls the router directly;
+  `normalizeLocalModel` unknown-pricing / default-context / advertised-context
+  behavior; local is never chosen as the classifier generation model.
+- 26 checks × 5 stages = 130: selectable in the pool / absent when disconnected
+  / findable + bucketed as non-free; manual override saved; saved override
+  resolved into `runArgs`; automatic eligibility at and just below
+  `STAGE_CONTEXT_MIN`; insufficient context excludes automatically but keeps
+  manual selection; provider cap + family grouping; Balanced (only-candidate,
+  priced peer wins, explicit-free wins on cost); Quality (only-candidate,
+  priced peer inside tolerance, stronger local still wins); Strict Free
+  (setup `unavailable`, empty free pool, `isConfirmedFreeModel` false, override
+  dropped, explicit `0/0` included, verified-free runtime chain, empty pool
+  fails before any HTTP); runtime execution (endpoint / model id / body / parse /
+  usage, keyless, keyed, `/v1` fallback, 500 fallback + Task E metadata,
+  context-shaped skip, auth non-fallback + no key leak, empty completion,
+  disconnected ⇒ zero HTTP + structured error, skipped local candidate);
+  `model_selection.stages` (no-fallback record, actual-fallback record, no
+  per-attempt error text).
+- 4 cross-stage checks: local eligible for EVERY stage via `selectStageModels`;
+  Free setup unavailable for EVERY stage; the documented exclusion set asserted
+  exactly (`['evidence_extraction(min 200000)']`); the local client is only
+  constructible with a stored base URL.
+
+### STEP 8 — Real smoke-test support (manual, opt-in)
+
+**NEW `scripts/local-llm-smoke.ts`.** Invoked by NO spec, npm script, or build
+step. Refuses to run unless `--base-url`, `--model` AND `--confirm` are
+supplied, and refuses under an active test runner (`VITEST` / `JEST_WORKER_ID` /
+`NODE_ENV=test` / `TS_NODE_PROJECT`) so CI can never trigger it. It never reads
+the database, never touches the catalog, and never triggers the classifier — it
+calls ONLY the existing `runWithFallback` with the same
+`stageOverrides: { provider: 'local', model }` shape a saved override produces.
+Reuses `normalizeLocalBaseUrl` + `blockedLocalTargetReason` (the same SSRF
+screen as registration) and takes the per-stage output budget from
+`STAGE_TOKEN_PROFILES` (no duplicated numbers). Prints status, duration,
+`fallbackCount`, attempts, the stage's `contextMin` and the first reply line
+only; the API key is never printed.
+
+```
+npx tsx scripts/local-llm-smoke.ts --base-url http://127.0.0.1:8000/v1 \
+     --model <model-id-from-your-/models> --confirm
+# optional: --api-key <key>  --stage <stage-id>  --prompt <text>
+```
+
+All four refusal paths were executed and each exits 1 with no network call: no
+args, `--base-url http://169.254.169.254/v1` (link-local blocked),
+`--base-url ftp://…` (scheme rejected), active test runner.
+
+Manual test matrix (run against the user's own endpoint):
+
+| Stage | Expected Local Model | Expected Result |
+|---|---|---|
+| File Discovery | local model | success (`fallbackCount 0`) |
+| Root Cause | local model | success (`fallbackCount 0`) |
+| Evidence | local model | success — requires the server to advertise ≥ 200 000 context for AUTOMATIC selection; the smoke run uses an explicit stage override, which has no context gate, so a smaller local model still returns a response (a server-side rejection is reported verbatim as a FAIL with the server's own message, never forced) |
+| Solution | local model | success (`fallbackCount 0`) |
+| Patch | local model | success (`fallbackCount 0`) |
+
+The script also prints `NOTE: executed on <peer> (local attempt failed;
+fallback used)` and exits 1 if any stage did not actually run on `local`, so a
+"local looks configured but never executes" regression cannot pass silently.
+The in-product equivalent remains: `/models` → Local LLM → Test Connection →
+Connect → Configure a stage → run the analysis, then check the stage's model
+badge in the workspace.
+
+### Files changed
+
+- MODIFIED `lib/ai/analysis-selection.ts` — new pure, exported
+  `buildStageAssignmentRecord(routed)` (+33 lines, behavior-preserving).
+- MODIFIED `lib/ai/gateway.ts` — uses that helper instead of the inline literal.
+- NEW `local-five-stage-integration.spec.ts` — the parameterized suite.
+- NEW `scripts/local-llm-smoke.ts` — opt-in manual smoke tool.
+- `think/state.md` (this record).
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → exit 0.
+- **All 16 suites → ALL PASS, 449 checks total**: the 15 pre-existing A–R suites
+  with unchanged results (stage-overrides 17, classify-diagnostics 33,
+  manual-credential-fallback 9, automatic-candidates 13, stage-attempt-view 9,
+  preference-mode 11, preference-read-failure 15, local-provider-connection 31,
+  local-provider-registration 21, local-provider-discovery 16,
+  local-provider-ui-flow 16, local-catalog-strategy 21,
+  local-runtime-execution 14, local-connect-stage-visibility 20,
+  provider-connection-latency 27 = 273) + the new
+  local-five-stage-integration 176.
+- `npm run lint` → **39 problems (12 errors, 27 warnings)** = the exact
+  pre-change baseline; grep of the lint output for every new/changed file → 0
+  findings.
+- Full diff inspected file-by-file. `lib/ai/catalog/stageSelection.ts`,
+  `normalizers.ts`, `cost.ts`, `stageTokenProfiles.ts`, `routing.ts`,
+  `model-router/`, `providers/`, `strategy-selection.ts`, `config.ts` and every
+  API route are **absent from the diff** ⇒ no Strict Free, scoring, context,
+  pricing, eligibility, routing, fallback, provider-state or
+  catalog-generation change. Secret scan of the new files (`sk-`, `ghp_`,
+  `AKIA`, `ANON_KEY`, `SERVICE_ROLE`, PEM, `password`) → 0 hits. No hardcoded
+  product model or provider names in changed product code (fixtures use generic
+  ids like `server-a` / `peer-a`; the only provider literals are the `'local'`
+  and `'openrouter'` ids the schema already uses).
+- Unrelated working-tree entries NOT produced by this task and deliberately not
+  touched: `.coder/logs/coder.log` (modified), `.coder/current-task.md` and
+  `.coder/logs/qwopus-3.5.log` (untracked) — editor/agent tooling artifacts.
+
+### Stage-specific limitations (documented, not "fixed")
+
+1. **Evidence Extraction + a local model with no advertised context window** —
+   excluded from AUTOMATIC selection by the unchanged 200 000 context
+   requirement (default local context is 128 000). Manual override still works;
+   automatic selection works as soon as the endpoint advertises ≥ 200 000.
+   Fixing this by fabricating a bigger window would be exactly the metadata
+   invention the catalog is designed to avoid, so it was not done.
+2. **Strict Free + a local server that advertises no pricing** — the stage is
+   `unavailable` under Free. Correct per policy (unknown ≠ free); advertising
+   `0/0` unlocks the existing free path.
+3. **A local server that rejects an over-long request with a generic 400 whose
+   text does not mention a context limit** is classified `invalid_request` and
+   aborts the stage instead of falling through. That is the pre-existing shared
+   `classifyError` behavior for every provider (a message containing
+   "exceeds"/"limit"/"too long" IS classified `context_too_large` and skipped —
+   verified). Changing it would alter external-provider behavior, which is out
+   of scope.
+4. **Migration 015 is still not applied to the live DB** (unchanged since
+   Batch 2) — local registration fails on the live database until it runs.
+5. Generation requests have no per-request timeout, local included (mirrors
+   every existing client); a hung local server stalls the stage until the
+   platform/network layer times it out.
+6. Route-level wiring (`POST /api/models/connect`, the stage POST routes,
+   `gateway.generate`'s DB reads) is verified by reading plus the pure cores —
+   the same posture as every previous batch (routes need a live Supabase
+   session, which automated tests must not use).
+
+## STOP
+
+---
+
+## TASK T — Investigate the two real smoke-test observations (model id + "No models available for task")
+
+**Status:** ✅ INVESTIGATION COMPLETE — **NO PRODUCTION CODE CHANGED** (October 2,
+2026). `skills.md` re-checked absent (glob). Stopped after the investigation.
+
+Trigger: the user's manual run of
+`npx tsx scripts/local-llm-smoke.ts --base-url http://127.0.0.1:8000 --model qwopus-9b --confirm`
+passed all five stages (`provider=local`, `fallbackCount=0`, `attempts=1`) while
+printing two surprising things:
+
+1. `GET /v1/models` reports the server model as `local`, but the router executed
+   `local/qwopus-9b`.
+2. Every stage logged
+   `[config] No models available for task <stage> (context: 32000), falling back to all configured models`.
+
+**Verdict: neither is a BugWiser catalog/stage-selection bug.** (1) is a
+standalone-script artifact plus correct discovery behavior; (2) is a legacy
+`MODEL_REGISTRY` fallback log that the local execution path does not depend on.
+Nothing was changed, because the only ways to "fix" either one would be to
+weaken a context gate or to alter routing/selection — both explicitly out of
+bounds.
+
+### OBSERVATION 1 — server model id `local` vs `--model qwopus-9b` / `local/qwopus-9b`
+
+**Live evidence** (read-only localhost `GET /v1/models`, no paid call, no
+credentials): the server is llama.cpp and returns exactly one model —
+`{"id":"local","object":"model","owned_by":"llamacpp","meta":{"n_ctx":65536,"n_ctx_train":262144,…}}`.
+
+**Why `local/qwopus-9b` is correct behavior, not a defect:**
+
+- `--model` in `scripts/local-llm-smoke.ts:131` is a **human-typed label**
+  plugged straight into `stageOverrides: { provider: 'local', model }` — the
+  script never cross-checks it against the server's `/models` list (it has no
+  DB/catalog access and no such assertion exists anywhere). llama.cpp accepts
+  any `model` string on a single-model server, so the request succeeded. The
+  router faithfully executed the override it was handed.
+- **Production cannot reproduce this mismatch.** `PROVIDER_FETCHERS.local`
+  (`lib/ai/catalog/live.ts:156,190-198`) discovers models by probing the stored
+  endpoint, and `normalizeLocalModel` (`normalizers.ts:594-596`) keys the catalog
+  row on `raw.id` verbatim. So against this very server the catalog would contain
+  the single row `local/local` — exactly what the server reported. There is no
+  path by which an operator-supplied alias could enter the catalog, so a phantom
+  `qwopus-9b` is impossible in production.
+- The smoke-test header even documents the contract: `--model
+  <model-id-from-your-/models>`. The value supplied simply did not match what
+  this server reports; that is an input-label mismatch in a manual tool, not a
+  product defect.
+
+### OBSERVATION 2 — `No models available for task <stage> (context: 32000)`
+
+**Single source:** `lib/ai/config.ts:172`, inside `selectModelsForTask`, reached
+only from the `ranked.length === 0` branch of the **`MODEL_REGISTRY`** ranking
+path. `context: 32000` is `Math.max(estimatedTokens * 2, 32_000)`
+(`config.ts:149/168`) — 32 000 because the probe prompt is a few tokens, not
+because of anything about the local server.
+
+**Why it fires in the smoke test (three independent reasons, all by design):**
+
+1. **The script passes no `automaticCandidates`.** `runWithFallback` always
+   builds the `autoChain` (`model-router/index.ts:373-382`), and the script
+   supplies neither `automaticCandidates` nor `confirmedFreeIds`, so
+   `config.ts:148-164` (the catalog-driven early return) is skipped and the
+   legacy `MODEL_REGISTRY` ranker runs instead.
+2. **`MODEL_REGISTRY` contains no `local` rows — by design.** Its entries are
+   only `opencode` / `openrouter` / `chutes` / `zai` / `deepseek` / `gemini`
+   (`lib/ai/model-registry.ts:27-565`); local models are per-connection and
+   discovered at runtime, exactly like the Batch-3 finding recorded at
+   state.md:6496. The strategy engine (`strategy-selection.ts:367`) is likewise
+   registry-only. So with only `local` available, `ranked` is necessarily empty.
+3. **The smoke run has no external provider keys.** `buildAvailableProviders`
+   (`model-router:237-253`) therefore yields `{'local'}` alone, which matches no
+   registry row.
+
+**Consequence is inert, exactly as the run reported:** the fallback returns the
+configured registry models, i.e. `[]`; `buildRunChain` puts the stage override
+first (`model-router:314-321`), so the chain is `['local/qwopus-9b']` — which is
+precisely why the run shows `provider=local model=qwopus-9b fallbackCount=0
+attempts=1`. The warning describes an unused fallback branch, not the executed
+path. Nothing about local execution depends on `MODEL_REGISTRY`.
+
+**What the same warning means in production** (traced through the real path):
+`gateway.generate` (`gateway.ts:104-135`) always supplies `automaticCandidates`
+from `getAutomaticStageCandidates(catalogModels, task)`. So
+`config.ts:148-164` returns early for the four stages whose requirement a local
+model meets, and the warning does not appear at all. It can only appear when NO
+connected provider has a model surviving **both** `STAGE_CONTEXT_MIN`
+(`stageSelection.ts:48-54`) and config's own floor
+`max(estimatedTokens × 2, 32_000)` — i.e. it is truthful signal that this stage
+has no automatic candidate, not a routing fault. With a local-only user whose
+endpoint advertises no context, the concrete case is `evidence_extraction`
+(requirement 200 000 > the honest 128 000 default from
+`normalizers.ts:200`): no automatic candidate, so the stage needs a manual
+override. That is the limitation already recorded and deliberately kept at
+state.md:7305 and state.md:7511, and asserted as a regression guard at
+`local-five-stage-integration.spec.ts:855-890` (exact excluded set
+`['evidence_extraction(min 200000)']`).
+
+**Correctness note carried forward:** the smoke test forces
+`stageOverrides` for every stage, i.e. the MANUAL path, which intentionally has
+no context gate. Its five green PASS lines therefore prove endpoint reachability,
+request/response shape, provider-instance construction and the
+override→router→local-client spine — they do **not** prove automatic eligibility
+for `evidence_extraction`. The probe prompt is also tiny, so the run says nothing
+about real payload capacity (this server's `meta.n_ctx` is 65 536, while the
+evidence-extraction workload profile is 64 000 input tokens — see
+`lib/ai/catalog/stageTokenProfiles.ts`). Capacity must be exercised in-product.
+
+### Should the local model be selectable for all five stages in `/models`? — YES
+
+- **Manual Configure (all five stages): YES, unconditionally.**
+  `buildStageCandidatePool` (`components/models/stageCandidates.ts:25-33`)
+  filters only `m.available && connected.has(m.providerId)` — no pricing filter,
+  no context filter, no provider allowlist. Searching by provider id finds it
+  (`filterStageModels`, `:40`). `buildStageOverrides`
+  (`lib/ai/catalog/stageOverrides.ts`) then saves it and `buildRunChain` puts it
+  first. Asserted per stage by `local-five-stage-integration.spec.ts:363-460`
+  and by `local-connect-stage-visibility.spec.ts:315-384`.
+- **Automatic Balanced/Quality (setup button on `/models`):** eligible for
+  `relevant_file_discovery` (32 000), `root_cause_analysis` (128 000, inclusive
+  at the 128 000 default), `solution_generation` (32 000) and `patch_generation`
+  (32 000). **Not** for `evidence_extraction` at the 128 000 default (needs
+  200 000) — becomes eligible as soon as the endpoint advertises
+  `context_length` / `max_model_len` ≥ 200 000 (`normalizeLocalModel:598-605`).
+- **Free / Strict Free:** only if the endpoint advertises explicit `0/0`
+  pricing, via the pre-existing `explicit-zero` authority. Unknown pricing stays
+  `isFree:false` and the stage reads `unavailable` — policy unchanged.
+
+### Traced production path (verified by reading, end to end)
+
+```
+stored per-user endpoint (provider_connections, migration 015)
+  → resolveLocalEndpoint            lib/ai/connection/service.ts:280
+  → fetchLiveModels → PROVIDER_FETCHERS.local → probeLocalModelsList
+                                      lib/ai/catalog/live.ts:118,190-198
+  → normalizeLocalModel             lib/ai/catalog/normalizers.ts:594
+      (id verbatim ⇒ catalog row 'local/local'; context = max_model_len /
+       context_length, else honest 128 000 default; unknown pricing never free)
+  → getOrBuildCatalog / getCatalogForDisplay + storeCatalog
+                                      lib/ai/model-intelligence/index.ts
+  → GET /api/models → toCatalogModel (available: true) → libraryBaseModels
+                                      app/api/models/route.ts, app/models/page.tsx
+  → stage selection (setup):  selectStageModels → buildAutomaticPool
+                                      lib/ai/catalog/stageSelection.ts:223,380
+    stage selection (modal):  buildStageCandidatePool (no gates)
+                                      components/models/stageCandidates.ts:25
+  → saved preference/override: buildStageOverrides → stage_overrides JSONB
+                                      lib/ai/catalog/stageOverrides.ts
+  → gateway.generate               lib/ai/gateway.ts:54
+      resolveLocalEndpoint once (61) · resolveAnalysisRouting (64) ·
+      getOrBuildCatalog (106) · confirmedFreeIds from price.isFree (114) ·
+      prepareStrictFreeRun (120) | getAutomaticStageCandidates (130)
+  → routing.runArgs (override / manual / strategy precedence)
+                                      lib/ai/routing.ts:41,104
+  → runWithFallback → buildRunChain → buildAvailableProviders
+                                      lib/ai/model-router/index.ts:272,237
+  → per-attempt fail-closed endpoint gate (418) → getOrCreateProvider (426)
+  → createProviderInstanceWithApiKey('local', key, { baseUrl })
+                                      lib/ai/providers/registry.ts:181
+  → LocalProvider.generate → POST {base}/chat/completions
+                                      lib/ai/providers/local/client.ts:58
+  → recordStageAssignment(buildStageAssignmentRecord(routed))
+                                      lib/ai/gateway.ts:176
+```
+
+### Files changed
+
+- `think/state.md` (this record) — **the only file touched.**
+- No product, spec, script or config file was modified. In particular
+  `lib/ai/config.ts`, `lib/ai/catalog/stageSelection.ts`,
+  `lib/ai/catalog/normalizers.ts`, `lib/ai/model-router/index.ts`,
+  `lib/ai/gateway.ts`, `lib/ai/strategy-selection.ts` and
+  `scripts/local-llm-smoke.ts` are untouched — changing any of them would be
+  either a routing/selection change or an unrelated log-wording change, and the
+  warning is truthful signal rather than a defect.
+
+### Validation
+
+- `npx tsx local-five-stage-integration.spec.ts` → **ALL PASS** (176 checks).
+- `npx tsx local-connect-stage-visibility.spec.ts` → **ALL PASS** (20 checks).
+- `npx tsc --noEmit` → exit 0.
+- No test runner, no paid API call, no credential read or write. The single live
+  probe was a read-only `GET http://127.0.0.1:8000/v1/models` on the operator's
+  own loopback server; its body contains no secrets and is quoted only as
+  server-reported metadata.
+- No provider or model name was hardcoded anywhere.
+
+### Follow-ups recorded, deliberately NOT done (each needs its own review)
+
+1. **`config.ts:172` log wording is misleading in the local-only case.** It says
+   "falling back to all configured models" when the real outcome is "no catalog
+   candidate survived the stage's gates, and `MODEL_REGISTRY` has no rows for
+   this provider". Cosmetic only — the returned list and the executed chain are
+   unchanged. Left alone so routing/selection is untouched.
+2. **The structured "no providers available" error names the wrong remedy for a
+   local-only user.** `model-router:524` says "Configure at least one provider
+   API key" when the user already has local connected and simply lacks an
+   eligible model for that stage. Same posture as (1): message only, no
+   behavior change.
+3. **llama.cpp exposes its real context as `meta.n_ctx`, which
+   `normalizeLocalModel` deliberately does not read** (only `context_length` /
+   `max_model_len`). Here the honest 128 000 default *overstates* the server's
+   actual 65 536, so `root_cause_analysis` can be auto-selected for a model that
+   cannot really serve it. Reading `meta.n_ctx` would change metadata, and
+   therefore eligibility — out of scope here; worth its own task with the
+   trade-off spelled out (more honest metadata vs. accepting one server's
+   private schema shape).
+4. **The smoke script does not validate `--model` against `/models`.** Its own
+   usage text asks for the id from the server's list, and a mismatch is harmless
+   on single-model servers but would silently mask a typo against a multi-model
+   one. Optional hardening of the manual tool only.
+
+## STOP
+
+---
+
+## TASK T (live E2E) — Real end-to-end Local LLM analysis test
+
+**Status:** COMPLETE (October 2, 2026). **2 genuine production bugs found and
+fixed.** `skills.md` re-checked absent (glob). This is the live verification pass
+that follows the earlier "TASK T — Investigate the two real smoke-test
+observations" investigation recorded above; that one changed no code, this one
+did.
+
+### What was tested
+
+A REAL investigation against a REAL local OpenAI-compatible endpoint
+(llama.cpp on `127.0.0.1:8000`, model id `local`, `meta.n_ctx` 65 536), through
+the REAL production pipeline. Nothing was mocked, no paid API call was made, no
+credential was read or written.
+
+- **Target:** public repo `sindresorhus/ky`, issue **#886** ("CI runs the browser
+  tests and Playwright install on all three Node versions") — a real, small,
+  self-contained CI bug. 115 tree entries, 103 active files.
+- **User:** a throwaway Supabase auth user per run (9 created, all deleted at
+  the end). No existing user data, preference, catalog or connection was touched.
+- **Server:** the already-running Next.js dev server on `localhost:3000`, driven
+  over real HTTP with a real Supabase session cookie (`@supabase/ssr` capture).
+
+### Environment deviations (disclosed, not silent)
+
+1. **The stage routes could not be called over HTTP.** `POST
+   /api/analyses/:id/run` and `/relevant-files` both require
+   `session.provider_token`; no GitHub credential exists in this environment.
+   Verified: the route returns `401 {"error":"GitHub token not available…"}`.
+   The pipeline modules the routes call (`runAnalysisInitialization`,
+   `runRelevantFileDiscovery`, `runRootCauseAnalysis`, `runEvidenceExtraction`,
+   `runSolutionGeneration`, `runPatchGeneration`) were therefore invoked
+   directly, in the same order the routes invoke them. Everything below
+   `generate()` is the unmodified production path.
+2. **Public repo read without credentials.** The modules build
+   `Authorization: Bearer <token>`; a harness-level `fetch` guard strips that
+   header for `api.github.com` only, so public reads work unauthenticated.
+3. **No paid API calls — enforced, not assumed.** The same guard throws on any
+   outbound host that is not `127.0.0.1`, the Supabase host or `api.github.com`.
+   `GEMINI_API_KEY` is set in `.env.local`, so Gemini is a live routing
+   candidate; every attempt at it was blocked and is visible in the logs as
+   `E2E-GUARD: outbound request to generativelanguage.googleapis.com blocked`.
+   A blocked attempt costs nothing and is reported as a normal failed attempt.
+
+### Results
+
+#### 1-2. Provider connected, model discovered (real UI API)
+
+`local` was `disconnected` -> `POST /api/models/test-connection` ->
+`{"success":true,"compatibility":"openai-compatible","modelIds":["local"]}` ->
+`POST /api/models/connect` -> `{"ok":true,"modelCount":1}` ->
+`GET /api/models` -> `status:"connected"`, `baseUrl:"http://127.0.0.1:8000"`.
+
+Catalog row served to the UI (exact payload):
+`{"providerId":"local","modelId":"local","contextWindow":128000,"maxOutputTokens":8192,"price":{"input":null,"output":null,"isFree":false},"priceSource":"unknown","supportsReasoning":false,"supportsToolCalling":false,"supportsStructuredOutput":false,"availability":"available","scoreOrigin":"deterministic","scores":{"coding":30,"reasoning":21,"speed":50,"longContext":55},"valueScore":40,"fit":36,"available":true}`.
+
+The model id matches the server's `/models` id verbatim. Note the first
+`GET /api/models` after connect legitimately returns an empty catalog while the
+rebuild runs — the page's `catalogPending`/revalidation path covers it.
+
+#### 3-4. Selection and persistence (computed from the real `/models` payload)
+
+Manual selection (`buildStageCandidatePool`, the per-stage "Configure" modal):
+the local model is present for **all five** stages and is findable by searching
+`"local"` (provider id). Bucketed under "other", not "Free" — unknown pricing is
+never promoted to free.
+
+Automatic setup selection (`selectStageModels`), with `localCtx = 128000`:
+
+| Stage | `STAGE_CONTEXT_MIN` | Context gate | balanced | quality | free |
+|---|---|---|---|---|---|
+| File Discovery | 32 000 | PASS | **local/local** | **local/local** | unavailable |
+| Root Cause | 128 000 | PASS (inclusive) | **local/local** | **local/local** | unavailable |
+| Evidence Extraction | **200 000** | **REJECT** | null | null | unavailable |
+| Solution | 32 000 | PASS | **local/local** | **local/local** | unavailable |
+| Patch | 32 000 | PASS | **local/local** | **local/local** | unavailable |
+
+So for this endpoint: **four stages accept the local model automatically, none
+require a manual override to be selectable, and exactly one stage — Evidence
+Extraction — is rejected because of context**. `getAutomaticStageCandidates`
+and `getFreeStageCandidates` both contain **zero** local entries for evidence.
+Free is `unavailable` for all five (unknown != free) — unchanged, not weakened.
+
+Saved stage selections (`PUT /api/models/preference`,
+`selected_strategy:"custom"`, overrides for the three required stages) were
+read back identically from `GET /api/models`, and
+`droppedStageOverrides` was `[]`. Root Cause and Evidence were deliberately left
+without an override.
+
+#### 5-7. The real investigation
+
+Analysis `87bcac1a-b50a-4207-bd1a-1cf2b9510c03` reached **`status: completed`**.
+Stage records are derived from the router's actual `RunResponse`
+(`buildStageAssignmentRecord`), never from the catalog or the saved preference:
+
+| Stage | Executed on | fallbackCount | attempted | Real output |
+|---|---|---|---|---|
+| relevant_file_discovery | **local/local** | 0 | `[local/local]` | 4 files, `discoverySource: ai`, usage 1447 in / 253 out |
+| root_cause_analysis | **local/local** | 1 | `[gemini/gemini-2.5-pro, local/local]` | confidence **0.95**, 4 affected files, 3 evidence entries, usage 6224 / 645 |
+| evidence_extraction | *not executed* | — | `[gemini/gemini-2.5-pro, gemini/gemini-3.7-flash]` (both blocked) | none — context-gate exclusion |
+| solution_generation | **local/local** | 0 | `[local/local]` | confidence 0.95, 3 concrete steps, 4 affected files, usage 3835 / 746 |
+| patch_generation | **local/local** | 0 | `[local/local]` | real unified diff for `.github/workflows/main.yml`, usage 5300 / 582 |
+
+The discovered relevant files were the correct ones —
+`.github/workflows/main.yml`, `tsconfig.test.json`, `test/browser.ts`,
+`package.json` — and the root cause named the exact defect (Playwright installed
+and browser tests run once per Node matrix job). These are real stage outputs,
+not smoke-test acknowledgements.
+
+The only fallback that occurred was Root Cause: the legacy registry strategy
+chain put `gemini/gemini-2.5-pro` first, the guard blocked it, and the router
+fell through to `local/local`. `fallbackCount: 1` and both attempts were
+recorded — **accurate**. `manualFallbackOccurred` stayed `false`, correctly
+(the fallback was inside an auto-selected stage, not a manual one). The three
+override stages each show `fallbackCount: 0` with a single attempt — also
+accurate. `analyses.model_selection.stages` contains no `evidence_extraction`
+key at all, because that stage threw before any result existed — also correct.
+
+#### 8. What the UI shows
+
+`GET /api/analyses/:id` returns `select('*')`, so the workspace receives
+`model_selection` verbatim; `stagePipelineProps` (`app/analysis/[id]/page.tsx:537`)
+renders `` `${provider} · ${model}` `` and `ProgressOverlay:80` does the same.
+The pipeline therefore shows **`local · local`** on four stages and
+`gemini · gemini-2.5-pro` -> `local · local` as the Root Cause attempt trail. No
+cloud model is displayed as the executing model anywhere.
+
+### Genuine bugs found (both fixed)
+
+**BUG 1 — `POST /api/analyses` returned HTTP 500 for every request.**
+`insertResult` is a PostgREST response object, but the route treated it as an
+array (`insertedId[0].id`), so it threw a `TypeError` that the outer `catch`
+turned into `"Failed to create analysis"`. **No new analysis could ever be
+created from the UI.** Second defect underneath it: the `.insert()` had no
+`.select()`, so PostgREST answers `return=minimal` and supabase-js resolves
+`data` to `null` — the id was unavailable even without the bad indexing.
+Fixed in `app/api/analyses/route.ts`: destructure `{ data, error }`, add
+`.select()`, read `insertedRows?.[0]?.id`, and keep an explicit 500 when no row
+comes back. Verified: `POST /api/analyses` -> `200 {"analysisId":"…"}`.
+
+**BUG 2 — correct model output was discarded for 3 of 5 stages.**
+All five parsers (`parseAIResponse`, `parseRootCauseResponse`,
+`parseEvidenceResponse`, `parseSolutionResponse`, `parsePatchResponse`) used a
+bare `JSON.parse`. This server accepts `response_format: {type:'json_object'}`
+but returns ```json-fenced content. Reproduced 5/5 times for root cause plus
+evidence and solution; file discovery and patch happened to come back bare.
+The discarded root cause was **correct** — confidence 0.95, the right affected
+files, the right line ranges — yet the stage stored nothing and surfaced the
+false message *"Insufficient analysis: confidence 0% with no affected files
+identified. The model failed to analyze the provided source code. Retry with
+fallback model."* Retrying could never help. Root cause is a hard prerequisite
+for evidence, solution and patch, so one fence blocked the whole pipeline.
+
+Fixed with a new shared helper `extractJsonObject` (`lib/ai/validation/json.ts`,
+~25 lines) used by all five parsers. It is **strictly more permissive**: raw
+text first, and only on failure one retry with a single surrounding markdown
+fence removed. It can never turn a response that already parsed into a failure
+and never changes what a well-behaved provider returns. The misleading
+validation message was left alone (it is still correct for genuinely
+non-analysing models). Approved by the user as a minimal, targeted change.
+
+### Deliberately NOT changed
+
+Routing, catalog, fallback, context gates, `STAGE_CONTEXT_MIN`,
+`normalizers`, `stageSelection`, `model-router/`, `providers/`, `config.ts`,
+pricing, and the Strict-Free policy are all absent from the diff. No provider or
+model name is hardcoded; the only literals added are `local` (a provider id the
+schema already uses) and the user's own endpoint URL in throwaway test
+fixtures that were deleted.
+
+### Findings recorded, not fixed
+
+1. **`meta.n_ctx` is still unread** (follow-up 3 from the earlier TASK T).
+   The catalog reports 128 000 for a server whose real capacity is 65 536, so
+   `root_cause_analysis` (min 128 000) is auto-eligible for a model that cannot
+   really serve it. In this run it happened to fit (~5-6k prompt tokens), so
+   nothing failed — but the gate is passing on a fictional number.
+2. **`evidence_extraction` is excluded for this endpoint** (min 200 000 vs
+   128 000). Expected, documented policy, gate untouched. It is also the one
+   stage that would gain the most from the `meta.n_ctx` fix above.
+3. **Env-configured providers are invisible to `/models` but live at runtime.**
+   `GEMINI_API_KEY` is set, so `buildAvailableProviders` treats Gemini as
+   available and the registry strategy chain put `gemini-2.5-pro` FIRST for
+   root cause — while `GET /api/models` reports Gemini as `disconnected` and the
+   UI's Balanced/Quality picks `local/local`. The UI selection and the runtime
+   selection therefore disagree for env-configured providers. Pre-existing and
+   provider-agnostic, but it is exactly why a "picked local" UI can execute on
+   something else first.
+4. **The local server exited twice mid-test** (after ~10 heavy generations, and
+   again later), silently — port 8000 simply stopped answering and no process
+   remained. Any stage in flight would have failed with a connection error.
+   Operational, not product.
+5. **No regression spec exists for `extractJsonObject`.** It was validated with
+   8 ad-hoc assertions against the real captured payloads (bare JSON unchanged,
+   fenced JSON now parses, prose still `null`, fenced non-JSON still `null`,
+   null input safe, and the three stage parsers on real content) — worth
+   promoting to a permanent `.spec.ts`.
+
+### Files changed
+
+- `app/api/analyses/route.ts` — BUG 1 fix (insert result handling).
+- `lib/ai/validation/json.ts` — NEW, `extractJsonObject`.
+- `lib/ai/validation/index.ts`, `root-cause.ts`, `evidence.ts`, `solution.ts`,
+  `patch.ts` — BUG 2 fix (use the shared extractor; `any` narrowed to
+  `unknown`).
+- `think/state.md` — this record.
+
+No other file was modified. The throwaway E2E harness and the 9 test auth users
+were deleted.
+
+### Validation
+
+- `npx tsc --noEmit` -> exit 0.
+- **All 16 spec suites -> ALL PASS, 449 checks** (identical to the pre-change
+  baseline: 13 + 33 + 21 + 20 + 176 + 31 + 16 + 21 + 16 + 14 + 9 + 11 + 15 +
+  27 + 9 + 17).
+- 8 ad-hoc `extractJsonObject` assertions against the real captured payloads ->
+  all pass.
+- `npm run lint`: **88 problems (59 errors)** vs **92 (63 errors)** measured with
+  this task's changes stashed — a net **-4** (the four `as any` casts removed
+  from the route). ESLint scoped to the 7 changed/added files: **0 errors**; the
+  3 remaining warnings (`prefError`, `summaryLower`, `explanationLower`) are
+  pre-existing unused-variable warnings.
+- Secret scan of the changed files -> 0 hits. No paid API call: the guard
+  recorded only `generativelanguage.googleapis.com` attempts, all blocked
+  before transmission.
+- Not re-confirmed: a final clean 5-stage run on a brand-new analysis after the
+  `any`->`unknown` type narrowing, because the local server had exited again by
+  then. The complete `status: completed` run above already used the BUG 2 fix;
+  the narrowing after it is type-only and is covered by tsc, the 449 spec checks
+  and the 8 parser assertions. User chose to skip the re-run.
+
+## STOP
+
+---
+
+## TASK U — Fix local context metadata and runtime/UI catalog divergence
+
+**Status:** ✅ COMPLETE (October 2, 2026). `skills.md` re-checked absent (glob).
+No paid API calls, no credentials exposed, no live rebuild/discovery triggered.
+Two focused fixes only — no provider-architecture redesign, no hardcoded
+provider/model names in product code, no context-gate weakening.
+
+### Exact source of both discrepancies (traced, not guessed)
+
+**1. Local context metadata — `meta.n_ctx` never read.**
+- Live llama.cpp `GET /v1/models` returns
+  `{"id":"local","owned_by":"llamacpp","meta":{"n_ctx":65536,"n_ctx_train":262144}}`.
+- `probeLocalModelsList` (`lib/ai/connection/testConnection.ts`) preserves
+  entries verbatim, so `meta` reaches the normalizer intact.
+- `normalizeLocalModel` (`lib/ai/catalog/normalizers.ts:598-605`, pre-fix) read
+  ONLY top-level `max_model_len` / `context_length`. `meta.n_ctx` was ignored,
+  so `contextWindow` fell through to `finalize`'s honest-but-wrong-here 128K
+  default (`normalizers.ts:200`, `contextSource:'default'`).
+- Stage gates (`lib/ai/catalog/stageSelection.ts:48-54`: 32K/128K/200K/32K/32K)
+  then approved on the fictional 128K: `root_cause_analysis` (min 128K) passed
+  for a server whose real capacity is 65 536. Correctness issue: the gate may
+  approve a request exceeding actual model context.
+
+**2. Runtime/UI catalog divergence — env fetched then dropped.**
+- Runtime availability is env-inclusive: `resolveUserCredentials` env-first
+  (`lib/ai/connection/service.ts:119-173`), `fetchLiveModels` fetches every
+  provider with a key (`lib/ai/catalog/live.ts:201-202`, `resolved || envKey`),
+  `buildAvailableProviders` counts env (`lib/ai/model-router/index.ts:237-253`
+  via `isProviderConfigured`). Env Gemini CAN rank first via the registry
+  strategy chain (observed: `gemini/gemini-2.5-pro` attempted before local).
+- Display/catalog is DB-only: `getProviderConnections`
+  (`lib/ai/connection/service.ts:86-117`, pre-fix comment "must NOT keep a
+  provider connected") → `discoverModels` filters static + live by DB-only
+  (`lib/ai/model-intelligence/index.ts:110-121,161-164`, live env groups
+  fetched then skipped) → `/api/models` filters `PROVIDER_DEFINITIONS` by
+  DB-only (`app/api/models/route.ts:33-60`, env shows disconnected/0 models)
+  → client `libraryBaseModels` filters by DB-only (`app/models/page.tsx:85-88`).
+- Net: `GEMINI_API_KEY` set → runtime executes Gemini first, UI reports Gemini
+  disconnected and Balanced/Quality pick `local/local`. The fetch-then-drop in
+  `fetchLiveModels`→`discoverModels` proves the split is accidental, not
+  designed: one layer assumes env-included, the next assumes DB-only.
+- Connection-status hiding itself was intentional (DB-only so disconnect flips
+  reliably); the CATALOG/RUNTIME disagreement it causes is the accidental part
+  fixed here.
+
+### Fixes (smallest consistent change)
+
+**Fix 1 — `lib/ai/catalog/normalizers.ts` (local context).**
+- New `extractLocalContextWindow`: priority `max_model_len` → `context_length`
+  → top-level `n_ctx` → `meta.n_ctx`; only finite positive numbers accepted;
+  `meta.n_ctx_train` deliberately NEVER read (training ≠ servable capacity);
+  non-object/null/array meta, missing/null/string/zero/negative/NaN/Infinity
+  all yield null → honest 128K default preserved. No server software named.
+- `normalizeLocalModel` consumes it; `contextSource:'live'` when any signal
+  present, `'default'` otherwise. Pricing/free/capability logic untouched;
+  unknown pricing still never free; gates/weights/scoring untouched.
+
+**Fix 2 — `lib/ai/connection/service.ts` (`getProviderConnections`).**
+- After DB rows, ORs `envKeyForProvider(p)` generically over `PROVIDER_NAMES`
+  (no names hardcoded; `local` has `ENV_VAR ''` so it stays DB-only by
+  construction). Booleans only — no keys reach the browser; `serverConfigured`
+  remains the UI hint.
+- Single-function fix propagates consistently: `discoverModels` (static+live
+  filter), fingerprint (`buildProviderFingerprint`), `getCatalogForDisplay` /
+  `getOrBuildCatalog` staleness branches, `/api/models` providers/models, and
+  client `libraryBaseModels` all agree with `buildAvailableProviders` runtime.
+  Strict Free preserved (unknown-priced env models never `isFree`; free pool
+  still explicit-zero/registry-confirmed only); pricing rules preserved (live /
+  registry / unknown semantics unchanged).
+
+### Tests (mocked boundaries only — no network/DB/paid calls/secrets)
+
+- NEW `local-context-metadata.spec.ts` (10 checks, ALL PASS): llama.cpp
+  65536→live; `n_ctx_train`-only→default (not 262144); top-level priority over
+  meta; top-level `n_ctx` fallback; missing→default; 9 untrustworthy meta
+  shapes→default; 65K passes 32K gates but fails 128K/200K (gates NOT
+  weakened); 128K inclusive gate; unknown pricing never free with live
+  context; Balanced/Quality still select 65K local where eligible.
+- NEW `runtime-display-consistency.spec.ts` (8 checks, ALL PASS): env-only→
+  display true AND runtime env true (consistent); no-env+no-DB→both false;
+  DB-without-env→true (preserved); local DB-only (env for others never flips
+  local); fingerprint includes env provider; JSON of connections contains no
+  key material (booleans only); Strict Free drops unknown-priced env override
+  + empty free pool; pricing stays unknown/non-free.
+- Regression: ALL 16 pre-existing suites re-run unchanged (stage-overrides
+  17, classify-diagnostics 33, manual-credential-fallback 9,
+  automatic-candidates 13, stage-attempt-view 9, preference-mode 11,
+  preference-read-failure 15, local-provider-connection 31,
+  local-provider-registration 21, local-provider-discovery 16,
+  local-provider-ui-flow 16, local-catalog-strategy 21,
+  local-runtime-execution 14, local-connect-stage-visibility 20,
+  provider-connection-latency 27, local-five-stage-integration 176 = 449)
+  + 18 new = **467 checks total, ALL PASS**.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → exit 0 (before and after spec warning fix).
+- `npm run lint` on the 4 changed/new files → 0 errors, 0 warnings (one
+  unused-param warning in the new spec fixed by `void columns`).
+- Full-repo lint baseline untouched (no new findings outside the 4 files).
+- `git diff` inspected: only `normalizers.ts`, `service.ts`, the 2 new specs,
+  and this entry. `stageSelection.ts`, `cost.ts`, `stageTokenProfiles.ts`,
+  `gateway.ts`, `routing.ts`, `model-router/`, `config.ts`,
+  `strategy-selection.ts`, providers, routes: absent → no scoring, gate,
+  pricing, fallback, or routing change.
+- Secret scan of the diff → 0 hits. No hardcoded provider/model names in
+  product code (only generic field shapes + `PROVIDER_NAMES` loop; spec
+  fixtures use generic `server-a` ids).
+
+### Limitations / accepted trade-offs
+
+1. Env providers now report `connected:true` for every user while an env key
+   exists. Disconnecting an env provider via UI deletes the DB row but the
+   provider stays connected via server env (honest — runtime was already using
+   it). No 409/status explanation was added (would be a connect-flow redesign;
+   the card already shows "Configured via server" + "Server env").
+2. Existing persisted catalogs gain a fingerprint change (env set now included)
+   → one background rebuild per user on next display read; runtime
+   `getOrBuildCatalog` keeps its synchronous guarantee unchanged.
+3. `meta.n_ctx` is trusted as live servable capacity when finite-positive. A
+   server misreporting it would propagate (same trust already given to
+   `max_model_len`/`context_length`); untrustworthy shapes still default
+   safely — conservative fallback preserved.
+4. No live E2E re-run against llama.cpp (would need the local server +
+   Supabase session); verification is via the exact captured payload shape
+   plus gate/selection helpers. Evidence extraction remains correctly excluded
+   (200K > 65 536) and is not weakened.
+
+## STOP
+
+---
+
+## TASK V — Final production verification after Task U (October 2, 2026)
+
+**Status:** ✅ VERIFIED — NO REGRESSION, NO PRODUCTION CHANGES.
+`skills.md` re-checked absent (glob). Working tree untouched except this
+entry (temp probes deleted; `git status` identical before/after).
+No paid API calls, no credentials exposed (lengths only), no DB reads or
+writes, no rebuild/discovery/classification triggered, no routing / catalog /
+gate / pricing / fallback change.
+
+Task U fixed (1) local context propagation incl. llama.cpp `meta.n_ctx` and
+(2) runtime/UI provider catalog consistency for env-configured providers.
+This task verifies both through the REAL BugWiser application against the
+REAL local endpoint (llama.cpp on `127.0.0.1:8000`).
+
+### 1. Local model discovery (REAL endpoint + REAL code)
+
+- Live `GET /v1/models` → 200, one model: `id=local`,
+  `owned_by=llamacpp`,
+  `meta={n_ctx:65536, n_ctx_train:262144, …}`.
+  **Actual context discovered: 65,536.**
+- `normalizeProviderModel('local', <real payload>)` →
+  `contextWindow=65536`, `contextSource='live'`, `priceSource='unknown'`,
+  `isFree=false`. The old 128K fallback is GONE for this server; the
+  catalog now records **65,536**. `n_ctx_train` (262144) correctly ignored.
+- `toCatalogModel` passthrough (the exact `/api/models` → UI mapping) →
+  `contextWindow=65536`, `providerId=local`, `modelId=local`,
+  `price.isFree=false`. **The UI receives the same context metadata.**
+
+### 2. Stage eligibility with 65,536 (gates NOT bypassed or weakened)
+
+`STAGE_CONTEXT_MIN` unchanged (32K/128K/200K/32K/32K — verified in code).
+With the real 65,536 window, `buildAutomaticPool` + `selectStageModels`:
+
+| Stage | Min | Gate | balanced | quality | free |
+|---|---|---|---|---|---|
+| relevant_file_discovery | 32K | PASS | **local/local** | **local/local** | unavailable |
+| root_cause_analysis | 128K | **REJECT** | null | null | unavailable |
+| evidence_extraction | 200K | **REJECT** | null | null | unavailable |
+| solution_generation | 32K | PASS | **local/local** | **local/local** | unavailable |
+| patch_generation | 32K | PASS | **local/local** | **local/local** | unavailable |
+
+- Root Cause is no longer automatically eligible (65,536 < 128,000) —
+  the exact correctness issue Task U fixed (the fictional 128K used to
+  pass it). Evidence remains ineligible. Free is `unavailable` on all
+  five (unknown ≠ free); `getFreeStageCandidates` empty,
+  `isConfirmedFreeModel` false, `prepareStrictFreeRun` drops the override.
+
+### 3. Manual selection (Configure — no gate by design)
+
+`buildStageCandidatePool` (connected-only, no pricing/context filter) contains
+`local/local` for **all five stages**, searchable by provider id `local`,
+bucketed under `other` (never `free`). Manual override for a gated-out
+stage (Root Cause) was executed for real → success on `local/local`
+(see §5). Manual ≠ automatic: never confused in any assertion.
+
+### 4. Runtime/UI provider consistency (REAL env, no credentials)
+
+- `.env.local` holds `GEMINI_API_KEY` (length 53, value never printed;
+  plain `tsx` does not load `.env.local`, so the probe mirrors `next dev`
+  by exporting it into `process.env` — same value the runtime sees).
+- `getProviderConnections` (empty DB) → `gemini:true` (display/catalog);
+  `isProviderConfigured('gemini')` → `true` (runtime). **Both agree.**
+- `local` stays DB-only (`false` with no row — env for others never flips
+  it). `JSON.stringify(connections)` contains no key material (booleans
+  only). Strict Free / pricing semantics for unknown-priced env models
+  unchanged (dropped override, empty free pool, `priceSource:'unknown'`).
+
+### 5. Real analysis (REAL `runWithFallback` → REAL llama.cpp)
+
+Fetch guarded to loopback-only (any non-`127.0.0.1`/`localhost` host throws;
+zero external attempts occurred) and all external provider env keys cleared,
+so `local` was the only available provider. Model id `local` = the server's
+real `/models` id (no aliasing — the Task T smoke-script artifact cannot
+recur in this path).
+
+| Stage | Path | Executed on | fallbackCount | attempted | Real output |
+|---|---|---|---|---|---|
+| relevant_file_discovery | **automatic** candidates | **local/local** | 0 | `[local/local]` | `{"ok": true}`, parsed |
+| solution_generation | **automatic** candidates | **local/local** | 0 | `[local/local]` | `{"ok": true}`, parsed |
+| patch_generation | **automatic** candidates | **local/local** | 0 | `[local/local]` | `{"ok": true}`, parsed |
+| root_cause_analysis | automatic (empty pool) | **not executed** | — | — | structured `No configured providers available…`, **zero HTTP** |
+| evidence_extraction | automatic (empty pool) | **not executed** | — | — | structured error, **zero HTTP** |
+| root_cause_analysis | **MANUAL override** | **local/local** | 0 | `[local/local]` | parsed (Configure permitted) |
+
+- The three eligible stages ran through the AUTOMATIC path (not overrides)
+  — stronger than the smoke script's manual path. No stage was approved
+  via the old 128K fallback: the two gated-out stages failed structured
+  with zero local HTTP instead of executing.
+- The `[config] No models available for task … falling back to all
+  configured models` lines observed are the known truthful-signal warning
+  (MODEL_REGISTRY has no `local` rows — Task T finding 1): inert, the
+  executed chain is unaffected.
+- Total local HTTP calls: 4 (3 automatic + 1 manual).
+
+### 6. Persisted/runtime metadata
+
+Every success recorded via the production `buildStageAssignmentRecord`
+shape: `{provider:'local', model:'local', fallbackCount:0,
+attempted:[{provider:'local', model:'local'}]}` — provider + model +
+fallbackCount + attempts all accurate; selected === actual
+(`deriveStageAttemptView` state `initial`). Gated-out stages produced no
+record and no phantom attempt. Catalog-side metadata: provider `local`,
+model `local`, context 65,536/live, pricing unknown/non-free.
+
+### 7. JSON parser fixes (previous task) still work
+
+Real outputs this run arrived bare (`{"ok": true}`) and parsed via
+`extractJsonObject`; the fenced shape (` ```json … ``` `, as observed in
+the Task T live run) asserted `→ {ok:true}`, prose still `→ null`.
+No parser change needed.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → exit 0.
+- All 18 spec suites → **ALL PASS** (counts unchanged from Task U:
+  17 + 33 + 9 + 13 + 9 + 11 + 15 + 31 + 21 + 16 + 16 + 21 + 14 + 20 + 27 +
+  176 + 10 + 8 = **467 checks**).
+- Task U regression specs re-run explicitly: `local-context-metadata`
+  ALL PASS (10/10), `runtime-display-consistency` ALL PASS (8/8).
+- `npx eslint` on the 4 Task U files (normalizers, service, 2 specs) →
+  clean, 0 findings.
+- Temp probes (`verify-task-v-part1/2.ts`): 10 + 8 checks ALL PASS against
+  live code + live endpoint, then DELETED. No DB/Supabase traffic of any
+  kind (no reads, no writes, no users created).
+- `git diff` reviewed: no scoring, gate, pricing, fallback, routing, or
+  catalog-architecture change (this task changed only this file).
+
+### Files changed
+
+- `think/state.md` (this record) — the ONLY file touched.
+
+### Checkpoint verdict
+
+**The Local LLM integration is READY for a stable commit checkpoint.**
+Both Task U fixes behave correctly end-to-end (65,536 recorded and served,
+gates corrected, env/runtime consistent, real local execution on all
+eligible stages, fallbackCount/attempts metadata accurate, parser intact)
+and the full suite is green. No production change was made because no
+regression was found. (Unchanged from prior tasks: migration-015 state and
+the Task T follow-ups 1–4 remain as recorded; none was in Task V scope.)
+
+## STOP
+
+---
+
+## TASK W — Two product bugs: env-provider "silent reconnect" + local model missing from search (October 2, 2026)
+
+**Status:** ✅ FIXED + REGRESSION-TESTED. Two root causes confirmed
+empirically (code + live DB/process timeline), smallest correct fixes applied,
+20/20 spec suites green. No paid API calls, no credentials exposed (test
+sentinels only), no pricing/gate/routing/fallback/architecture change.
+
+### Bug 1 — env provider "reconnects" after Disconnect
+
+**Root causes (all three had to be closed):**
+
+1. `getProviderConnections` ORs server env keys into `connected`
+   (`lib/ai/connection/service.ts`) — by design (Task U) and correct for
+   display/runtime. The local provider has no env var (`ENV_VAR_BY_PROVIDER.local = ''`).
+2. `DELETE /api/models/connections/[provider]` called `removeUserConnection`
+   unconditionally and returned `{ok:true}`. For an env provider there is no
+   row to delete (or deleting it changes nothing), so the client got a fake
+   success; the next `GET /api/models` re-reported it connected — the
+   "silent reconnect". `think/state.md` documented both the bug (line 252)
+   and the planned fix ("HTTP 409 + message", line 273), and Task 4's entry
+   claimed it — but `git log -S "409"` shows the guard NEVER existed in
+   committed code.
+3. `ProviderCard` rendered the Disconnect button regardless of
+   `serverConfigured`, a dead-end even with a server-side refusal.
+
+**Checked and rejected:** a per-user "disconnected" tombstone override. No
+architecture exists for it (no code writes `status:'disconnected'` rows for
+env providers, `resolveUserCredentials` merges env unconditionally, no
+re-enable path). Per the brief, this fix stays within existing architecture.
+
+**Fix (generic over `PROVIDER_NAMES` — no Gemini/one-provider hardcoding,
+zero credentials in any message):**
+
+- `disconnectBlockedReason(provider)` in `lib/ai/connection/service.ts` —
+  returns a non-secret refusal message for ANY env-var-mapped provider, null
+  otherwise; `local` never refused (no env var).
+- DELETE route: refuse with **409 + message BEFORE any row deletion** (no
+  partial mutation behind an error). Client already surfaces `ack.error`
+  (`connectState.runDisconnect` → `onError`) so the toast shows the reason.
+- `canDisconnectProvider(provider)` in `connectState.ts`: the card shows
+  "Server-managed / Disconnect unavailable" instead of the dead-end button
+  when `serverConfigured`. The 409 remains the backstop for stale UIs.
+
+**Before:** Disconnect → `ok:true` → card flips Disconnected → next GET
+silently flips it back (no error ever shown).
+**After:** server-managed providers show no Disconnect button; any attempt
+gets 409 + a visible reason; state never flips; user-key providers and
+`local` disconnect exactly as before (row deleted, `ok:true`).
+
+### Bug 2 — local model absent from model search/list
+
+**Root cause (reproduced from the live DB):** `fetchLiveModels`
+(`lib/ai/catalog/live.ts`) swallowed per-provider fetch failures (log-only
+`.catch`), so `discoverModels`/`getOrBuildCatalog` could not distinguish
+"provider has no models" from "provider's fetch failed". The rebuild at
+**14:51:20 UTC** ran one minute BEFORE the user's llama-server started
+(**14:52 UTC**): local's fetch rejected, yet the build **stored 28 gemini
+models with fingerprint `gemini:local` and ZERO `provider='local'` rows** as
+the authoritative catalog (fingerprint matched current connections, not stale
+within the 1h TTL). `getProviderConnections` correctly said `local:true` —
+every consumer trusted the catalog, so `filterStageModels(pool, 'local')`
+returned `[]`: the reported symptom. The model only reappeared at the next
+unrelated rebuild (**15:17:37 UTC**, 29 rows) — ~26 minutes of invisibility,
+guaranteed to recur on any local-endpoint blip.
+
+**Fix (source-side, no architecture change, `CATALOG_TTL_MS=1h` kept):**
+
+- `fetchLiveModels` now returns `LiveModelsResult { groups,
+  failedProviders }` — a provider counts as failed only if its fetch was
+  ATTEMPTED (key/endpoint present) and rejected; credential/endpoint skips
+  are not failures. Injectable `resolveLocalEndpoint`/`resolveUserCredentials`
+  deps (production passes nothing; single production caller updated).
+- `discoverModels` propagates `failedProviders` (whole-pass rejection marks
+  every connected provider).
+- `shouldPersistCatalogBuild(hasPersistedCatalog, failedProviders)` gate in
+  `getOrBuildCatalog` (after the existing generation guard, before
+  `storeCatalog`): a build that lost a connected provider's models is
+  returned to its caller exactly as before but does NOT replace an existing
+  catalog — the display keeps serving the last complete catalog (local stays
+  searchable), and revalidate loops (fp mismatch → rebuild on GET, TTL →
+  background rebuild) retry until a clean build lands. First-ever builds
+  still store (nothing to protect; heals at the ≤1h TTL bound).
+
+**Before:** failed local fetch → partial catalog persisted as authoritative
+→ local invisible in search until an unrelated successful rebuild.
+**After:** refused store → last-complete catalog (with local) keeps serving
+→ `filterStageModels(pool,'local')` finds `local/local` immediately; heal is
+automatic on the next clean build.
+
+**Preserved (asserted verbatim in specs):** unknown pricing never free
+(Free/Strict Free empty, override dropped, `unavailable` state), buckets
+never label local as Free, `STAGE_CONTEXT_MIN` 32K/128K/200K/32K/32K
+unchanged (65,536 passes only the three 32K stages), manual Configure/search
+unaffected, no provider/model hardcoding, no scoring/selection changes.
+
+### New regression specs
+
+- `env-provider-disconnect.spec.ts` — **8 checks**: every env-mapped
+  provider refused (key never leaked, env var name never leaked), same
+  providers allowed once env removed, local never refused, refused DELETE
+  mutates nothing (route-mirror decision order, fake DB) while still reading
+  connected, allowed DELETE deletes the row, local path end-to-end,
+  `runDisconnect` rejects with the server message and NEVER flips state,
+  `canDisconnectProvider` UI gate.
+- `local-model-search.spec.ts` — **12 checks**: persist gate truth table
+  (incident case, clean builds, first build), refused store keeps local
+  searchable (case-insensitive `local`/`LOCAL`/`loca`, disconnected excluded),
+  `fetchLiveModels` reports remote-500 + local-refused failures while
+  successes and skips stay clean (global fetch mocked, credentials injected,
+  no real network), unknown-pricing-never-free across all five stages,
+  Strict Free drops the override, buckets, gate values, 65,536 automatic
+  eligibility (32K stages only, 128K/200K rejected), manual/balanced
+  selection reaches local.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → exit 0 (clean).
+- All **20 spec suites → ALL PASS** (18 pre-existing + 2 new) =
+  **487 checks** (467 pre-existing unchanged + 8 + 12 new).
+  Note: a stray empty directory named `calculateTotal.spec.ts` exists at the
+  root (predates this task, untracked, empty) — file-only sweeps ignore it.
+- `npx eslint` on the 8 changed files → 0 errors (1 pre-existing
+  `PROVIDER_DEFINITIONS` unused-import warning in model-intelligence, not
+  touched by this task).
+- Runtime smoke against the running `next dev`: `DELETE
+  /api/models/connections/gemini` → 401 (auth guard runs before the new 409,
+  module graph loads), `GET /api/models` → 401 (same, no session in probe).
+  No session existed for an authenticated 409 E2E; the refusal logic is
+  covered by the route-mirror spec.
+- Live DB probes confirmed the incident timeline and the healed state (29
+  rows incl. local; search finds `local/local`); all probe/scratch files
+  (`probe-task-w*.ts`, `test-local-search*.ts`) deleted.
+- No network to paid providers, no DB writes, no rebuild/classification
+  triggered by this task's verification.
+
+### Files changed (this task)
+
+- `lib/ai/connection/service.ts` — `disconnectBlockedReason`.
+- `app/api/models/connections/[provider]/route.ts` — 409 guard before delete.
+- `components/models/connectState.ts` — `canDisconnectProvider`.
+- `components/models/ProviderCard.tsx` — server-managed disconnect honesty.
+- `lib/ai/catalog/live.ts` — `LiveModelsResult.failedProviders`, injectable deps.
+- `lib/ai/model-intelligence/index.ts` — `DiscoverOutcome`,
+  `shouldPersistCatalogBuild` gate, `existing` hoisted for the gate.
+- `env-provider-disconnect.spec.ts` (new, 8 checks).
+- `local-model-search.spec.ts` (new, 12 checks).
+
+### Relation to earlier entries
+
+Supersedes Task U "Limitations / accepted trade-offs" #1 (which recorded
+that no 409/explanation had been added): the 409 + UI honesty now exist and
+are spec-covered. Bug 2's fix is independent of Task U/V local-context work
+(the 65,536 metadata was correct all along — the failure was the store gate,
+not normalization).
+
+## STOP
+
+---
+
+## TASK X — Unify provider connection semantics (investigation; redesign reported, NOT implemented)
+
+**Status:** ✅ INVESTIGATION COMPLETE + CURRENT STATE SEMANTICS PINNED
+(October 2, 2026). `skills.md` re-checked absent (glob). No product code,
+route, schema, or prior spec changed — ONE new spec. No paid API calls, no
+secrets in output, no pricing/context-gate/fallback/Strict-Free change, no
+routing change.
+
+### Verdict (per the brief's implement-vs-report rule)
+
+**Report-only.** A unified user-level Disconnect for env-configured providers
+requires ALL of: (a) a schema migration — a per-user opt-out state that does
+NOT exist anywhere (grep for a disabled/disabled-provider state → 0 hits;
+`provider_connections.status` CHECK is `('connected','error')` only,
+migration 009; disconnect = row DELETE); (b) a runtime availability semantic
+change — `buildAvailableProviders` gates on a DEPLOYMENT-wide env check that
+is not user-scoped, and `createProviderInstanceWithApiKey` silently falls back
+to the env key, so a per-user disable would NOT stop execution without
+changing both; (c) a new keyless re-enable flow — `POST /api/models/connect`
+REQUIRES an apiKey + healthCheck today. Schema + routing-availability +
+product-flow = provider-state redesign → deferred per the brief, design +
+smallest migration path reported below.
+
+### Why env credentials exist (Q1/Q2)
+
+- Present since the FIRST LLM commits (`git log -S "ENV_VAR_BY_PROVIDER"` →
+  "revamp of the model page", "implementing LLM phase-1 : done") — original
+  deployment configuration, documented in README.md:322 (env table, optional)
+  and REPRODUCIBILITY.md:307 ("at least one AI provider API key is set in
+  `.env.local`"). Purpose: run the app without per-user key entry.
+- **Deployment-level by intent, not user connections**: process-wide secrets
+  outside the DB shared by all users; `serverConfigured` is documented as
+  "the app can derive an API key purely from server env config"
+  (lib/ai/catalog/types.ts:31). The user-connection concept is exclusively
+  `provider_connections`. Task U OR-ed env into display for runtime/display
+  consistency; Task W labeled it "Server-managed" — both consistent with the
+  deployment-level intent.
+- Two parallel env maps exist: `ENV_VAR_BY_PROVIDER` (connection/service.ts)
+  for display/credential resolution, and the `envApiKey`/`isProviderConfigured`
+  switches (providers/registry.ts) for runtime instances/availability.
+
+### Exact current architecture problem
+
+The connection model is a **boolean merge with no third state** — four seams,
+all OR-ing env in without any user veto:
+
+1. Display: `getProviderConnections` = `(row.status==='connected') OR envKey`
+   (connection/service.ts:105-151).
+2. Credentials: `resolveUserCredentials` adds env keys first, DB rows fill
+   (connection/service.ts:157-214; env outranks the user's own key).
+3. Execution availability: `buildAvailableProviders`
+   (model-router/index.ts:237-253) = `isProviderConfigured(env)` —
+   **deployment-wide, not user-scoped** — ∪ user-scoped `providerTokens` ∪
+   `localEndpoint`.
+4. Instance construction: `createProviderInstanceWithApiKey` falls back to
+   `envApiKey()` when no key is supplied (providers/registry.ts:117) — a
+   disabled provider would still EXECUTE with the deployment key.
+
+Consequence: "server env available AND user opted out" is
+**unrepresentable** — the pair `connected=false + serverConfigured=true` can
+never occur (now spec-pinned as an invariant). That is precisely why Task W
+could only offer refusal (409 + hidden button): honest, but a SECOND
+lifecycle class in the product. Side effect: a user's own pre-existing row is
+locked while env exists (State B below — refusal preserves the row).
+
+### Answers to the 10 questions (exact sources)
+
+- **Q3** — Two of three YES: server availability (`isProviderConfiguredBysEnv` /
+  `isProviderConfigured`), user connection (`provider_connections.status`).
+  Explicit disable: NO state exists.
+- **Q4** — None. Closest precedent: `status='error'` already renders
+  disconnected (the `=== 'connected'` gate), but reusing it as opt-out would
+  conflate error with intent AND still fail to gate runtime (env merge +
+  availability gate ignore rows). Spec State E pins this precedent.
+- **Q5** — An opt-out state is the RIGHT long-term model, but it is NOT the
+  smaller/safer option TODAY: it must gate 3 independent env-consumption
+  paths (display merge, credential merge, execution availability + instance
+  fallback) plus discovery's env fallback (`fetchLiveModels`), needs the
+  migration, and needs a keyless re-enable flow. Server-managed refusal (Task
+  W) remains the smallest safe behavior until that redesign is approved.
+- **Q6/Q7/Q8** — Behavior matrix in the new spec (States A–F) and the
+  recommended matrix below.
+- **Q9** — Generic: chutes/openrouter/opencode/gemini/deepseek/zai/openai all
+  map to env vars; the spec sweeps `PROVIDER_NAMES`, nothing is
+  Gemini-specific; no product code contains a provider-specific branch.
+- **Q10** — Local unaffected: `ENV_VAR_BY_PROVIDER.local = ''` ⇒ never
+  env-configured, always row-driven (spec State F: all env keys set + empty
+  DB ⇒ local false; row flips it; disconnect never refused).
+
+### Behavior matrix — CURRENT implemented semantics (spec-pinned, 9 checks)
+
+| State | env key | user row | Display | serverConfigured | Disconnect | Runtime |
+|---|---|---|---|---|---|---|
+| A | yes | none | Connected | true | 409 refused, no mutation, reads identical | env key |
+| B | yes | connected | Connected | true | 409 refused — **row locked** | env key (outranks row) |
+| C | removed | connected | Connected | false | allowed → row deleted → **stable Disconnected** | row key |
+| D | removed | none | Disconnected | false | allowed (no-op) | none |
+| E | none | connected / 'error' | Connected / **Disconnected** | false | allowed | row key / none |
+| F (local) | n/a (never) | row-driven | row-driven | false | always allowed | stored endpoint |
+
+The ONLY Connected→Disconnected transition requires a server-admin env
+change (State C→D), never a user refresh — so today's product requirement
+("never Disconnected then Connected after refresh") already holds, via
+refusal, for as long as the redesign is not implemented.
+
+### Recommended provider-state model (for a future task — NOT implemented)
+
+Design B refined: **env = a credential SOURCE that bootstraps the same normal
+lifecycle, gated by an explicit per-user opt-out.** Precedence:
+`DISABLED (user tombstone) > user row > server env > none`.
+
+- Display gains `connectionSource: 'user' | 'server'` (both booleans already
+  exist server-side; additive API field). States: USER_CONNECTED ("Your key",
+  Disconnect), SERVER_AVAILABLE ("Server env" badge, Disconnect — NEW,
+  writes tombstone), NONE (Connect), SERVER_DISABLED (Disconnected + keyless
+  "Reconnect" clearing the tombstone). Local stays purely user-driven.
+- Runtime consumes the SAME precedence: `resolveUserCredentials` skips env
+  for a disabled user; `buildAvailableProviders`' env branch becomes
+  user-scoped; the instance-level env fallback is gated (or made unreachable)
+  so a disabled provider can never execute; `fetchLiveModels`' env fallback
+  gated per user. This is the one routing change — required by the chosen
+  architecture, permitted by the brief when required.
+- Strict Free only ever SHRINKS (fewer connected models); `price.isFree`
+  authority, pricing, `STAGE_CONTEXT_MIN`, fallback policy untouched.
+
+### Smallest migration path (reported, not executed)
+
+1. Migration 016: replace the status CHECK with
+   `('connected','error','disabled')` — 015 already made `encrypted_api_key`
+   nullable, so a tombstone row is `{status:'disabled', encrypted_api_key:
+   NULL}`; additive-only for existing rows.
+2. `connection/service.ts`: `getProviderConnections` — disabled beats env;
+   `resolveUserCredentials` — read all rows, suppress env for disabled rows;
+   cache clear on toggle (existing helper).
+3. DELETE route: env-configured ⇒ upsert tombstone (409 removed); user-key ⇒
+   delete (unchanged). UI: `canDisconnectProvider` always true; label by
+   `connectionSource`.
+4. POST `/api/models/connect`: keyless connect allowed when env-configured
+   (validate with the env key, upsert `status='connected'`) = Reconnect.
+5. Runtime gating (see model above): availability + instance fallback +
+   discovery env fallback, all user-scoped.
+6. Every state change keeps the existing markCatalogDirty + rebuild path.
+7. Tests: full A–F × {env, row, disabled} matrix; multi-user isolation (one
+   user's tombstone never affects another); env rotation; keyless reconnect;
+   execution-gate exclusion (disabled provider never attempted — zero paid
+   calls); Strict Free regression.
+
+### Files changed (this task)
+
+- `provider-state-semantics.spec.ts` — NEW, 9 checks (the ONLY code file
+  touched; no product code modified).
+- `think/state.md` — this entry.
+
+### Validation (exact)
+
+- `npx tsc --noEmit` → exit 0.
+- All **21 spec suites → ALL PASS = 496 checks** (487 pre-existing unchanged
+  + 9 new).
+- `npx eslint provider-state-semantics.spec.ts` → 0 problems.
+- No network/DB/paid calls; env keys saved/restored in try/finally; sentinel
+  values only; secret scan of the new spec → no key material.
+
+### Intentionally preserved
+
+- Task W's 409 + hidden Disconnect button (still the honest minimum until the
+  redesign lands) — unchanged, still spec-covered by
+  `env-provider-disconnect.spec.ts` (8/8).
+- Task U's env-inclusive display/runtime consistency; env-first credential
+  precedence; Strict Free; pricing; context gates; routing; catalog
+  architecture — all untouched.
+
+## STOP
+
+
+## TASK Y - Unified provider connection lifecycle with per-user env disable (Design B) - October 3, 2026
+
+**Status:** IMPLEMENTED + VALIDATED (tsc 0, next build 0, 22 spec suites = 506 checks ALL PASS, eslint clean on changed files, secret scan clean, no network calls).
+
+### Final state precedence (single source: resolveProviderLifecycleState in lib/ai/connection/service.ts)
+
+DISABLED (tombstone row) > USER ROW (status='connected' + key) > SERVER ENV > NONE.
+
+Used by display (/api/models connectionSource/disabled), discovery (getProviderConnections -> discoverModels), and credential gating (resolveUserCredentials). A keyless row with no env resolves to 'none', never 'connected'.
+
+### Migration 016
+
+supabase/migrations/016_provider_connections_disabled_status.sql - drops and re-adds provider_connections_status_check with CHECK (status IN ('connected','error','disabled')). Additive (015 already made encrypted_api_key nullable); existing connected/error rows unaffected. Tombstone = {status:'disabled', encrypted_api_key:NULL}; env credentials are NEVER stored in the row. Not applied to a live DB from this session (no supabase CLI/config in repo) - apply via the normal migration workflow.
+
+### Runtime behavior (all user-scoped)
+
+1. resolveUserCredentials - reads ALL rows; a tombstoned provider gets no credential (its env fallback is suppressed); env-first precedence for everything else unchanged.
+2. buildAvailableProviders - disabledProviders checked BEFORE env/token checks; stale tokens cannot re-enable a tombstoned provider; local endpoint gate kept.
+3. createProviderInstanceWithApiKey(..., {forbidEnvFallback:true}) - throws when no explicit key (fail-closed); historic env fallback kept for callers without the flag.
+4. runWithFallback - chain entries of disabled providers skipped (defense in depth behind the router gates).
+5. fetchLiveModels - skips disabled providers before any fetch (discovery gate); non-disabled env discovery untouched.
+
+Composition-root fix: lib/ai/gateway.ts now forwards routing.runArgs.disabledProviders into runWithFallback - without it none of the router gates would see the tombstone.
+
+### Routes
+
+- DELETE /api/models/connections/[provider]: env-configured provider -> disableUserConnection (tombstone upsert, 200 {ok, status:'disabled'}); otherwise (user-key rows, local) -> removeUserConnection row delete (200 {ok, status:'disconnected'}). Task W's 409 refusal removed.
+- POST /api/models/connect: empty apiKey + env-configured provider -> keyless server-env connect/reconnect (validateCredentials uses the env credential, enableServerEnvConnection upserts {status:'connected', key:NULL} clearing the tombstone; no credential invented or exposed). Non-env empty key still 400 "API key is required". A normal user-key save also clears the tombstone (upsert status='connected').
+
+### UI
+
+/api/models provider payloads now carry connectionSource: 'user' | 'server' | null and disabled: boolean (additive; status/serverConfigured/connected preserved). ProviderCard unified lifecycle: Connected+user key -> "Your key" + Disconnect; Connected+server -> "Server available" + Disconnect (now always available); Disabled -> "Disabled" badge + keyless "Reconnect" (or "Use my own API key"); Server-available but not connected -> keyless "Connect". The "Server-managed / Disconnect unavailable" dead-end and canDisconnectProvider are gone. Client honors the DELETE ack: status 'disabled' -> markProviderDisabled (Reconnect UI state, cleared on next successful connect).
+
+### Tests
+
+22 spec suites, ALL PASS, 506 checks total:
+- NEW provider-lifecycle.spec.ts (10 checks) - plan cases A-J: env+no row, env+user row, tombstone precedence over env, keyless reconnect clears tombstone, key reconnect clears tombstone, env removal with tombstone, disabled vs discovery, disabled vs gateway, local unaffected, no key in payloads/logs.
+- Rewritten env-provider-disconnect.spec.ts (7) - DELETE now returns {ok,status:'disabled'} tombstone, not 409.
+- Rewritten provider-state-semantics.spec.ts (10) - Design B state matrix (env save/restore in finally).
+- runtime-display-consistency.spec.ts (8) - fake rows now carry encrypted_api_key so connected resolves correctly.
+- All 11 local-* suites unchanged and green (local provider regression clean).
+
+### Validation commands
+
+- npx tsc --noEmit -> 0 errors
+- npx next build -> success (all routes incl. /api/models/*)
+- npx eslint <12 changed files> -> 0 problems
+- Secret scan (sk-/AIza/ghp_/Bearer patterns) across changed files -> clean
+- All specs run with fetch stubbed / env restored in finally blocks - no network, no paid API calls.
+
+### Known limitations
+
+- Disconnecting an env-mapped provider that ALSO has the user's own stored key discards that key (row becomes tombstone); reconnect re-enters it. Inevitable under the precedence rule - a delete would silently revert to env.
+- A keyless server-env row reads as 'none' if the env var is later removed (no credential exists) - correct fail-closed behavior, but worth knowing.
+- migration 016 is written but unapplied from this environment.
+- calculateTotal.spec.ts at repo root is a directory (TESTING.md example artifact), excluded from the suite; pre-existing.
+- Working tree remains uncommitted per instructions.
+
+### Files changed in this task
+
+app/api/models/connect/route.ts, app/api/models/connections/[provider]/route.ts, app/api/models/route.ts, app/models/page.tsx, components/models/ProviderCard.tsx, components/models/connectState.ts, lib/ai/gateway.ts, provider-lifecycle.spec.ts (new), env-provider-disconnect.spec.ts, provider-state-semantics.spec.ts, runtime-display-consistency.spec.ts, think/state.md.
+
+Pre-existing partial work in the tree that this task completed: migration 016, connection/service.ts lifecycle helpers, model-router disabledProviders gates, registry forbidEnvFallback, live.ts discovery gate, routing.ts disabledProviders resolution.
+
+### Strict Free / untouched
+
+Strict Free, pricing, context gates, fallback strategy, model scoring, analysis stages, env-first credential precedence for non-disabled providers: all untouched. Disabled providers only shrink the available pool.
+
+
+## TASK Z - Validate and apply migration 016 (provider_connections disabled status) - October 3, 2026
+
+**Status:** COMPLETE - migration VALIDATED + VERIFIED ALREADY APPLIED on the live DB. No application code touched, no rows created, no credentials exposed, no paid API calls. 22 spec suites = 506 checks ALL PASS; `npx tsc --noEmit` = 0 errors.
+
+### Inputs read
+
+- skills.md - ABSENT (same as Tasks X/Y; instructions from AGENTS.md + task brief used).
+- AGENTS.md / CLAUDE.md - read (supabase workflow: README line 292-300 = `supabase db push` OR Supabase Dashboard SQL Editor, files in order).
+- think/state.md - read; note that its older records (lines 6439-7527: "Migration 015 NOT applied to the live DB") are STALE - disproven by live probes below.
+
+### Migration 016 inspected (supabase/migrations/016_provider_connections_disabled_status.sql)
+
+- Content: `ALTER TABLE provider_connections DROP CONSTRAINT IF EXISTS provider_connections_status_check; ALTER TABLE ... ADD CONSTRAINT provider_connections_status_check CHECK (status IN ('connected', 'error', 'disabled'));` - no column changes, no data rewrites, no RLS/policy changes.
+- History cross-check: only 009 (original inline CHECK, auto-named `provider_connections_status_check`, values connected/error) and 016 touch this constraint; 015 drops `encrypted_api_key NOT NULL` + adds `base_url`. No conflicting migration exists; 016 is the highest-numbered file (ordering clean after 015).
+- Safety: ADD CONSTRAINT validates ALL existing rows - with only connected/error rows present it succeeds; effective state cannot regress (bogus statuses still rejected).
+- Idempotent: re-running drops the same-named constraint (IF EXISTS) and re-adds the identical definition - safe to re-apply any number of times.
+
+### Supported workflow attempt
+
+- `npx supabase db push --dry-run` -> EXIT 1: "Cannot find project ref. Have you run supabase link?" - this environment has no supabase/config.toml, no linked project, and no SUPABASE_ACCESS_TOKEN (checked env + ~/.supabase - telemetry only), so CLI apply is not executable from here. The Dashboard SQL Editor is the human-interactive alternative. (npx bumped supabase/.temp/cli-latest v2.116.0 -> v2.119.0 as a side effect; restored with git checkout - tree clean.)
+
+### DISCOVERY: 016 (and 015) are ALREADY APPLIED to the live database
+
+Verified via service-role PostgREST FAIL-SAFE probes (temporary scripts in the opencode temp dir, not in the repo): every insert probe used a fake user_id (00000000-0000-0000-0000-000000000000) so PostgreSQL's FK (`provider_connections_user_id_fkey`) ALWAYS aborts the insert after CHECK/NOT NULL have been evaluated - i.e. the error kind reveals schema acceptance while NO row can ever be created. A marker-provider cleanup DELETE ran regardless (204, deleted nothing).
+
+Schema-level verification matrix (HTTP from PostgREST):
+
+- `status='connected'` + key=NULL -> 409 FK  => status accepted AND key nullable (015 applied)
+- `status='error'`    + key='x'  -> 409 FK  => error rows still accepted
+- `status='disabled'` + key='x'  -> 409 FK  => disabled ACCEPTED (016 in force)
+- `status='disabled'` + key=NULL -> 409 FK  => THE TOMBSTONE SHAPE IS ACCEPTED (015+016 together) - no fixture created
+- `status='pending' | 'bogus_x' | ''` -> 400 23514 check constraint "provider_connections_status_check" => constraint exists and still rejects unknown values (nothing loosened)
+- `GET ?select=base_url` -> 200 (015 column present); OpenAPI `/rest/v1/` -> `encrypted_api_key` NOT in required (nullable), `base_url` present, status default 'connected'
+- History table `supabase_migrations.schema_migrations` is NOT exposed via PostgREST (PGRST205) - applied-at timing cannot be read; the constraint was demonstrably in force at probe time (applied outside this session - most likely via the documented Dashboard workflow between Task Y and Task Z).
+
+### Existing rows affected: NONE
+
+- Live table has exactly 1 row: `{provider:'local', status:'connected'}` - SELECT before/after identical (count 1 -> 1, same status); it validates under the new constraint (0 row rewrites, 0 deletes, 0 inserts - cleanup DELETE removed nothing).
+- No real user's disabled provider was created; schema-level FK-fail-safe probes were sufficient per the task's preference.
+
+### Tests after migration
+
+- `npx tsc --noEmit` -> 0 errors (no application code modified - Task Z touched only think/state.md; supabase/.temp/cli-latest restored).
+- 22 spec suites -> ALL PASS = 506 checks (incl. provider-lifecycle 10, env-provider-disconnect 7, provider-state-semantics 10 - the Task Y lifecycle specs that map 1:1 to this constraint).
+
+### Verdict: is Task Y safe for real UI testing? YES
+
+The schema accepts every state the Task Y implementation produces (`disabled` + key NULL tombstone, keyless `connected` row with key NULL, existing connected/error rows), still rejects unknown statuses, and no existing data changed. End-to-end UI test (connect -> Disconnect an env provider -> badge "Disabled" -> Reconnect) can proceed against the live DB.
+
+### Caveats / limitations
+
+- Exact SQL text of the live constraint expression cannot be read through PostgREST (no pg_catalog access); equivalence to migration 016's file was proven behaviorally for every value the app can produce (connected/error/disabled accepted) plus representative rejects (pending/bogus/empty) - a hypothetical wider list containing only unused values would be indistinguishable, but 009->016 history shows no such DDL.
+- Because 016 was not applied through the CLI from this repo, a future `supabase db push` (once the project is linked) may attempt to re-apply 016 against its history table - harmless, since the file is idempotent.
+- If instead the user applied 016 by pasting the file into the SQL Editor, the CLI history table has no record of it - same conclusion, same harmless re-apply.
+
+## TASK AA - Fix two /models stage-assignment bugs (automatic population + manual persistence) - October 3, 2026
+
+**Status:** COMPLETE - both root causes traced in code (no live repro possible from this environment; reproduction established by pure code trace + regression specs). `npx tsc --noEmit` = 0 errors; 23 spec suites = **514 checks ALL PASS** (506 baseline + 8 new); `npm run lint` = 34 problems (7 errors, 27 warnings), the 7 errors PROVEN pre-existing in page.tsx by baseline-copy A/B lint (identical error profile, only line offsets shifted); `npx next build` = success. No network/DB writes, no paid API calls, no pricing/Strict-Free/fallback changes, no hardcoded models/providers.
+
+### Bug 1 - connecting a provider does not populate stage assignments
+
+**Root cause (display path has no automatic derivation):** `/models` stage rows render EXCLUSIVELY from persisted `stage_overrides` (`loadStageModels`, page.tsx). The catalog already contains connected-provider models and the existing selection machinery (`selectStageModels`, `getAutomaticStageCandidates` - context gate -> family grouping -> provider cap -> stage scoring) is already fed by them at runtime and by setup apply, but NOTHING derives a row display from it when a stage has no override. So after connecting Local/OpenRouter every row stays "No config" until a setup chip is applied or stages are configured by hand.
+
+**Fix (derived, never persisted):** new pure `deriveAutomaticStagePicks(setup, availableModels)` in `lib/ai/catalog/stageSelection.ts`:
+- setup selected (`free`/`balanced`/`quality`) -> `selectStageModels(setup, models)` (existing strategy semantics, incl. Free `unavailable` markers);
+- no setup (`auto`) -> per stage: `getAutomaticStageCandidates` resolved CONFIRMED-FREE FIRST (the same free-first order as runtime `selectModelsForTask`), stage-eligible only; empty pool -> null ("No config").
+
+`app/models/page.tsx` gained two memos: `automaticPicks` (setupChoice x libraryBaseModels) and `displayStageModels` (saved/setup/manual override row wins when it holds a selection or a strict-Free marker; otherwise the derived pick with `isOverride:false`, `origin:undefined`). Row rendering, Estimated Cost, and the Configure-modal baseline all read `displayStageModels`; `handleSavePreference` still reads the state `stageModels` - so derived rows can never enter `stage_overrides` (connecting creates ZERO overrides; Save after a connect persists `{}`). Manual/setup rows render exactly as before. Status for a derived row = "Active" (origin undefined -> deriveStageStatus active; manual mode -> "Inactive" as before).
+
+### Bug 2 - manual Local assignments disappear after refresh (TWO loss points)
+
+**Root cause (a) - the modal checkbox silently gated persistence (deterministic):** opening Configure on an unconfigured stage seeds `localIsOverride = sm.isOverride = false` (checkbox starts UNCHECKED). `handleApplyStageChange` stored `isOverride:false` while still writing provider/model into the row, so the UI immediately displayed the model as "Active" - but `buildStageOverrides` (stageOverrides.ts:21) only persists rows with `isOverride && provider && model`, so Save omitted that stage entirely; refresh -> `loadStageModels` -> "No config". Applying Local to all 5 stages without ticking "Custom Override" lost everything.
+
+**Fix:** new pure `resolveAppliedOverride({checkbox, selectionChanged, previousOrigin})` in `lib/ai/catalog/stageOverrides.ts` - a CONCRETE selection change is a manual override (`isOverride = checkbox || selectionChanged`, origin via existing `resolveOverrideOrigin` -> `'manual'`). The page's `handleApplyStageChange` now uses it, with `selectionChanged` measured against `displayStageModels[stageId]` (the row AS SHOWN: override row or derived automatic pick). Removal flow preserved: UNCHANGED selection + unchecked box -> not persisted (stage-overrides.spec 17/17 untouched; its resolver checks pin `resolveOverrideOrigin`, which is unchanged).
+
+**Root cause (b) - pending-catalog reconcile over-drop (timing):** `shouldReconcileOverrides` returned `true` for `catalogPending && modelCount > 0`. A pending snapshot PROVABLY predates the current provider set (served rows predate the latest connect), so a freshly connected provider's models are missing from it; reconciling DROPS (and the route then PERSISTS the deletion of) valid overrides for those models - connect -> save -> next GET erases -> refresh shows "No config".
+
+**Fix:** in `lib/ai/catalog/overrideReconcile.ts`, while `catalogPending` reconcile runs ONLY when `connectedProviderCount === 0` (nothing connected => no override can reference a connected model; without it stale overrides would never self-heal). Any pending + connected snapshot defers to the authoritative (non-pending) read, at which point the rebuild's snapshot contains every connected provider's models. One contradicting assertion in `provider-connection-latency.spec.ts` ("a populated stale snapshot only under-keeps, which is safe" -> true) was updated to `false` with the connect-window rationale; every other guard case (pending+empty -> false, pending+0-connected -> true, non-pending -> true) is unchanged.
+
+### Preserved behaviors (explicit)
+
+- Automatic selection stays DERIVED: connecting a provider creates no `stage_overrides`, no manual origins, no strategy changes (spec check 3).
+- Manual apply persists with `origin:'manual'` and survives save -> GET -> reload (spec checks 4-6).
+- Context gates untouched: Local 65,536 window remains eligible ONLY for discovery/solution/patch (32K); root-cause (128K) / evidence (200K) get no automatic assignment (spec checks 1, 8); unknown pricing never Free (free-first only orders by `price.isFree`, never fabricates it).
+- Setup chips, Save Preference, strict Free (`unavailable` markers), runtime precedence, catalog revalidation loop, and all A-Y provider lifecycle behavior unchanged.
+
+### Files changed in this task
+
+- `lib/ai/catalog/stageSelection.ts` (+`deriveAutomaticStagePicks`)
+- `lib/ai/catalog/stageOverrides.ts` (+`resolveAppliedOverride`, `AppliedStageOverride`)
+- `lib/ai/catalog/overrideReconcile.ts` (`shouldReconcileOverrides` pending rule + doc rewrite; `modelCount` kept in the input for API/spec compatibility)
+- `app/models/page.tsx` (imports, `automaticPicks` + `displayStageModels` memos, row/cost/modal-baseline read display rows, `handleApplyStageChange` via `resolveAppliedOverride` vs display baseline)
+- `provider-connection-latency.spec.ts` (1 assertion + check title updated for the pending guard)
+- `models-stage-assignment.spec.ts` (NEW, 8 checks covering the 8 code-level regression requirements; tests 9/10 = existing suites + tsc/lint/build runs)
+
+### Validation
+
+- `npx tsc --noEmit` -> 0.
+- 23 suites ALL PASS = 514 checks (baseline 506 + 8 new). New spec: Local-only candidates/eligibility, OpenRouter per-stage scoring, connect-never-persists, manual-apply persistence incl. save body, GET/reload round trip, origin-stays-manual, pending-can-never-erase (guard false + would-erase demonstration), ineligible-stage-stays-unassigned.
+- `npm run lint` -> 34 problems (7 errors, 27 warnings); all 7 errors are the pre-existing page.tsx set (loadStageModels order, compiler skip, setState-in-effect, 4x unescaped Tip quotes) - verified by linting a reverse-patched baseline copy of page.tsx: identical 7 errors/2 warnings, offsets only. No finding on any other changed file.
+- `npx next build` -> success (all routes incl. /models and /api/models/*).
+
+### Known limitations / decisions
+
+- Derived rows render "Active" (design system has no distinct "Automatic" status tone); they carry no badge (badge still keys on `origin:'manual'` only).
+- A stale override (model vanished while snapshot pending) still shows "Not configured" until the authoritative read reconciles it - under-drop is the safe direction; derived display deliberately does not mask saved rows.
+- Runtime chain head for no-override auto stages remains the static strategy assignment (RC-4, pre-existing, out of scope); the derived display reflects the CATALOG automatic selection as the task required.
+- If the original manual repro never clicked "Save Preference", that leg is by design (the Tip documents it); the fix covers both actual code-level loss points (checkbox omission + pending reconcile).

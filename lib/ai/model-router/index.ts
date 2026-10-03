@@ -83,6 +83,14 @@ export interface RunRequest {
    * and a keyless local connection (no `apiKey`) is valid.
    */
   localEndpoint?: { baseUrl: string; apiKey?: string } | null;
+  /**
+   * Providers the user has explicitly DISABLED (per-user tombstone rows).
+   * A disabled provider is excluded from the availability set even when the
+   * deployment env configures it (the env check alone is not user-scoped),
+   * its chain entries are skipped, and instance construction must not fall
+   * back to the env credential (fail-closed). Absent ⇒ nothing is disabled.
+   */
+  disabledProviders?: ReadonlySet<ProviderName>;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -221,25 +229,36 @@ function instanceKey(provider: ProviderName, model: string, apiKey: string | und
 function getOrCreateProvider(
   entry: TaskModelEntry,
   apiKey: string | undefined,
-  localEndpoint?: { baseUrl: string; apiKey?: string } | null
+  localEndpoint?: { baseUrl: string; apiKey?: string } | null,
+  forbidEnvFallback = false
 ): AIProvider {
   const baseUrl = entry.provider === 'local' ? localEndpoint?.baseUrl : undefined;
   const key = instanceKey(entry.provider, entry.model, apiKey, baseUrl);
   if (!providerInstances.has(key)) {
     providerInstances.set(
       key,
-      createProviderInstanceWithApiKey(entry.provider, apiKey, baseUrl ? { baseUrl } : undefined)
+      createProviderInstanceWithApiKey(entry.provider, apiKey, {
+        ...(baseUrl ? { baseUrl } : {}),
+        forbidEnvFallback,
+      })
     );
   }
   return providerInstances.get(key)!;
 }
 
-function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
+/**
+ * The set of providers this run may execute. Env configuration alone is a
+ * DEPLOYMENT-wide check — a per-user tombstone (disabledProviders) always
+ * wins over it, so a disabled provider is never available at runtime.
+ * Exported (pure) so the user-scoping can be validated directly.
+ */
+export function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
   const available = new Set<ProviderName>();
   const providers: ProviderName[] = [
     'gemini', 'deepseek', 'zai', 'opencode', 'openrouter', 'chutes', 'openai',
   ];
   for (const p of providers) {
+    if (request.disabledProviders?.has(p)) continue; // per-user tombstone beats env + tokens
     if (isProviderConfigured(p)) available.add(p);
     const token = request.providerTokens?.[p];
     if (token && token.length > 0) available.add(p);
@@ -248,7 +267,7 @@ function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
   // endpoint (base URL), never by an API key: a connected keyless endpoint
   // must be executable, and a disconnected/unreachable-stored provider must
   // never be (its candidates are skipped by the execution gate below).
-  if (request.localEndpoint?.baseUrl) available.add('local');
+  if (request.localEndpoint?.baseUrl && !request.disabledProviders?.has('local')) available.add('local');
   return available;
 }
 
@@ -419,11 +438,23 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
       continue;
     }
 
+    // Fail-closed (defense in depth): a provider the user DISABLED never
+    // executes — the availability gate already excludes it, and instance
+    // construction below is forbidden from falling back to the env credential.
+    if (request.disabledProviders?.has(entry.provider)) {
+      continue;
+    }
+
     const apiKey =
       entry.provider === 'local'
         ? (request.localEndpoint?.apiKey ?? request.providerTokens?.[entry.provider])
         : request.providerTokens?.[entry.provider];
-    const provider = getOrCreateProvider(entry, apiKey, request.localEndpoint);
+    const provider = getOrCreateProvider(
+      entry,
+      apiKey,
+      request.localEndpoint,
+      request.disabledProviders?.has(entry.provider) === true
+    );
     const startTime = Date.now();
 
     try {

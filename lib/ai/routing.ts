@@ -1,11 +1,11 @@
 import { RunRequest } from './model-router';
-import { resolveUserCredentials, resolveLocalEndpoint } from './connection/service';
+import { resolveUserCredentials, resolveLocalEndpoint, getDisabledProviders } from './connection/service';
 import { getModelPreference, type SelectedStrategy } from './preferences';
 import type { ProviderName } from './providers/registry';
 
 export interface ResolvedRouting {
   /** Args to pass to runWithFallback. */
-  runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'stageOverrides'>;
+  runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'stageOverrides' | 'disabledProviders'>;
   /** The user's CURRENT strategy from user_model_preferences (live — not the analysis-row snapshot). */
   selectedStrategy: SelectedStrategy;
   preferenceReadFailed: boolean;
@@ -62,6 +62,7 @@ export interface RoutingDependencies {
   loadPreference?: typeof getModelPreference;
   /** Consulted ONLY for a manual selection of the `local` provider. */
   resolveLocalEndpoint?: typeof resolveLocalEndpoint;
+  resolveDisabledProviders?: typeof getDisabledProviders;
 }
 
 export async function resolveAnalysisRouting(
@@ -69,9 +70,10 @@ export async function resolveAnalysisRouting(
   task?: string,
   dependencies: RoutingDependencies = {}
 ): Promise<ResolvedRouting> {
-  const [credentials, preference] = await Promise.all([
+  const [credentials, preference, disabledProviders] = await Promise.all([
     (dependencies.resolveCredentials ?? resolveUserCredentials)(userId),
     (dependencies.loadPreference ?? getModelPreference)(userId),
+    (dependencies.resolveDisabledProviders ?? getDisabledProviders)(userId),
   ]);
 
   const providerTokens = Object.fromEntries(
@@ -117,6 +119,7 @@ export async function resolveAnalysisRouting(
       runArgs: {
         providerTokens,
         manualModel: { provider: preference.provider as ProviderName, model: preference.model },
+        disabledProviders,
       },
       selectedStrategy: preference.selected_strategy,
       preferenceReadFailed: preference.readFailed === true,
@@ -131,7 +134,7 @@ export async function resolveAnalysisRouting(
   }
 
   return {
-    runArgs: { providerTokens, stageOverrides: stageOverride },
+    runArgs: { providerTokens, stageOverrides: stageOverride, disabledProviders },
     selectedStrategy: preference.selected_strategy,
     preferenceReadFailed: preference.readFailed === true,
     stageOverrideUnavailable,

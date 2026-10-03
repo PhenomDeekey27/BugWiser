@@ -33,6 +33,39 @@ export async function getAnalysisSelection(analysisId: string): Promise<Analysis
   return data.model_selection as AnalysisSelectionRecord;
 }
 
+/**
+ * Builds the persisted per-stage record from the ACTUAL runtime result of a
+ * single runWithFallback call (lib/ai/gateway.ts is the only caller).
+ *
+ * Deliberately derived ONLY from the router's RunResponse — never from the
+ * catalog, the saved preference, or the resolved routing — so the stored
+ * provider/model is always what really executed, and stale catalog/provider
+ * metadata can never overwrite it. Attempted entries keep only provider+model
+ * (per-attempt error text stays in the router log / model_execution artifact).
+ *
+ * Pure and exported so the recorded metadata can be validated for every
+ * analysis stage without a database.
+ */
+export function buildStageAssignmentRecord(routed: {
+  // `AICompletionResponse.provider` is a plain string on the wire; the
+  // persisted record narrows it to the provider registry union, exactly as the
+  // pre-extraction inline code did.
+  provider: string;
+  model: string;
+  fallbackCount: number;
+  attemptedProviders: ReadonlyArray<{ provider: string; model: string }>;
+}): StageAssignmentRecord {
+  return {
+    provider: routed.provider as ProviderName,
+    model: routed.model,
+    fallbackCount: routed.fallbackCount,
+    attempted: routed.attemptedProviders.map(({ provider, model }) => ({
+      provider: provider as ProviderName,
+      model,
+    })),
+  };
+}
+
 export async function recordStageAssignment(
   analysisId: string,
   task: string,

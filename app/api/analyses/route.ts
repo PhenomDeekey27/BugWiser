@@ -55,8 +55,10 @@ export async function POST(request: Request) {
     const rawStrategy = preference?.selected_strategy || 'auto';
     const modelStrategy = rawStrategy === 'balanced' || rawStrategy === 'quality' ? 'custom' : rawStrategy;
 
-    // Insert the analysis record
-    const insertResult = await createBackgroundClient()
+    // Insert the analysis record. `.select()` is REQUIRED: without it PostgREST
+    // answers with `return=minimal`, so supabase-js resolves `data` to null and
+    // the inserted id is never available.
+    const { data: insertedRows, error: insertError } = await createBackgroundClient()
       .from('analyses')
       .insert({
         user_id: user.id,
@@ -69,23 +71,32 @@ export async function POST(request: Request) {
         status: 'queued',
         current_stage: 'issue_context',
         model_strategy: modelStrategy,
-      });
+      })
+      .select();
 
-    if ((insertResult as any)?.error) {
-      console.error('[api/analyses] Insert error:', (insertResult as any).error.message);
+    if (insertError) {
+      console.error('[api/analyses] Insert error:', insertError.message);
       return NextResponse.json(
-        { error: 'Failed to create analysis: ' + ((insertResult as any).error?.message || 'Unknown error') },
+        { error: 'Failed to create analysis: ' + (insertError.message || 'Unknown error') },
         { status: 500 }
       );
     }
 
-    const insertedId = insertResult as any;
-    
+    const insertedId = insertedRows?.[0]?.id;
+
+    if (!insertedId) {
+      console.error('[api/analyses] Insert returned no row');
+      return NextResponse.json(
+        { error: 'Failed to create analysis: no row returned by insert' },
+        { status: 500 }
+      );
+    }
+
     // Get the full record from the inserted ID
     const { data: analysis, error: fetchError } = await createBackgroundClient()
       .from('analyses')
       .select('*')
-      .eq('id', insertedId[0].id)
+      .eq('id', insertedId)
       .single();
 
     if (fetchError) {

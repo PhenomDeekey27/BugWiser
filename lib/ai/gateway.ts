@@ -6,7 +6,7 @@ import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback, RunResponse } from './model-router';
 import { resolveAnalysisRouting, isStrictFreeSelection } from './routing';
 import { resolveLocalEndpoint } from './connection/service';
-import { recordStageAssignment } from './analysis-selection';
+import { recordStageAssignment, buildStageAssignmentRecord } from './analysis-selection';
 import { getOrBuildCatalog } from './model-intelligence';
 import { toCatalogModel } from './catalog/toCatalogModel';
 import { prepareStrictFreeRun, getAutomaticStageCandidates } from './catalog/stageSelection';
@@ -143,6 +143,10 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     responseFormat: params.responseFormat,
     providerTokens: routing.runArgs.providerTokens,
     manualModel: routing.runArgs.manualModel,
+    // Per-user tombstones ride the same run: availability, chain gating and
+    // instance construction all fail closed for a disabled provider — it can
+    // never execute through the deployment env credential.
+    disabledProviders: routing.runArgs.disabledProviders,
     stageOverrides: stageOverride,
     strategy: strictFree ? 'free' : strategyMode,
     strictFree,
@@ -171,17 +175,14 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     );
   }
 
-  // Persist the per-stage assignment + routing record.
+  // Persist the per-stage assignment + routing record. The record is built
+  // from the router's ACTUAL result (`routed`), never from the catalog or the
+  // saved preference, so model_selection.stages always reflects what ran.
   try {
     await recordStageAssignment(
       params.analysisId,
       params.task,
-      {
-        provider: routed.provider as ProviderName,
-        model: routed.model,
-        fallbackCount: routed.fallbackCount,
-        attempted: routed.attemptedProviders.map(({ provider, model }) => ({ provider, model })),
-      },
+      buildStageAssignmentRecord(routed),
       {
         mode: routing.selection.mode,
         reason: routing.selection.reason,

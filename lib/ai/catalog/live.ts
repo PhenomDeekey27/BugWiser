@@ -158,15 +158,46 @@ const PROVIDER_FETCHERS: Partial<Record<ProviderName, {
 
 // ── Unified entry point ──
 
+/** Result of one live discovery pass. */
+export interface LiveModelsResult {
+  groups: { providerId: ProviderName; models: ModelDefinition[] }[];
+  /**
+   * Providers whose fetch was ATTEMPTED (key/endpoint present) but whose
+   * request rejected. Providers skipped for missing credentials are not
+   * failures — they simply were not part of this build. Callers use this to
+   * refuse persisting a build that lost a connected provider's models (the
+   * /models display would otherwise silently hide that provider until TTL).
+   */
+  failedProviders: ProviderName[];
+}
+
+/** Injectable credential/endpoint resolvers — production passes nothing. */
+export interface FetchLiveModelsDeps {
+  resolveLocalEndpoint?: (userId: string) => Promise<{ baseUrl: string; apiKey?: string } | null>;
+  resolveUserCredentials?: (userId: string) => Promise<Partial<Record<ProviderName, string>>>;
+  resolveDisabledProviders?: (userId: string) => Promise<ReadonlySet<ProviderName>>;
+}
+
 export async function fetchLiveModels(
-  userId: string
-): Promise<{ providerId: ProviderName; models: ModelDefinition[] }[]> {
-  const resolved = await import('@/lib/ai/connection/service').then((m) => m.resolveUserCredentials(userId));
+  userId: string,
+  deps: FetchLiveModelsDeps = {}
+): Promise<LiveModelsResult> {
+  const credentials = deps.resolveUserCredentials
+    ? await deps.resolveUserCredentials(userId)
+    : await import('@/lib/ai/connection/service').then((m) => m.resolveUserCredentials(userId));
+  // Per-user tombstones: a disabled provider must not be discovered through
+  // the server env credential (and its user credential is gone by definition).
+  const disabledProviders = deps.resolveDisabledProviders
+    ? await deps.resolveDisabledProviders(userId)
+    : await import('@/lib/ai/connection/service').then((m) => m.getDisabledProviders(userId));
   const outputs: { providerId: ProviderName; models: ModelDefinition[] }[] = [];
+  const failedProviders: ProviderName[] = [];
 
   // Local is connection-scoped (per-user base URL + optional key) — resolved
   // once for this rebuild, never from a server env var.
-  const localEndpoint = await resolveLocalEndpoint(userId);
+  const localEndpoint = deps.resolveLocalEndpoint
+    ? await deps.resolveLocalEndpoint(userId)
+    : await resolveLocalEndpoint(userId);
 
   const tasks: Promise<void>[] = [];
   const push = (providerId: ProviderName, promise: Promise<ModelDefinition[]>): void => {
@@ -178,6 +209,7 @@ export async function fetchLiveModels(
         .catch((err) => {
           // Task J probe errors carry status/shape only — no keys/bodies.
           console.warn(`[live-catalog] ${providerId} fetch failed:`, err);
+          failedProviders.push(providerId);
         })
     );
   };
@@ -198,12 +230,16 @@ export async function fetchLiveModels(
       continue;
     }
 
-    const apiKey = resolved[providerId] || envKeyForProvider(providerId);
+    // The tombstone vetoes BOTH the resolved credential and the env fallback —
+    // a disabled provider is never fetched with the deployment key.
+    if (disabledProviders.has(providerId)) continue;
+    const apiKey = credentials[providerId] || envKeyForProvider(providerId);
     if (!apiKey) continue;
 
     push(providerId, fetcher.fetch({ apiKey }));
   }
   await Promise.all(tasks);
 
-  return outputs;
+  return { groups: outputs, failedProviders };
 }
+

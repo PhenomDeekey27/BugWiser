@@ -1,3 +1,5 @@
+import { extractJsonObject } from './json';
+
 export interface RootCauseResult {
   rootCause: {
     summary: string;
@@ -23,20 +25,30 @@ export interface ValidationResult {
 
 export function parseRootCauseResponse(content: string): RootCauseResult {
   try {
-    const parsed = JSON.parse(content);
+    const parsed = extractJsonObject(content);
 
-    if (!parsed.rootCause || typeof parsed.rootCause !== 'object') {
+    if (!parsed || typeof parsed !== 'object' || !('rootCause' in parsed)) {
       throw new Error('Missing rootCause object');
     }
 
+    const rootCause = (parsed as Record<string, unknown>).rootCause;
+    if (!rootCause || typeof rootCause !== 'object') {
+      throw new Error('Missing rootCause object');
+    }
+    const cause = rootCause as Record<string, unknown>;
+
     return {
       rootCause: {
-        summary: typeof parsed.rootCause.summary === 'string' ? parsed.rootCause.summary : 'No summary',
-        explanation: typeof parsed.rootCause.explanation === 'string' ? parsed.rootCause.explanation : 'No explanation',
-        confidence: typeof parsed.rootCause.confidence === 'number' ? parsed.rootCause.confidence : 0.5,
+        summary: typeof cause.summary === 'string' ? cause.summary : 'No summary',
+        explanation: typeof cause.explanation === 'string' ? cause.explanation : 'No explanation',
+        confidence: typeof cause.confidence === 'number' ? cause.confidence : 0.5,
       },
-      affectedFiles: Array.isArray(parsed.affectedFiles) ? parsed.affectedFiles : [],
-      evidence: Array.isArray(parsed.evidence) ? parsed.evidence : [],
+      affectedFiles: Array.isArray((parsed as Record<string, unknown>).affectedFiles)
+        ? ((parsed as Record<string, unknown>).affectedFiles as RootCauseResult['affectedFiles'])
+        : [],
+      evidence: Array.isArray((parsed as Record<string, unknown>).evidence)
+        ? ((parsed as Record<string, unknown>).evidence as RootCauseResult['evidence'])
+        : [],
     };
   } catch {
     return {

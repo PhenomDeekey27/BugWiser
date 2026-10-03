@@ -18,3 +18,25 @@ Check:
   - llama-server binary path inside the BAT
   - CUDA / runtime errors in the launcher log
 Launcher log: D:\IssuePilot\.coder\logs\qwen3.5-4b.log
+[2026-10-02T10:11:52.184Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
+[2026-10-02T10:12:03.356Z] WARN Win+O could not be registered (hotkey conflict or policy).
+[2026-10-02T10:12:08.767Z] INFO Launched: "D:\llm-quant\llamaquant.bat" "qwopus-3.5" (pid 23940)
+[2026-10-02T10:14:16.946Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
+[2026-10-02T10:14:17.504Z] WARN Win+O could not be registered (hotkey conflict or policy).
+[2026-10-02T10:14:34.745Z] INFO Launched: "D:\llm-quant\llamaquant.bat" "qwopus-3.5" (pid 14800)
+[2026-10-02T10:14:51.975Z] INFO Model ready: qwopus-3.5 (server reports: local)
+[2026-10-02T10:14:54.291Z] INFO chat ok in 2299ms, 1 tool call(s)
+[2026-10-02T10:14:55.574Z] INFO chat ok in 1177ms, 1 tool call(s)
+[2026-10-02T10:14:58.230Z] INFO chat ok in 2648ms, 0 tool call(s)
+[2026-10-02T10:16:05.460Z] INFO chat ok in 5350ms, 1 tool call(s)
+[2026-10-02T10:16:10.244Z] INFO chat ok in 4748ms, 1 tool call(s)
+[2026-10-02T10:16:18.988Z] INFO chat ok in 8717ms, 1 tool call(s)
+[2026-10-02T10:16:22.371Z] INFO chat ok in 3356ms, 1 tool call(s)
+[2026-10-02T10:16:25.343Z] INFO chat ok in 2944ms, 1 tool call(s)
+[2026-10-02T10:16:28.309Z] INFO chat ok in 2939ms, 1 tool call(s)
+[2026-10-02T10:16:31.492Z] INFO chat ok in 3167ms, 1 tool call(s)
+[2026-10-02T10:16:48.864Z] INFO chat ok in 17347ms, 1 tool call(s)
+[2026-10-02T10:16:51.468Z] INFO chat ok in 2578ms, 1 tool call(s)
+[2026-10-02T10:16:54.860Z] INFO chat ok in 3363ms, 1 tool call(s)
+[2026-10-02T10:17:05.252Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
+[2026-10-02T10:17:05.739Z] WARN Win+O could not be registered (hotkey conflict or policy).

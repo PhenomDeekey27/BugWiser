@@ -38,3 +38,31 @@ export function resolveOverrideOrigin(
   if (selectionChanged) return 'manual';
   return previousOrigin === 'setup' ? 'setup' : 'manual';
 }
+
+export interface AppliedStageOverride {
+  isOverride: boolean;
+  origin: StageOverrideOrigin | undefined;
+}
+
+/**
+ * Resolves what a Configure-modal Apply writes for one stage.
+ *
+ * A concrete model change IS a manual selection: it persists as a manual
+ * override even when the "Custom Override" checkbox is unchecked. The checkbox
+ * alone used to gate persistence, so applying a model to a previously
+ * unconfigured stage (its checkbox starts unchecked) rendered as configured in
+ * the UI but was omitted from `stage_overrides` on save — the assignment then
+ * vanished on refresh. The checkbox still controls an UNCHANGED selection:
+ * checked re-stamps it, unchecked removes it from persistence.
+ */
+export function resolveAppliedOverride(input: {
+  checkbox: boolean;
+  selectionChanged: boolean;
+  previousOrigin?: StageOverrideOrigin | null;
+}): AppliedStageOverride {
+  const isOverride = input.checkbox || input.selectionChanged;
+  return {
+    isOverride,
+    origin: resolveOverrideOrigin(isOverride, input.selectionChanged, input.previousOrigin ?? undefined),
+  };
+}

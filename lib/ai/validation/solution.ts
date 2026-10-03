@@ -1,3 +1,5 @@
+import { extractJsonObject } from './json';
+
 export interface SolutionResult {
   summary: string;
   description: string;
@@ -17,7 +19,11 @@ export interface ValidationResult {
 
 export function parseSolutionResponse(content: string): SolutionResult {
   try {
-    const parsed = JSON.parse(content);
+    const extracted = extractJsonObject(content);
+    if (!extracted || typeof extracted !== 'object') {
+      throw new Error('Not a JSON object');
+    }
+    const parsed = extracted as Record<string, unknown>;
 
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'No summary',

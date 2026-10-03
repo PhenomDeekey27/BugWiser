@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LocalProviderConnectForm } from './LocalProviderConnectForm';
+import { createConnectGate } from './connectState';
 import type { CatalogProvider } from '@/app/models/page';
 
 interface ProviderCardProps {
@@ -26,9 +27,20 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
   const [saving, setSaving] = useState(false);
   const [busyDisconnect, setBusyDisconnect] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Same single-flight latch as the local connect form: two clicks before the
+  // re-render must not fire two disconnect requests.
+  const disconnectGate = useRef(createConnectGate());
 
   const connected = provider.status === 'connected';
+  const disabled = provider.disabled === true;
   const authType = provider.authType || 'api_key';
+  // A server-env credential exists ⇒ keyless Connect/Enable/Reconnect is
+  // available; no credential exists ⇒ only the "paste your key" flow.
+  const serverEnvCapable = provider.serverConfigured;
+  const sourceLabel =
+    provider.connectionSource === 'user' || (!provider.connectionSource && !provider.serverConfigured)
+      ? 'Your key'
+      : 'Server available';
 
   const handleConnect = async () => {
     if (authType !== 'api_key') return;
@@ -45,12 +57,33 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
     }
   };
 
+  // Keyless server-env connect/enable/reconnect: submits an empty key — the
+  // server validates with its own credential and stores a keyless connected
+  // row (which clears a disabled tombstone). Nothing key-shaped is handled in
+  // the browser.
+  const handleServerConnect = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await onConnect(provider.providerId, '');
+      setShowKey(false);
+    } catch (e) {
+      setError((e as Error).message || 'Connection failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDisconnect = async () => {
+    if (!disconnectGate.current.tryBegin()) return;
     setBusyDisconnect(true);
     try {
       await onDisconnect(provider.providerId);
+    } catch {
+      // The parent surfaces the error; the card just stops showing progress.
     } finally {
       setBusyDisconnect(false);
+      disconnectGate.current.end();
     }
   };
 
@@ -62,7 +95,7 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
           <p className="text-xs text-bw-peach font-mono mt-0.5">{provider.providerId}</p>
         </div>
         <Badge variant={connected ? 'default' : 'outline'}>
-          {connected ? 'Connected' : 'Disconnected'}
+          {connected ? 'Connected' : disabled ? 'Disabled' : 'Disconnected'}
         </Badge>
       </div>
 
@@ -74,6 +107,13 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
         {provider.serverConfigured && <Badge variant="secondary">Server env</Badge>}
       </div>
 
+      {disabled && (
+        <p className="text-[11px] font-mono text-bw-peach/70">
+          Disabled for your account
+          {serverEnvCapable ? ' — server credentials available on reconnect' : ''}
+        </p>
+      )}
+
       {typeof modelCount === 'number' && (
         <p className="text-xs text-bw-peach font-mono">{modelCount} models</p>
       )}
@@ -81,20 +121,20 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
       {connected ? (
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5 min-w-0">
-            <span className="text-xs text-bw-peach">{provider.serverConfigured ? 'Configured via server' : 'Your key'}</span>
+            <span className="text-xs text-bw-peach">{sourceLabel}</span>
             {provider.providerId === 'local' && provider.baseUrl && (
               <span className="text-[11px] font-mono text-bw-peach truncate" title={provider.baseUrl}>
                 {provider.baseUrl}
               </span>
             )}
           </div>
-<Button
-             variant="outline"
-             size="sm"
-             onClick={handleDisconnect}
-             disabled={busyDisconnect}
-             className="border-border cursor-pointer"
-           >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDisconnect}
+            disabled={busyDisconnect}
+            className="border-border cursor-pointer"
+          >
             {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
           </Button>
         </div>
@@ -103,9 +143,42 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
       ) : authType === 'api_key' ? (
         <div className="space-y-2">
           {!showKey ? (
-            <Button size="sm" className="w-full btn-bw-primary font-medium cursor-pointer" onClick={() => setShowKey(true)}>
-              Connect
-            </Button>
+            <div className="flex flex-col gap-2 items-start">
+              {error && <p className="text-xs text-error-default">{error}</p>}
+              {serverEnvCapable ? (
+                <>
+                  <Button
+                    size="sm"
+                    className="w-full btn-bw-primary font-medium cursor-pointer"
+                    onClick={handleServerConnect}
+                    disabled={saving}
+                  >
+                    {saving ? (disabled ? 'Enabling...' : 'Connecting...') : disabled ? 'Reconnect' : 'Connect'}
+                  </Button>
+                  <button
+                    type="button"
+                    className="text-[11px] text-bw-peach/70 underline-offset-2 hover:underline cursor-pointer"
+                    onClick={() => {
+                      setError(null);
+                      setShowKey(true);
+                    }}
+                  >
+                    Use my own API key
+                  </button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  className="w-full btn-bw-primary font-medium cursor-pointer"
+                  onClick={() => {
+                    setError(null);
+                    setShowKey(true);
+                  }}
+                >
+                  Connect
+                </Button>
+              )}
+            </div>
           ) : (
             <>
               <Input

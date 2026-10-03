@@ -40,6 +40,44 @@ export interface ReconcilableModel {
   available: boolean;
 }
 
+/**
+ * Whether stage_overrides may be reconciled (and self-heal persisted) against
+ * the catalog snapshot this response is about to serve.
+ *
+ * Reconciliation DROPS overrides whose model is absent from the served catalog,
+ * and `/api/models` then persists that dropped set. That is only meaningful
+ * when the snapshot reflects reality. A pending snapshot (`catalogPending`)
+ * PROVABLY lags the current provider set — the served rows predate the latest
+ * connect/disconnect — so a freshly connected provider's models are missing
+ * from it. Reconciling then would drop (and persist-delete) perfectly valid
+ * overrides for those models: connect Local → save a manual override while the
+ * rebuild is still in flight → the stale snapshot erases it on the next read.
+ * Self-heal therefore waits for the authoritative (non-pending) read, at which
+ * point the rebuild's snapshot contains every connected provider's models.
+ *
+ * Two pending cases stay authoritative:
+ *   - Nothing is connected: every override references a disconnected provider,
+ *     so dropping is correct no matter which snapshot serves the rows (without
+ *     this, stale overrides would never self-heal).
+ *   - A first-ever load (nothing persisted yet) is covered by the same rule
+ *     via `modelCount`/connection inputs downstream — an empty catalog with
+ *     providers connected never reconciles while pending.
+ */
+export function shouldReconcileOverrides(input: {
+  /** A background rebuild is in flight; the snapshot may still be catching up. */
+  catalogPending: boolean;
+  /** Rows in the served catalog snapshot. */
+  modelCount: number;
+  /** Providers reported connected from provider_connections. */
+  connectedProviderCount: number;
+}): boolean {
+  if (!input.catalogPending) return true;
+  // Pending + something connected ⇒ the snapshot may predate that provider's
+  // models; never drop against it (over-drop risk). Pending + nothing
+  // connected ⇒ no override can reference a connected model; drop freely.
+  return input.connectedProviderCount === 0;
+}
+
 export interface OverrideReconcileResult {
   /** Overrides that still point at real, available connected models, plus
    * kept strict-Free `unavailable` markers. */

@@ -111,17 +111,30 @@ export function createProviderInstance(providerName: ProviderName): AIProvider {
  */
 export interface ProviderInstanceOptions {
   baseUrl?: string;
+  /**
+   * Fail-closed (per-user provider disable): when set, a missing explicit key
+   * THROWS instead of silently falling back to the server env credential, so
+   * a provider the user disabled can never execute through the deployment
+   * key. The runtime (model-router) sets this for tombstoned providers; every
+   * other caller keeps the historic env-fallback behavior.
+   */
+  forbidEnvFallback?: boolean;
 }
 
 // Construct a provider instance using an explicit API key (e.g. a user-supplied
 // connection key) instead of the process env. Falls back to the env key if none
-// is supplied.
+// is supplied — unless options.forbidEnvFallback closes that path (see above).
 export function createProviderInstanceWithApiKey(
   providerName: ProviderName,
   apiKey?: string,
   options?: ProviderInstanceOptions
 ): AIProvider {
-  const key = apiKey && apiKey.length > 0 ? apiKey : envApiKey(providerName);
+  const key = apiKey && apiKey.length > 0 ? apiKey : options?.forbidEnvFallback ? '' : envApiKey(providerName);
+  if (options?.forbidEnvFallback && !key && providerName !== 'local') {
+    throw new Error(
+      `Provider "${providerName}" is disabled for this user — the server environment credential cannot be used.`
+    );
+  }
   switch (providerName) {
     case 'gemini':
       return new GeminiProvider({

@@ -497,6 +497,55 @@ export function getAutomaticStageCandidates(
 }
 
 /**
+ * The automatic stage assignment for a connected-provider catalog — what a
+ * /models stage row shows when it has no persisted setup/manual override.
+ *
+ * - With a selected setup (Free/Balanced/Quality): the setup's existing
+ *   per-stage selection (`selectStageModels`), so a gap in a saved stage map
+ *   resolves to exactly what that setup would pick (including Free's explicit
+ *   `unavailable` marker).
+ * - Without a setup ('auto'): the stage-eligible, score-ordered automatic
+ *   candidates (`getAutomaticStageCandidates`), resolved confirmed-free first
+ *   — the same free-first order the runtime auto chain applies
+ *   (`selectModelsForTask`). A stage whose pool is empty (context-ineligible,
+ *   no connected models) resolves to null: the row stays "No config".
+ *
+ * Pure and DERIVED: callers may display the result but must never persist it
+ * as a manual override (isOverride stays false / the entry stays absent from
+ * stage_overrides). Connecting a provider changes this output only.
+ */
+export function deriveAutomaticStagePicks(
+  setup: SetupChoice | null,
+  availableModels: CatalogModel[]
+): Record<StageKey, StagePick | null> {
+  if (setup) return selectStageModels(setup, availableModels);
+
+  const result = {} as Record<StageKey, StagePick | null>;
+  const freeIds = new Set(
+    availableModels
+      .filter((m) => m.price.isFree)
+      .map((m) => `${m.providerId}/${m.modelId}`)
+  );
+  for (const stageId of Object.keys(STAGE_WEIGHTS) as StageKey[]) {
+    const candidates = getAutomaticStageCandidates(availableModels, stageId);
+    const freeFirst = [
+      ...candidates.filter((c) => freeIds.has(`${c.provider}/${c.model}`)),
+      ...candidates.filter((c) => !freeIds.has(`${c.provider}/${c.model}`)),
+    ];
+    const pick = freeFirst[0];
+    result[stageId] = pick
+      ? {
+          stageId,
+          provider: pick.provider,
+          model: pick.model,
+          isFree: freeIds.has(`${pick.provider}/${pick.model}`),
+        }
+      : null;
+  }
+  return result;
+}
+
+/**
  * ONE canonical confirmed-free check for a specific provider/model pair:
  * look the model up in the catalog and return its `price.isFree`. Unknown or
  * null pricing, missing rows, and name-based guesses are NEVER free; a model

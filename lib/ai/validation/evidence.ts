@@ -1,3 +1,5 @@
+import { extractJsonObject } from './json';
+
 export interface EvidenceValidationResult {
   status: 'evidence_found' | 'no_evidence' | 'insufficient_evidence';
   description: string;
@@ -20,9 +22,19 @@ export interface ValidationResult {
 }
 
 export function parseEvidenceResponse(content: string): EvidenceValidationResult {
-  try {
-    const parsed = JSON.parse(content);
+  const extracted = extractJsonObject(content);
+  if (!extracted || typeof extracted !== 'object') {
+    return {
+      status: 'no_evidence',
+      description: 'Failed to parse AI response',
+      reason: 'The AI response could not be parsed',
+      evidence: [],
+    };
+  }
+  const parsed = extracted as Record<string, unknown>;
+  const rawEvidence = (Array.isArray(parsed.evidence) ? parsed.evidence : []) as Array<Record<string, unknown>>;
 
+  try {
     const hasEvidence = Array.isArray(parsed.evidence) && parsed.evidence.length > 0;
     let status: EvidenceValidationResult['status'] = 'evidence_found';
 
@@ -41,27 +53,27 @@ export function parseEvidenceResponse(content: string): EvidenceValidationResult
     ];
 
     if (hasEvidence) {
-      const allGeneric = parsed.evidence.every((ev: { explanation?: string }) => {
+      const allGeneric = rawEvidence.every((ev: { explanation?: string }) => {
         const exp = (ev.explanation || '').toLowerCase();
         return genericPatterns.some((p) => p.test(exp));
       });
-      if (allGeneric && parsed.evidence.length <= 2) {
+      if (allGeneric && rawEvidence.length <= 2) {
         status = 'insufficient_evidence';
       }
     }
 
     const cleanedEvidence = hasEvidence
-      ? parsed.evidence.map((ev: Record<string, unknown>) => ({
+      ? rawEvidence.map((ev: Record<string, unknown>) => ({
           file: typeof ev.file === 'string' ? ev.file : '',
           lineStart: typeof ev.lineStart === 'number' ? ev.lineStart : 1,
-          lineEnd: typeof ev.lineEnd === 'number' ? ev.lineEnd : ev.lineStart || 1,
+          lineEnd: typeof ev.lineEnd === 'number' ? ev.lineEnd : typeof ev.lineStart === 'number' ? ev.lineStart : 1,
           code: typeof ev.code === 'string' ? ev.code : '',
           explanation: typeof ev.explanation === 'string' && ev.explanation.trim()
             ? ev.explanation.trim()
             : typeof ev.reason === 'string' && ev.reason.trim()
               ? ev.reason.trim()
               : 'Evidence found at this location',
-          type: ev.type === 'direct' || ev.type === 'supporting' ? ev.type : 'supporting',
+          type: (ev.type === 'direct' || ev.type === 'supporting' ? ev.type : 'supporting') as 'direct' | 'supporting',
         }))
       : [];
 

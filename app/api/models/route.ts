@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getOrBuildCatalog } from '@/lib/ai/model-intelligence';
+import { getCatalogForDisplay } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
-import { getProviderConnections, isProviderConfiguredBysEnv, resolveLocalEndpoint } from '@/lib/ai/connection/service';
+import { getProviderConnectionStates, isProviderConfiguredBysEnv, resolveLocalEndpoint } from '@/lib/ai/connection/service';
 import type { ProviderName } from '@/lib/ai/catalog/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/ai/catalog/registry';
-import { reconcileStageOverrides, type StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
+import { reconcileStageOverrides, shouldReconcileOverrides, type StageOverrideEntry, type StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 import { toCatalogModel } from '@/lib/ai/catalog/toCatalogModel';
 
 export async function GET() {
@@ -16,15 +16,26 @@ export async function GET() {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const [catalog, preference, connections, localEndpoint] = await Promise.all([
-      getOrBuildCatalog(user.id),
+    // The catalog is read DISPLAY-side (stale-while-revalidate): a rebuild —
+    // live provider discovery + AI classification + a full re-store — is
+    // scheduled in the background instead of blocking this response. Provider
+    // connection state below is read straight from provider_connections and is
+    // therefore always current, connect/disconnect or not. `catalogPending`
+    // tells the client to revalidate once the background build lands.
+    const [catalogView, preference, connectionStates, localEndpoint] = await Promise.all([
+      getCatalogForDisplay(user.id),
       getModelPreference(user.id),
-      getProviderConnections(user.id),
+      getProviderConnectionStates(user.id),
       resolveLocalEndpoint(user.id),
     ]);
+    const catalog = catalogView.catalog;
 
+    // Effective per-user lifecycle (DISABLED > USER ROW > SERVER ENV > NONE).
+    // `connectionSource` distinguishes a user's own connection from a
+    // server-env-backed one, and `disabled` marks the per-user tombstone —
+    // safe metadata only, never credential material.
     const connectedIds = new Set(
-      (Object.keys(connections) as ProviderName[]).filter((p) => connections[p])
+      (Object.keys(connectionStates) as ProviderName[]).filter((p) => connectionStates[p].connected)
     );
 
     const providers = PROVIDER_DEFINITIONS
@@ -38,6 +49,8 @@ export async function GET() {
           authType: def.authType,
           status: 'connected' as const,
           serverConfigured: isProviderConfiguredBysEnv(pid),
+          connectionSource: connectionStates[pid].connectionSource,
+          disabled: false,
           connected: true,
           modelCount: providerModels.length,
           hasFreeModels: providerModels.some((m) => m.isFree),
@@ -51,19 +64,29 @@ export async function GET() {
 
     const disconnectedProviders = PROVIDER_DEFINITIONS
       .filter((def) => !connectedIds.has(def.providerId as ProviderName))
-      .map((def) => ({
-        providerId: def.providerId,
-        displayName: def.displayName,
-        authType: def.authType,
-        status: 'disconnected' as const,
-        serverConfigured: isProviderConfiguredBysEnv(def.providerId as ProviderName),
-        connected: false,
-        modelCount: 0,
-        hasFreeModels: false,
-        hasPaidModels: false,
-        description: def.description,
-        docsUrl: def.docsUrl,
-      }));
+      .map((def) => {
+        const pid = def.providerId as ProviderName;
+        // Defensive: definitions and the lifecycle map are the same 8-provider
+        // union today; an unknown id must degrade to 'unavailable', never crash.
+        const info = connectionStates[pid];
+        return {
+          providerId: def.providerId,
+          displayName: def.displayName,
+          authType: def.authType,
+          status: 'disconnected' as const,
+          serverConfigured: isProviderConfiguredBysEnv(pid),
+          // null for a tombstoned/unavailable provider — a disabled provider
+          // is NEVER presented as connected just because an env key exists.
+          connectionSource: info?.connectionSource ?? null,
+          disabled: info?.disabled === true,
+          connected: false,
+          modelCount: 0,
+          hasFreeModels: false,
+          hasPaidModels: false,
+          description: def.description,
+          docsUrl: def.docsUrl,
+        };
+      });
 
     const allProviders = [...providers, ...disconnectedProviders];
 
@@ -72,15 +95,24 @@ export async function GET() {
     // disconnected, live model vanished) are dropped deterministically so
     // they cannot silently override fresh automatic selection. Informational
     // only here — the UI reconciles its own saved copy via the same helper.
+    //
+    // Guarded by shouldReconcileOverrides: this response may be serving the
+    // PERSISTED catalog while a background rebuild runs (or an empty one on a
+    // first load). Reconciling — and self-heal PERSISTING — against a snapshot
+    // we already know is behind would delete the user's saved overrides.
+    const canReconcile = shouldReconcileOverrides({
+      catalogPending: catalogView.pending,
+      modelCount: catalog.models.length,
+      connectedProviderCount: connectedIds.size,
+    });
     const catalogModelsForReconcile = catalog.models.map((m) => ({
       providerId: m.provider as string,
       modelId: m.modelId,
       available: m.availability !== 'unavailable',
     }));
-    const reconcile = reconcileStageOverrides(
-      preference.stage_overrides ?? null,
-      catalogModelsForReconcile
-    );
+    const reconcile = canReconcile
+      ? reconcileStageOverrides(preference.stage_overrides ?? null, catalogModelsForReconcile)
+      : { kept: (preference.stage_overrides ?? {}) as Record<string, StageOverrideEntry>, droppedStages: [] as string[], changed: false };
 
     // Self-healing persistence: when saved overrides reference models that no
     // longer exist in the current connected catalog, persist the reconciled
@@ -113,6 +145,11 @@ export async function GET() {
       classifiedByAi: catalog.classifiedByAi,
       classificationModel: catalog.classificationModel,
       analyzedAt: catalog.analyzedAt,
+      // True when the catalog above still predates the current connected
+      // provider set (a background rebuild is in flight). The client shows
+      // what exists now and revalidates; provider connection state is NOT
+      // affected by this flag.
+      catalogPending: catalogView.pending,
     });
   } catch (error) {
     const err = error as Error;

@@ -1,3 +1,5 @@
+import { extractJsonObject } from './json';
+
 export interface PatchResult {
   summary: string;
   files: Array<{
@@ -22,7 +24,11 @@ export interface ValidationResult {
 
 export function parsePatchResponse(content: string): PatchResult {
   try {
-    const parsed = JSON.parse(content);
+    const extracted = extractJsonObject(content);
+    if (!extracted || typeof extracted !== 'object') {
+      throw new Error('Not a JSON object');
+    }
+    const parsed = extracted as Record<string, unknown>;
 
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'No summary',

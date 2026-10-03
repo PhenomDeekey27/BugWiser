@@ -577,10 +577,12 @@ export function normalizeZAIModel(raw: Record<string, unknown>): ModelDefinition
 
 // ── Local (generic OpenAI-compatible endpoint) ──
 // The /models payload of a self-hosted server is usually minimal: id /
-// object / created / owned_by, sometimes display_name and max_model_len
-// (vLLM-style). There is NO assumed pricing, context, or capability metadata:
-//   - context: live only when the payload exposes context_length/max_model_len,
-//     otherwise honest default (finalize's 128K, contextSource 'default');
+// object / created / owned_by, sometimes display_name and max_model_len.
+// There is NO assumed pricing, context, or capability metadata:
+//   - context: live only when the payload exposes a trustworthy window
+//     (max_model_len / context_length / meta.n_ctx / n_ctx — see
+//     extractLocalContextWindow), otherwise honest default (finalize's 128K,
+//     contextSource 'default');
 //   - pricing: read ONLY when a pricing block is present. A pricing block
 //     follows the OpenRouter-style schema (prompt/completion, USD per token →
 //     per 1M). Absent pricing ⇒ unknown + null + NEVER free (the catalog's
@@ -591,18 +593,40 @@ export function normalizeZAIModel(raw: Record<string, unknown>): ModelDefinition
 //     ⇒ 'unknown' provenance (never a silent true default).
 // No specific local server software is assumed or named.
 
+/**
+ * Extracts a trustworthy context window from a generic OpenAI-compatible
+ * /models entry. Accepted live signals, in priority order:
+ *   1. `max_model_len` (vLLM-style deployment context),
+ *   2. `context_length` (OpenRouter-style),
+ *   3. `meta.n_ctx` (llama.cpp-style: the server's actual loaded context;
+ *      `meta.n_ctx_train` is deliberately NOT read — training context is not
+ *      servable capacity).
+ *   4. top-level `n_ctx` (generic fallback for servers that expose it flat).
+ * Only finite positive numbers are accepted; anything else (missing, null,
+ * string, zero, negative, NaN, Infinity, non-object meta) yields null so the
+ * caller falls back to the honest 128K default (contextSource 'default').
+ * No server software is assumed — these are generic field shapes.
+ */
+function extractLocalContextWindow(raw: Record<string, unknown>): number | null {
+  const asPositiveInt = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+  const topLevel =
+    asPositiveInt(raw.max_model_len) ?? asPositiveInt(raw.context_length) ?? asPositiveInt(raw.n_ctx);
+  if (topLevel != null) return topLevel;
+  const meta = raw.meta;
+  if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    const nCtx = (meta as Record<string, unknown>).n_ctx;
+    const fromMeta = asPositiveInt(nCtx);
+    if (fromMeta != null) return fromMeta;
+  }
+  return null;
+}
+
 export function normalizeLocalModel(raw: Record<string, unknown>): ModelDefinition | null {
   const modelId = typeof raw.id === 'string' ? raw.id.trim() : '';
   if (!modelId) return null;
 
-  const ctxRaw =
-    typeof raw.max_model_len === 'number'
-      ? raw.max_model_len
-      : typeof raw.context_length === 'number'
-        ? raw.context_length
-        : null;
-  const contextWindow =
-    ctxRaw != null && Number.isFinite(ctxRaw) && ctxRaw > 0 ? ctxRaw : null;
+  const contextWindow = extractLocalContextWindow(raw);
 
   const pricing = raw.pricing as Record<string, unknown> | undefined;
   const hasPricingField = pricing != null && ('prompt' in pricing || 'completion' in pricing);

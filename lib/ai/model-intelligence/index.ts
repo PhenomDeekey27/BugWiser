@@ -106,13 +106,21 @@ function debugLog(...args: unknown[]): void {
   if (AI_DEBUG) console.log('[model-intelligence:debug]', ...args);
 }
 
-async function discoverModels(userId: string): Promise<NormalizedModel[]> {
+/** Discovery outcome: merged models plus providers whose live fetch FAILED
+ *  (attempted but rejected — see fetchLiveModels). Callers use failedProviders
+ *  to decide whether the build may replace the persisted catalog. */
+interface DiscoverOutcome {
+  models: NormalizedModel[];
+  failedProviders: ProviderName[];
+}
+
+async function discoverModels(userId: string): Promise<DiscoverOutcome> {
   const connected = await getProviderConnections(userId);
   const connectedIds = (Object.keys(connected) as ProviderName[]).filter((p) => connected[p]);
   if (AI_DEBUG) debugLog('getProviderConnections returned:', connected);
   if (connectedIds.length === 0) {
     debugLog('No connected providers');
-    return [];
+    return { models: [], failedProviders: [] };
   }
   debugLog('Connected providers:', connectedIds.join(','));
 
@@ -153,11 +161,13 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
       metadataConfidence: 'medium' as const,
     }));
   console.log('[model-intelligence] Static models after filtering:', staticModels.length);
-  let liveModels: NormalizedModel[] = [];
+  const liveModels: NormalizedModel[] = [];
+  let failedProviders: ProviderName[] = [];
   try {
-    const liveByProvider = await fetchLiveModels(userId);
-    debugLog('live providers:', liveByProvider.map((g) => g.providerId + '(' + g.models.length + ')').join(','));
-    for (const group of liveByProvider) {
+    const live = await fetchLiveModels(userId);
+    failedProviders = live.failedProviders;
+    debugLog('live providers:', live.groups.map((g) => g.providerId + '(' + g.models.length + ')').join(','));
+    for (const group of live.groups) {
       if (!connectedIds.includes(group.providerId)) {
         debugLog('Skipping live group provider', group.providerId, 'not in connectedIds');
         continue;
@@ -198,6 +208,10 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
     }
   } catch (err) {
     console.warn('[model-intelligence] Live fetch failed:', err);
+    // The whole live pass rejected (credential/endpoint resolution blew up) —
+    // no provider's models made it into this build, so treat every connected
+    // provider as failed and let the persist gate keep the last complete catalog.
+    failedProviders = connectedIds;
   }
 
   console.log('[model-intelligence] Merged static (%d) + live (%d) models', staticModels.length, liveModels.length);
@@ -217,7 +231,7 @@ async function discoverModels(userId: string): Promise<NormalizedModel[]> {
     byProvider[m.provider] = (byProvider[m.provider] || 0) + 1;
   }
   debugLog('Final catalog by provider:', JSON.stringify(byProvider), 'total:', result.length);
-  return result;
+  return { models: result, failedProviders };
 }
 
 /**
@@ -887,59 +901,220 @@ async function loadCatalog(userId: string): Promise<ModelIntelligenceResult | nu
 // Single-flight guard: dedupes concurrent force rebuilds for the same user so
 // a connect/disconnect background refresh and a racing page request share one
 // build instead of interleaving provider fetches and model_catalog rewrites.
-const inFlightRebuilds = new Map<string, Promise<ModelIntelligenceResult>>();
+const inFlightRebuilds = new Map<string, SingleFlightRebuild>();
 
-/**
- * Force-rebuilds the catalog for a user, collapsing concurrent calls into a
- * single build. Connect/disconnect routes and the manual refresh endpoint
- * should use this instead of getOrBuildCatalog(userId, true) so that a
- * background refresh and a page GET triggered right after connect cannot run
- * two competing builds (duplicate provider API calls, interleaved deletes).
- */
-export function rebuildCatalogOnce(userId: string): Promise<ModelIntelligenceResult> {
-  let p = inFlightRebuilds.get(userId);
-  if (!p) {
-    p = getOrBuildCatalog(userId, true).finally(() => {
-      inFlightRebuilds.delete(userId);
-    });
-    inFlightRebuilds.set(userId, p);
-  }
-  return p;
+// Generation counter bumped by markCatalogDirty() whenever the CONNECTED
+// PROVIDER SET changes. A build started before the change discovered the OLD
+// provider set, so handing it to a request issued after the change would serve
+// a catalog that is missing (or still contains) the provider the user just
+// connected/disconnected. Rebuilds are therefore only shared within a single
+// generation.
+const catalogGenerations = new Map<string, number>();
+
+export interface SingleFlightRebuild {
+  promise: Promise<ModelIntelligenceResult>;
+  generation: number;
 }
 
-export async function getOrBuildCatalog(userId: string, forceRefresh = false): Promise<ModelIntelligenceResult> {
-  if (!forceRefresh) {
-    const existing = await loadCatalog(userId);
-    if (existing) {
-      const connected = await getProviderConnections(userId);
-      const fingerprint = buildProviderFingerprint(connected);
+/**
+ * Marks the user's catalog as needing a rebuild that no already-running build
+ * can satisfy. Called by the connect/disconnect routes IMMEDIATELY after the
+ * provider_connections row changed and BEFORE scheduling the rebuild.
+ */
+export function markCatalogDirty(userId: string): void {
+  catalogGenerations.set(userId, (catalogGenerations.get(userId) ?? 0) + 1);
+}
 
-      if (existing.providerFingerprint !== fingerprint) {
-        // Provider set changed (connect/disconnect): the persisted catalog no
-        // longer matches reality. Rebuild synchronously (deduped) so the
-        // request that follows an explicit user action reflects it; keep the
-        // last-known catalog only if the rebuild fails or comes back empty.
-        try {
-          const rebuilt = await rebuildCatalogOnce(userId);
-          if (rebuilt.models.length > 0) return rebuilt;
-        } catch (err) {
-          console.warn('[model-intelligence] Fingerprint rebuild failed, serving persisted catalog:', err);
-        }
-        return existing;
+/**
+ * Whether an in-flight rebuild may be reused for a request made at
+ * `generation`. Only a build started at the SAME generation is safe to share:
+ * anything older predates a connection change and would return a catalog
+ * missing the newly connected provider's models.
+ */
+export function canReuseRebuild(
+  inFlight: SingleFlightRebuild | undefined,
+  generation: number
+): boolean {
+  return inFlight !== undefined && inFlight.generation === generation;
+}
+
+/**
+ * Force-rebuilds the catalog for a user, collapsing concurrent calls made at
+ * the same connection generation into a single build. Connect/disconnect
+ * routes and the manual refresh endpoint should use this instead of
+ * getOrBuildCatalog(userId, true) so that a background refresh and a page GET
+ * triggered right after connect cannot run two competing builds (duplicate
+ * provider API calls, interleaved deletes) — while still guaranteeing that a
+ * request issued after a connect/disconnect NEVER joins a build that started
+ * before that change.
+ */
+export function rebuildCatalogOnce(userId: string): Promise<ModelIntelligenceResult> {
+  const generation = catalogGenerations.get(userId) ?? 0;
+  const existing = inFlightRebuilds.get(userId);
+  if (canReuseRebuild(existing, generation)) return existing!.promise;
+  const promise: Promise<ModelIntelligenceResult> = getOrBuildCatalog(userId, true, generation).finally(() => {
+    // Only clear OUR entry: a newer generation may already have replaced it.
+    if (inFlightRebuilds.get(userId)?.promise === promise) inFlightRebuilds.delete(userId);
+  });
+  inFlightRebuilds.set(userId, { promise, generation });
+  return promise;
+}
+
+/** Whether a build started at `generation` has been overtaken by a provider
+ *  connection change while it was running (see markCatalogDirty). */
+export function isGenerationSuperseded(current: number, generation: number): boolean {
+  return current !== generation;
+}
+
+/**
+ * DISPLAY-ONLY catalog read with stale-while-revalidate semantics.
+ *
+ * The authoritative `getOrBuildCatalog` is what the RUNTIME consults
+ * (gateway strict-free free-authority, preflight): when the provider set
+ * changed it rebuilds synchronously so a run never plans against a catalog
+ * that predates the user's connections. That guarantee is kept exactly as is.
+ *
+ * The /models page does not need that guarantee to RENDER: it needs (1) the
+ * connected-provider list, which comes straight from `provider_connections`,
+ * and (2) a model catalog to browse. Both are already served from the
+ * persisted catalog, so making the page wait for live provider discovery +
+ * AI classification + a full re-store bought nothing and cost the whole
+ * rebuild (measured: seconds to tens of seconds) on the render path.
+ *
+ * This function therefore returns the persisted catalog immediately and
+ * schedules a generation-aware background rebuild, telling the caller whether
+ * what it got is still catching up (`pending`) so the client can revalidate.
+ * When nothing is persisted yet there is nothing to serve: an empty catalog is
+ * returned with `pending: true` rather than holding the render for a first
+ * build that can take a full discovery cycle.
+ */
+export async function getCatalogForDisplay(
+  userId: string
+): Promise<{ catalog: ModelIntelligenceResult; pending: boolean }> {
+  const [existing, connected] = await Promise.all([
+    loadCatalog(userId),
+    getProviderConnections(userId),
+  ]);
+  const fingerprint = buildProviderFingerprint(connected);
+  const plan = planCatalogServe({
+    hasPersisted: existing !== null,
+    fingerprintMatches: existing ? existing.providerFingerprint === fingerprint : null,
+    stale: existing ? isCatalogStale(existing.analyzedAt) : false,
+  });
+
+  if (plan.revalidate) {
+    // Generation-aware + single-flight: a connect/disconnect that lands while
+    // this runs bumps the generation, and the newer build is what stores.
+    void rebuildCatalogOnce(userId).catch((err) =>
+      console.warn('[model-intelligence] Background display refresh failed:', err)
+    );
+  }
+
+  if (existing && plan.serve === 'persisted') return { catalog: existing, pending: plan.pending };
+  return {
+    catalog: {
+      models: [],
+      providerFingerprint: existing?.providerFingerprint ?? fingerprint,
+      classifiedByAi: existing?.classifiedByAi ?? false,
+      classificationModel: existing?.classificationModel ?? null,
+      analyzedAt: existing?.analyzedAt ?? new Date().toISOString(),
+    },
+    pending: plan.pending,
+  };
+}
+
+export interface CatalogServeInput {
+  /** A persisted catalog exists for this user. */
+  hasPersisted: boolean;
+  /** null when there is nothing to compare. */
+  fingerprintMatches: boolean | null;
+  /** The persisted catalog is older than CATALOG_TTL_MS. */
+  stale: boolean;
+}
+
+export interface CatalogServePlan {
+  /** 'persisted' = return the stored catalog; 'empty' = return an empty one. */
+  serve: 'persisted' | 'empty';
+  /** A background rebuild must be scheduled. */
+  revalidate: boolean;
+  /** What was served does not yet reflect the current provider set. */
+  pending: boolean;
+}
+
+/**
+ * Decides, purely, what a display read should serve. Exported so the latency
+ * contract is testable without a database:
+ *   - a fingerprint mismatch means the provider set changed ⇒ serve the last
+ *     known catalog, rebuild in the background, report pending;
+ *   - a mere TTL expiry ⇒ same treatment (unchanged stale-while-revalidate);
+ *   - nothing persisted ⇒ serve empty + pending rather than block on a build.
+ * A served catalog that is neither mismatched nor stale is authoritative and
+ * never revalidated.
+ */
+export function planCatalogServe(input: CatalogServeInput): CatalogServePlan {
+  if (!input.hasPersisted) return { serve: 'empty', revalidate: true, pending: true };
+  if (input.fingerprintMatches === false) return { serve: 'persisted', revalidate: true, pending: true };
+  if (input.stale) return { serve: 'persisted', revalidate: true, pending: true };
+  return { serve: 'persisted', revalidate: false, pending: false };
+}
+
+/**
+ * Whether a completed build may overwrite the persisted catalog.
+ *
+ * `failedProviders` are providers whose live fetch was attempted but rejected
+ * (see fetchLiveModels): the build is missing their models. Persisting it
+ * would silently hide those providers from /models — and from everything built
+ * on the catalog (search, stage candidates, setup pickers) — until the next
+ * successful rebuild, even though getProviderConnections still reports them
+ * connected. When a previous catalog exists it stays authoritative; revalidate
+ * loops (fingerprint mismatch → rebuild on GET, TTL → background rebuild) keep
+ * retrying, so the display heals as soon as the failing endpoint returns.
+ * With no previous catalog there is nothing to protect: the partial first
+ * build is stored as before and heals at worst after CATALOG_TTL_MS.
+ */
+export function shouldPersistCatalogBuild(
+  hasPersistedCatalog: boolean,
+  failedProviders: readonly ProviderName[]
+): boolean {
+  if (failedProviders.length === 0) return true;
+  return !hasPersistedCatalog;
+}
+
+export async function getOrBuildCatalog(
+  userId: string,
+  forceRefresh = false,
+  buildGeneration?: number
+): Promise<ModelIntelligenceResult> {
+  const existing = await loadCatalog(userId);
+  if (!forceRefresh && existing) {
+    const connected = await getProviderConnections(userId);
+    const fingerprint = buildProviderFingerprint(connected);
+
+    if (existing.providerFingerprint !== fingerprint) {
+      // Provider set changed (connect/disconnect): the persisted catalog no
+      // longer matches reality. Rebuild synchronously (deduped) so the
+      // request that follows an explicit user action reflects it; keep the
+      // last-known catalog only if the rebuild fails or comes back empty.
+      try {
+        const rebuilt = await rebuildCatalogOnce(userId);
+        if (rebuilt.models.length > 0) return rebuilt;
+      } catch (err) {
+        console.warn('[model-intelligence] Fingerprint rebuild failed, serving persisted catalog:', err);
       }
-
-      if (isCatalogStale(existing.analyzedAt)) {
-        // Merely time-stale: serve the persisted catalog immediately (do not
-        // block routine page loads) and refresh in the background, deduped.
-        rebuildCatalogOnce(userId).catch((err) =>
-          console.warn('[model-intelligence] Background staleness refresh failed:', err)
-        );
-      }
-
       return existing;
     }
+
+    if (isCatalogStale(existing.analyzedAt)) {
+      // Merely time-stale: serve the persisted catalog immediately (do not
+      // block routine page loads) and refresh in the background, deduped.
+      rebuildCatalogOnce(userId).catch((err) =>
+        console.warn('[model-intelligence] Background staleness refresh failed:', err)
+      );
+    }
+
+    return existing;
   }
-  const models = await discoverModels(userId);
+  const { models, failedProviders } = await discoverModels(userId);
   if (models.length === 0) {
     return { models: [], providerFingerprint: 'none', classifiedByAi: false, classificationModel: null, analyzedAt: new Date().toISOString() };
   }
@@ -969,6 +1144,25 @@ export async function getOrBuildCatalog(userId: string, forceRefresh = false): P
     classified = deterministicRank(models);
   }
   const result: ModelIntelligenceResult = { models: classified, providerFingerprint: fingerprint, classifiedByAi, classificationModel, analyzedAt: new Date().toISOString() };
+  // A provider connect/disconnect that landed WHILE this build was running
+  // makes it a stale generation: its rows and meta fingerprint describe the
+  // previous provider set. Persisting it would let a superseded build become
+  // authoritative (the exact Task Q race), so the write is skipped — the newer
+  // generation's build, already scheduled by that connect/disconnect, stores.
+  if (buildGeneration !== undefined && isGenerationSuperseded(catalogGenerations.get(userId) ?? 0, buildGeneration)) {
+    console.warn('[model-intelligence] Skipped storing a superseded catalog generation (provider set changed during the build)');
+    return result;
+  }
+  // A build that lost a connected provider's live models (their fetch
+  // rejected) must not replace the last complete catalog — see
+  // shouldPersistCatalogBuild. The partial result still goes back to this
+  // caller exactly as before this gate; only the persistent store refuses, so
+  // /models keeps serving the provider's last-known models and revalidate
+  // loops keep retrying until a clean build lands.
+  if (!shouldPersistCatalogBuild(existing !== null, failedProviders)) {
+    console.warn(`[model-intelligence] Skipped storing incomplete catalog build (live fetch failed for: ${failedProviders.join(', ')}) — keeping the last complete catalog`);
+    return result;
+  }
   try { await storeCatalog(userId, result); } catch (err) { console.error('[model-intelligence] Failed to store catalog:', err); }
   return result;
 }

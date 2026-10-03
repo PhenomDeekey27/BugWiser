@@ -1,9 +1,10 @@
 'use client';
 
-import { useReducer } from 'react';
+import { useCallback, useReducer, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CatalogProvider } from '@/app/models/page';
+import { createConnectGate } from './connectState';
 import {
   canRegister,
   canTest,
@@ -33,6 +34,11 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     provider.baseUrl ?? '',
     createInitialLocalFlowState
   );
+
+  // Single-flight latch: the Connect button is disabled while a request is in
+  // flight, but two clicks dispatched before the re-render would both read the
+  // pre-request state. This makes a duplicate registration impossible.
+  const registerGate = useRef(createConnectGate());
 
   const busy = state.phase === 'testing' || state.phase === 'registering';
 
@@ -66,12 +72,16 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     }
   };
 
-  const runRegister = async () => {
+  const runRegister = useCallback(async () => {
     if (!canRegister(state)) return;
+    if (!registerGate.current.tryBegin()) return;
     const baseUrl = state.verifiedBaseUrl ?? state.baseUrl;
     const apiKey = state.apiKey;
     dispatch({ type: 'register-start' });
     try {
+      // Resolves as soon as the registration request finishes (success or
+      // failure) — the catalog refresh it triggers runs in the background, so
+      // this can never leave the button on "Connecting...".
       await onConnect(provider.providerId, apiKey, { baseUrl });
       dispatch({ type: 'register-success' });
       // Submitted — drop the secret from the form immediately.
@@ -81,8 +91,10 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
         type: 'register-failure',
         error: (e as Error).message || 'Registration failed.',
       });
+    } finally {
+      registerGate.current.end();
     }
-  };
+  }, [state, onConnect, provider.providerId]);
 
   return (
     <div className="space-y-2">

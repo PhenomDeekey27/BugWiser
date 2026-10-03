@@ -1,4 +1,5 @@
 import { RepositoryFileRecord, RelevantFile } from '@/types';
+import { extractJsonObject } from './json';
 
 interface RelevantFileResult {
   path: string;
@@ -65,8 +66,11 @@ export function validateRelevantFiles(
 
 export function parseAIResponse(content: string): RelevantFileResult[] {
   try {
-    const parsed = JSON.parse(content);
-    const files = parsed.relevantFiles || parsed.files || parsed;
+    const parsed = extractJsonObject(content);
+    if (!parsed || typeof parsed !== 'object') return [];
+
+    const obj = parsed as Record<string, unknown>;
+    const files = obj.relevantFiles || obj.files || obj;
 
     if (!Array.isArray(files)) return [];
 
