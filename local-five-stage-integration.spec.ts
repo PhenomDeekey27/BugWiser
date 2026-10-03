@@ -418,6 +418,9 @@ async function stageChecks(stage: StageFixture): Promise<void> {
     assert.deepEqual(routing.runArgs.stageOverrides, {
       provider: LOCAL_PROVIDER_ID,
       model: LOCAL_MODEL_ID,
+      // Persisted provenance rides along so the strict-Free plan can tell an
+      // explicitly hand-picked model from a setup-derived pick.
+      origin: 'manual',
     });
     assert.match(routing.selection.reason, new RegExp(`stage "${stage.id}"`));
   });

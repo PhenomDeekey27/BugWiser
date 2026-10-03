@@ -1,11 +1,28 @@
 import { RunRequest } from './model-router';
 import { resolveUserCredentials, resolveLocalEndpoint, getDisabledProviders } from './connection/service';
 import { getModelPreference, type SelectedStrategy } from './preferences';
+import type { StageOverrideOrigin } from './catalog/overrideReconcile';
 import type { ProviderName } from './providers/registry';
+
+/**
+ * A resolved per-stage override: the persisted (provider, model) pair plus the
+ * ORIGIN it was saved with. `origin` is preserved end-to-end (preference →
+ * routing → gateway → strict-Free plan) because it is the only thing that tells
+ * an explicitly hand-picked model ('manual') apart from a Free-setup-derived
+ * one ('setup'). Dropping it here is what previously made both look identical
+ * to the strict-Free gate.
+ */
+export interface ResolvedStageOverride {
+  provider: ProviderName;
+  model: string;
+  origin?: StageOverrideOrigin;
+}
 
 export interface ResolvedRouting {
   /** Args to pass to runWithFallback. */
-  runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'stageOverrides' | 'disabledProviders'>;
+  runArgs: Pick<RunRequest, 'providerTokens' | 'manualModel' | 'disabledProviders'> & {
+    stageOverrides?: ResolvedStageOverride | null;
+  };
   /** The user's CURRENT strategy from user_model_preferences (live — not the analysis-row snapshot). */
   selectedStrategy: SelectedStrategy;
   preferenceReadFailed: boolean;
@@ -38,13 +55,21 @@ const ANALYSIS_TASK_IDS: ReadonlySet<string> = new Set([
 
 /** Returns the saved override for one stage, or null when absent/invalid. */
 function resolveStageOverride(
-  stageOverrides: Record<string, { provider: ProviderName | null; model: string | null }> | undefined,
+  stageOverrides:
+    | Record<string, { provider: ProviderName | null; model: string | null; origin?: StageOverrideOrigin }>
+    | undefined,
   task: string
-): { provider: ProviderName; model: string } | null {
+): ResolvedStageOverride | null {
   if (!stageOverrides || !ANALYSIS_TASK_IDS.has(task)) return null;
   const override = stageOverrides[task];
   if (!override?.provider || !override?.model) return null;
-  return { provider: override.provider, model: override.model };
+  return {
+    provider: override.provider,
+    model: override.model,
+    // Preserved verbatim: an explicit per-stage choice ('manual') must stay
+    // distinguishable from a setup-derived pick ('setup') downstream.
+    ...(override.origin ? { origin: override.origin } : {}),
+  };
 }
 
 /**

@@ -11,6 +11,7 @@
 import type { CatalogModel } from '@/app/models/page';
 import { estimateCostUsd } from '@/lib/ai/catalog/cost';
 import { STAGE_TOKEN_PROFILES } from '@/lib/ai/catalog/stageTokenProfiles';
+import type { StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 
 export type SetupChoice = 'free' | 'balanced' | 'quality';
 
@@ -563,21 +564,38 @@ export function isConfirmedFreeModel(
 export interface StrictFreeRunPlan {
   /** Ordered confirmed-free, stage-eligible candidates (canonical pool). */
   freeCandidates: Array<{ provider: string; model: string }>;
-  /** The stage override when (and only when) it is confirmed free. */
-  stageOverride: { provider: string; model: string } | null;
+  /**
+   * The stage override that may run this stage, with its persisted origin
+   * intact. Kept when it is confirmed free OR when the user explicitly picked
+   * it for this stage (origin 'manual'); null when it must not run.
+   */
+  stageOverride: { provider: string; model: string; origin?: StageOverrideOrigin } | null;
 }
 
 /**
  * Builds the STRICT FREE execution plan for one stage, given the user's
- * catalog. Drops any stage override that is not confirmed free (legacy paid
- * rows, hand-picked paid models under a Free setup) and returns the ordered
- * free candidate pool for primary + fallback use. Pure — exported so tests
- * can validate the plan without touching the database.
+ * catalog, and returns the ordered free candidate pool for fallback use.
+ *
+ * Provenance decides whether a SAVED override may run under the Free strategy:
+ *
+ *   - origin 'manual' — the user explicitly hand-picked this model for THIS
+ *     stage on /models. An explicit choice is honored, exactly like manual
+ *     MODE (whose single model already sits outside strict Free by design), so
+ *     the row /models shows is the row that executes. It is the PRIMARY only;
+ *     `freeCandidates` remains the entire fallback chain, so strict Free still
+ *     never falls back to a paid or unknown-priced model.
+ *   - origin 'setup' (or a legacy row with no origin) — derived from the Free
+ *     setup itself. It is dropped unless it is confirmed free, so the Free
+ *     strategy can never smuggle in a paid pick through a stale/hand-edited row.
+ *
+ * Nothing else changes: free detection is still `price.isFree` only, unknown
+ * pricing is never free, and the context gates are untouched. Pure — exported
+ * so tests can validate the plan without touching the database.
  */
 export function prepareStrictFreeRun(
   catalogModels: CatalogModel[],
   task: string,
-  stageOverride: { provider: string; model: string } | null
+  stageOverride: { provider: string; model: string; origin?: StageOverrideOrigin } | null
 ): StrictFreeRunPlan {
   const stageKey: StageKey | null = Object.prototype.hasOwnProperty.call(STAGE_WEIGHTS, task)
     ? (task as StageKey)
@@ -585,11 +603,19 @@ export function prepareStrictFreeRun(
   const freeCandidates = stageKey ? getFreeStageCandidates(catalogModels, stageKey) : [];
 
   let override = stageOverride;
-  if (override && !isConfirmedFreeModel(catalogModels, override.provider, override.model)) {
-    console.warn(
-      `[stage-selection] STRICT FREE: ignoring stage override ${override.provider}/${override.model} for "${task}" — not confirmed free (price.isFree).`
-    );
-    override = null;
+  if (override) {
+    if (isConfirmedFreeModel(catalogModels, override.provider, override.model)) {
+      // Confirmed free: always allowed, whatever its origin.
+    } else if (override.origin === 'manual') {
+      console.warn(
+        `[stage-selection] STRICT FREE: keeping the explicitly selected stage override ${override.provider}/${override.model} for "${task}" — it is not confirmed free (price.isFree), but the user selected it for this stage. Fallbacks stay confirmed-free only.`
+      );
+    } else {
+      console.warn(
+        `[stage-selection] STRICT FREE: ignoring stage override ${override.provider}/${override.model} for "${task}" — not confirmed free (price.isFree) and not explicitly selected by the user.`
+      );
+      override = null;
+    }
   }
 
   return { freeCandidates, stageOverride: override };

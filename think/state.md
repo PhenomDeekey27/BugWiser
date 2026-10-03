@@ -8776,3 +8776,82 @@ The schema accepts every state the Task Y implementation produces (`disabled` + 
 - A stale override (model vanished while snapshot pending) still shows "Not configured" until the authoritative read reconciles it - under-drop is the safe direction; derived display deliberately does not mask saved rows.
 - Runtime chain head for no-override auto stages remains the static strategy assignment (RC-4, pre-existing, out of scope); the derived display reflects the CATALOG automatic selection as the task required.
 - If the original manual repro never clicked "Save Preference", that leg is by design (the Tip documents it); the fix covers both actual code-level loss points (checkbox omission + pending reconcile).
+
+---
+
+## TASK AC — Trace model preference/selection from /models through real analysis execution (October 3, 2026)
+
+**Status:** FIXED (behavior change approved by the user mid-task). `npx tsc --noEmit` = 0 errors; 23 spec suites = **529 checks ALL PASS** (514 baseline + 15 new); `npm run lint` = 34 problems (7 errors, 27 warnings) — byte-identical to the Task AA baseline, so no new findings; `npx next build` = Compiled successfully. No network/DB writes, no paid API calls, no secrets, no hardcoded provider or stage.
+
+### Reported symptom
+
+Only the Local LLM provider connected + a Local model selected on `/models` ⇒ a real File Discovery analysis fails with
+`No free model is available for this stage (task: relevant_file_discovery) — no confirmed-free model meets this stage's requirements on your connected providers.`
+
+### Case classification: D (with B as a co-factor) — NOT C, NOT E, NOT F
+
+- **C ruled out (persistence is correct).** `buildStageOverrides` → `buildPreferenceSaveBody` → `PUT /api/models/preference` → `user_model_preferences.stage_overrides` (JSONB) → reload is byte-identical, `origin` included. Task AA already fixed the two loss points.
+- **E ruled out.** Derived/automatic rows are never persisted (`isOverride:false` ⇒ omitted); only an explicit Configure change writes a row, stamped `origin:'manual'`.
+- **F ruled out.** Every stage resolves its OWN key via the `ANALYSIS_TASK_IDS` whitelist; a non-stage task id resolves `null`.
+- **D = root cause.** The persisted stage override WAS resolved correctly by `resolveAnalysisRouting`, then `gateway.generate` discarded it: `selected_strategy='free'` + auto mode ⇒ `isStrictFreeSelection` ⇒ `prepareStrictFreeRun` dropped any override whose `price.isFree` was false. Local's pricing is `unknown` ⇒ never free ⇒ override dropped ⇒ `freeCandidates` empty ⇒ `buildRunChain` threw the structured error.
+- **B co-factor.** Local is non-free only because an unknown-pricing model is (correctly) never classified free — `normalizeLocalModel` never fabricates an `explicit-zero` authority. Unknown pricing was NOT reclassified.
+- The aggravating design defect: **`origin` was thrown away at the routing boundary** (`resolveStageOverride` returned only `{provider, model}`), so a hand-picked model (`origin:'manual'`) was indistinguishable from a Free-setup-derived pick (`origin:'setup'`) at the only gate that could tell them apart.
+
+### Boundary values captured (Local-only, auto mode, `selected_strategy='free'`)
+
+| Boundary | Value |
+|---|---|
+| `/models` Configure → `resolveAppliedOverride` | `isOverride:true`, `origin:'manual'` |
+| `buildStageOverrides` → save body | `{provider:'local', model:'local/server-262k', origin:'manual'}` |
+| preference persistence + reload | identical (incl. `origin`) |
+| `resolveAnalysisRouting` (auto) | `{provider, model}` — **`origin` was LOST here** |
+| `isStrictFreeSelection` | `true` |
+| `prepareStrictFreeRun` (before) | override dropped (not confirmed free); `freeCandidates: []` |
+| `buildRunChain` (before) | empty ⇒ `No free model is available for this stage` |
+| `price` / free authority | `{input:null, output:null, isFree:false}`, `priceSource:'unknown'`, `freeAuthority:'none'` |
+| Context requirement | `STAGE_CONTEXT_MIN` 32K/128K/200K/32K/32K — never touched by this task |
+
+### The fix (smallest, provider-agnostic, no stage special-casing)
+
+1. **`lib/ai/routing.ts`** — new exported `ResolvedStageOverride` (`{provider, model, origin?}`); `resolveStageOverride` now carries `origin` through, so provenance survives to the runtime. `runArgs` keeps the same shape plus `origin`. Auto-mode-only, task-whitelisted — no behavior change other than the added field.
+2. **`lib/ai/catalog/stageSelection.ts`** — `prepareStrictFreeRun` now decides by provenance instead of free-status alone: a **confirmed-free** override is always kept; an **explicit `origin:'manual'`** override is kept (an explicit user choice, the same exemption manual MODE already has by design, Task C); an `origin:'setup'` override **or a legacy row with no origin** is still dropped unless confirmed free. `StrictFreeRunPlan.stageOverride` carries `origin` on.
+3. **`lib/ai/model-router/index.ts`** — `RunRequest.stageOverrides` reuses `ResolvedStageOverride` (type-only import; `buildRunChain` is unchanged and still places the override first).
+4. **`lib/ai/gateway.ts`** — propagates `plan.stageOverride.origin` into `runWithFallback` so the router sees the same provenance the plan decided on.
+
+Deliberately NOT changed: free detection (`price.isFree` only), `unknown ≠ free`, `isExplicitlyFree`, `STAGE_CONTEXT_MIN`, family grouping, provider caps, `buildRunChain` precedence, `isStrictFreeSelection`, the `unavailable` marker, manual MODE, reconciliation, and every `/models` UI behavior. No provider name and no stage id appears in the change.
+
+### Guarantees now provable (regression suite)
+
+- A saved per-stage selection survives into real execution for **all five** stages under the Free strategy.
+- A manual stage selection is never replaced by the Free strategy; `freeCandidates` remains the ENTIRE fallback chain, so **strict Free still never falls back to a paid or unknown-priced model**.
+- `origin:'setup'` and provenance-less non-free overrides are still dropped (the Free setup can never smuggle in a paid pick through a stale row).
+- A confirmed-free override is still kept, and the `unavailable` marker still fails closed.
+- Automatic (non-Free) strategy still uses `getAutomaticStageCandidates` — the catalog pool, free-first ordering, and context gates unchanged.
+- Each stage reads its own assignment; no cross-stage leakage.
+- Mixed case: one stage's explicit paid-model override does not affect the other four stages, which keep the confirmed-free automatic pick.
+
+### Behavior change worth stating plainly
+
+With `selected_strategy='free'` + auto mode, a model the user **explicitly hand-picked for a stage** now executes even when it is not confirmed free (Local with unknown pricing, or a hand-picked paid model). Fallbacks remain confirmed-free-only, so Free can still never silently escalate to a paid model after a failure. This was an explicit product decision (the user's answer during the task); the alternative — leaving the drop in place and only fixing the misleading UI — was rejected.
+
+### Files changed
+
+- `lib/ai/routing.ts`
+- `lib/ai/catalog/stageSelection.ts`
+- `lib/ai/model-router/index.ts`
+- `lib/ai/gateway.ts`
+- `gateway-strictfree-life-cycle.spec.ts` (NEW — 15 checks; parameterized over all five stages)
+- `local-five-stage-integration.spec.ts` (1 assertion updated: `runArgs.stageOverrides` now also carries `origin: 'manual'`)
+
+### Tests
+
+`gateway-strictfree-life-cycle.spec.ts` — 15 checks, ALL PASS. Pure boundaries + injected fakes (`loadPreference` / `resolveCredentials` / `resolveLocalEndpoint` / `resolveDisabledProviders`), no network, no DB, no AI calls. It replays the gateway decision chain (`resolveAnalysisRouting` → `isStrictFreeSelection` → `prepareStrictFreeRun` | `getAutomaticStageCandidates` → `buildRunChain` → `buildStageAssignmentRecord`) and asserts the boundary values listed above.
+
+**Reproduction proof:** with the four application files stashed (pre-fix), the suite fails 6 checks and emits the EXACT production message (`No free model is available for this stage (task: relevant_file_discovery) — no confirmed-free model meets this stage's requirements…`) for the manual-selection regression; with the fix, all 15 pass.
+
+### Known limitations / not addressed
+
+- The pre-existing `/models` UI still cannot warn that a hand-picked model under the Free strategy is outside the confirmed-free pool (Task B's "UI-MISLEADING" leg, partially moot now that the row is honored).
+- P2/P3/P4 from the Task B audit (unflagged auto-mode fallback hops, manual-mode disconnect, paid autoChain tail in manual mode) remain open and out of scope.
+- `origin` is still not written by callers other than the Configure modal and the setup chips; a hand-edited `stage_overrides` row without `origin` is treated conservatively (must be confirmed free).
+- `calculateTotal.spec.ts` at the repo root is an EMPTY DIRECTORY, not a suite (pre-existing; it exits 1 if globbed).

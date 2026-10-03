@@ -40,3 +40,238 @@ Launcher log: D:\IssuePilot\.coder\logs\qwen3.5-4b.log
 [2026-10-02T10:16:54.860Z] INFO chat ok in 3363ms, 1 tool call(s)
 [2026-10-02T10:17:05.252Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
 [2026-10-02T10:17:05.739Z] WARN Win+O could not be registered (hotkey conflict or policy).
+[2026-10-03T12:15:29.309Z] INFO coder start workspace=D:\IssuePilot config=E:\Custom Projects\CoderAgent\config\models.json
+[2026-10-03T12:15:34.241Z] WARN Win+O could not be registered (hotkey conflict or policy).
+[2026-10-03T12:15:38.787Z] INFO [model] selected id=qwen3.5-4b name="Qwen 3.5 4B" launcher="D:\llm-quant\llamaquant.bat" dispatch=arg args=["qwen3.5-4b"] server=127.0.0.1:8000
+[2026-10-03T12:15:38.876Z] INFO [model] port 8000 is in use by PID 11392; probing /v1/models
+[2026-10-03T12:15:38.913Z] INFO [model] probe http://127.0.0.1:8000/v1 -> compatible server ids=[local] model_path=D:\HuggingFace\models--unsloth--Qwen3.5-4B-GGUF\snapshots\e87f176479d0855a907a41277aca2f8ee7a09523\Qwen3.5-4B-Q4_K_M.gguf
+[2026-10-03T12:15:38.914Z] INFO [model] adopted existing server on port 8000: selected=qwen3.5-4b running="Qwen3.5-4B-Q4_K_M.gguf" ids=[local] (same model file (qwen3.5-4b-q4_k_m.gguf)); not restarting
+[2026-10-03T12:15:38.914Z] INFO [model] activeModelId=qwen3.5-4b source=adopted server=[local] running="Qwen3.5-4B-Q4_K_M.gguf"
+[2026-10-03T12:15:38.929Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=2 tools=6 timeoutMs=600000
+[2026-10-03T12:15:42.665Z] DEBUG [chat] HTTP 200 OK in 3736ms
+[2026-10-03T12:15:42.665Z] DEBUG [chat] response received in 3736ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:15:42.665Z] INFO chat ok in 3736ms, 1 tool call(s)
+[2026-10-03T12:15:42.716Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=4 tools=6 timeoutMs=600000
+[2026-10-03T12:15:46.254Z] DEBUG [chat] HTTP 200 OK in 3538ms
+[2026-10-03T12:15:46.254Z] DEBUG [chat] response received in 3538ms: 101 chars, 1 tool call(s)
+[2026-10-03T12:15:46.254Z] INFO chat ok in 3538ms, 1 tool call(s)
+[2026-10-03T12:15:46.393Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=6 tools=6 timeoutMs=600000
+[2026-10-03T12:15:47.934Z] DEBUG [chat] HTTP 200 OK in 1541ms
+[2026-10-03T12:15:47.935Z] DEBUG [chat] response received in 1542ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:15:47.935Z] INFO chat ok in 1542ms, 1 tool call(s)
+[2026-10-03T12:15:47.965Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=8 tools=6 timeoutMs=600000
+[2026-10-03T12:15:50.743Z] DEBUG [chat] HTTP 200 OK in 2778ms
+[2026-10-03T12:15:50.743Z] DEBUG [chat] response received in 2778ms: 161 chars, 1 tool call(s)
+[2026-10-03T12:15:50.743Z] INFO chat ok in 2778ms, 1 tool call(s)
+[2026-10-03T12:15:50.786Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=10 tools=6 timeoutMs=600000
+[2026-10-03T12:15:52.383Z] DEBUG [chat] HTTP 200 OK in 1597ms
+[2026-10-03T12:15:52.384Z] DEBUG [chat] response received in 1598ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:15:52.384Z] INFO chat ok in 1598ms, 1 tool call(s)
+[2026-10-03T12:15:52.415Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=12 tools=6 timeoutMs=600000
+[2026-10-03T12:15:55.384Z] DEBUG [chat] HTTP 200 OK in 2968ms
+[2026-10-03T12:15:55.384Z] DEBUG [chat] response received in 2968ms: 133 chars, 1 tool call(s)
+[2026-10-03T12:15:55.384Z] INFO chat ok in 2968ms, 1 tool call(s)
+[2026-10-03T12:15:55.421Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=14 tools=6 timeoutMs=600000
+[2026-10-03T12:15:58.046Z] DEBUG [chat] HTTP 200 OK in 2625ms
+[2026-10-03T12:15:58.046Z] DEBUG [chat] response received in 2625ms: 81 chars, 1 tool call(s)
+[2026-10-03T12:15:58.046Z] INFO chat ok in 2625ms, 1 tool call(s)
+[2026-10-03T12:15:58.078Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=16 tools=6 timeoutMs=600000
+[2026-10-03T12:16:02.856Z] DEBUG [chat] HTTP 200 OK in 4778ms
+[2026-10-03T12:16:02.856Z] DEBUG [chat] response received in 4778ms: 34 chars, 1 tool call(s)
+[2026-10-03T12:16:02.856Z] INFO chat ok in 4778ms, 1 tool call(s)
+[2026-10-03T12:16:02.890Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=18 tools=6 timeoutMs=600000
+[2026-10-03T12:16:05.510Z] DEBUG [chat] HTTP 200 OK in 2620ms
+[2026-10-03T12:16:05.510Z] DEBUG [chat] response received in 2620ms: 70 chars, 1 tool call(s)
+[2026-10-03T12:16:05.510Z] INFO chat ok in 2620ms, 1 tool call(s)
+[2026-10-03T12:16:05.543Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=20 tools=6 timeoutMs=600000
+[2026-10-03T12:16:07.324Z] DEBUG [chat] HTTP 200 OK in 1781ms
+[2026-10-03T12:16:07.325Z] DEBUG [chat] response received in 1782ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:07.325Z] INFO chat ok in 1782ms, 1 tool call(s)
+[2026-10-03T12:16:07.368Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=22 tools=6 timeoutMs=600000
+[2026-10-03T12:16:12.317Z] DEBUG [chat] HTTP 200 OK in 4949ms
+[2026-10-03T12:16:12.318Z] DEBUG [chat] response received in 4950ms: 77 chars, 1 tool call(s)
+[2026-10-03T12:16:12.318Z] INFO chat ok in 4950ms, 1 tool call(s)
+[2026-10-03T12:16:12.442Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=24 tools=6 timeoutMs=600000
+[2026-10-03T12:16:13.831Z] DEBUG [chat] HTTP 200 OK in 1389ms
+[2026-10-03T12:16:13.831Z] DEBUG [chat] response received in 1389ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:13.831Z] INFO chat ok in 1389ms, 1 tool call(s)
+[2026-10-03T12:16:13.873Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=26 tools=6 timeoutMs=600000
+[2026-10-03T12:16:16.742Z] DEBUG [chat] HTTP 200 OK in 2869ms
+[2026-10-03T12:16:16.742Z] DEBUG [chat] response received in 2869ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:16.742Z] INFO chat ok in 2869ms, 1 tool call(s)
+[2026-10-03T12:16:16.786Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=28 tools=6 timeoutMs=600000
+[2026-10-03T12:16:22.619Z] DEBUG [chat] HTTP 200 OK in 5833ms
+[2026-10-03T12:16:22.620Z] DEBUG [chat] response received in 5834ms: 83 chars, 1 tool call(s)
+[2026-10-03T12:16:22.620Z] INFO chat ok in 5834ms, 1 tool call(s)
+[2026-10-03T12:16:22.747Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=30 tools=6 timeoutMs=600000
+[2026-10-03T12:16:24.860Z] DEBUG [chat] HTTP 200 OK in 2113ms
+[2026-10-03T12:16:24.860Z] DEBUG [chat] response received in 2113ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:24.860Z] INFO chat ok in 2113ms, 1 tool call(s)
+[2026-10-03T12:16:25.000Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=32 tools=6 timeoutMs=600000
+[2026-10-03T12:16:26.981Z] DEBUG [chat] HTTP 200 OK in 1981ms
+[2026-10-03T12:16:26.982Z] DEBUG [chat] response received in 1982ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:26.982Z] INFO chat ok in 1982ms, 1 tool call(s)
+[2026-10-03T12:16:27.041Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=34 tools=6 timeoutMs=600000
+[2026-10-03T12:16:32.287Z] DEBUG [chat] HTTP 200 OK in 5246ms
+[2026-10-03T12:16:32.288Z] DEBUG [chat] response received in 5247ms: 195 chars, 1 tool call(s)
+[2026-10-03T12:16:32.288Z] INFO chat ok in 5247ms, 1 tool call(s)
+[2026-10-03T12:16:32.345Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=36 tools=6 timeoutMs=600000
+[2026-10-03T12:16:35.062Z] DEBUG [chat] HTTP 200 OK in 2717ms
+[2026-10-03T12:16:35.062Z] DEBUG [chat] response received in 2717ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:35.062Z] INFO chat ok in 2717ms, 1 tool call(s)
+[2026-10-03T12:16:35.178Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=38 tools=6 timeoutMs=600000
+[2026-10-03T12:16:39.543Z] DEBUG [chat] HTTP 200 OK in 4365ms
+[2026-10-03T12:16:39.543Z] DEBUG [chat] response received in 4365ms: 243 chars, 1 tool call(s)
+[2026-10-03T12:16:39.543Z] INFO chat ok in 4365ms, 1 tool call(s)
+[2026-10-03T12:16:39.598Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=40 tools=6 timeoutMs=600000
+[2026-10-03T12:16:47.206Z] DEBUG [chat] HTTP 200 OK in 7608ms
+[2026-10-03T12:16:47.207Z] DEBUG [chat] response received in 7609ms: 150 chars, 1 tool call(s)
+[2026-10-03T12:16:47.207Z] INFO chat ok in 7609ms, 1 tool call(s)
+[2026-10-03T12:16:47.263Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=42 tools=6 timeoutMs=600000
+[2026-10-03T12:16:51.345Z] DEBUG [chat] HTTP 200 OK in 4082ms
+[2026-10-03T12:16:51.346Z] DEBUG [chat] response received in 4083ms: 83 chars, 1 tool call(s)
+[2026-10-03T12:16:51.346Z] INFO chat ok in 4083ms, 1 tool call(s)
+[2026-10-03T12:16:51.386Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=44 tools=6 timeoutMs=600000
+[2026-10-03T12:16:55.183Z] DEBUG [chat] HTTP 200 OK in 3797ms
+[2026-10-03T12:16:55.184Z] DEBUG [chat] response received in 3798ms: 114 chars, 1 tool call(s)
+[2026-10-03T12:16:55.184Z] INFO chat ok in 3798ms, 1 tool call(s)
+[2026-10-03T12:16:55.228Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=46 tools=6 timeoutMs=600000
+[2026-10-03T12:16:58.130Z] DEBUG [chat] HTTP 200 OK in 2902ms
+[2026-10-03T12:16:58.130Z] DEBUG [chat] response received in 2902ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:16:58.130Z] INFO chat ok in 2902ms, 1 tool call(s)
+[2026-10-03T12:16:58.157Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=48 tools=6 timeoutMs=600000
+[2026-10-03T12:17:00.995Z] DEBUG [chat] HTTP 200 OK in 2838ms
+[2026-10-03T12:17:00.995Z] DEBUG [chat] response received in 2838ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:00.995Z] INFO chat ok in 2838ms, 1 tool call(s)
+[2026-10-03T12:17:01.061Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=3 tools=6 timeoutMs=600000
+[2026-10-03T12:17:06.023Z] DEBUG [chat] HTTP 200 OK in 4962ms
+[2026-10-03T12:17:06.024Z] DEBUG [chat] response received in 4963ms: 131 chars, 1 tool call(s)
+[2026-10-03T12:17:06.024Z] INFO chat ok in 4963ms, 1 tool call(s)
+[2026-10-03T12:17:06.066Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=5 tools=6 timeoutMs=600000
+[2026-10-03T12:17:10.891Z] DEBUG [chat] HTTP 200 OK in 4825ms
+[2026-10-03T12:17:10.892Z] DEBUG [chat] response received in 4826ms: 294 chars, 2 tool call(s)
+[2026-10-03T12:17:10.892Z] INFO chat ok in 4826ms, 2 tool call(s)
+[2026-10-03T12:17:10.935Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=8 tools=6 timeoutMs=600000
+[2026-10-03T12:17:15.369Z] DEBUG [chat] HTTP 200 OK in 4434ms
+[2026-10-03T12:17:15.370Z] DEBUG [chat] response received in 4435ms: 182 chars, 2 tool call(s)
+[2026-10-03T12:17:15.370Z] INFO chat ok in 4435ms, 2 tool call(s)
+[2026-10-03T12:17:15.483Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=11 tools=6 timeoutMs=600000
+[2026-10-03T12:17:20.173Z] DEBUG [chat] HTTP 200 OK in 4690ms
+[2026-10-03T12:17:20.174Z] DEBUG [chat] response received in 4691ms: 142 chars, 2 tool call(s)
+[2026-10-03T12:17:20.174Z] INFO chat ok in 4691ms, 2 tool call(s)
+[2026-10-03T12:17:20.279Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=14 tools=6 timeoutMs=600000
+[2026-10-03T12:17:23.482Z] DEBUG [chat] HTTP 200 OK in 3203ms
+[2026-10-03T12:17:23.483Z] DEBUG [chat] response received in 3204ms: 62 chars, 1 tool call(s)
+[2026-10-03T12:17:23.483Z] INFO chat ok in 3204ms, 1 tool call(s)
+[2026-10-03T12:17:23.520Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=16 tools=6 timeoutMs=600000
+[2026-10-03T12:17:30.007Z] DEBUG [chat] HTTP 200 OK in 6487ms
+[2026-10-03T12:17:30.007Z] DEBUG [chat] response received in 6487ms: 357 chars, 2 tool call(s)
+[2026-10-03T12:17:30.007Z] INFO chat ok in 6487ms, 2 tool call(s)
+[2026-10-03T12:17:30.044Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=19 tools=6 timeoutMs=600000
+[2026-10-03T12:17:36.795Z] DEBUG [chat] HTTP 200 OK in 6751ms
+[2026-10-03T12:17:36.796Z] DEBUG [chat] response received in 6752ms: 325 chars, 1 tool call(s)
+[2026-10-03T12:17:36.796Z] INFO chat ok in 6752ms, 1 tool call(s)
+[2026-10-03T12:17:36.880Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=21 tools=6 timeoutMs=600000
+[2026-10-03T12:17:39.753Z] DEBUG [chat] HTTP 200 OK in 2873ms
+[2026-10-03T12:17:39.753Z] DEBUG [chat] response received in 2873ms: 176 chars, 1 tool call(s)
+[2026-10-03T12:17:39.753Z] INFO chat ok in 2873ms, 1 tool call(s)
+[2026-10-03T12:17:39.791Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=23 tools=6 timeoutMs=600000
+[2026-10-03T12:17:41.910Z] DEBUG [chat] HTTP 200 OK in 2119ms
+[2026-10-03T12:17:41.910Z] DEBUG [chat] response received in 2119ms: 109 chars, 1 tool call(s)
+[2026-10-03T12:17:41.910Z] INFO chat ok in 2119ms, 1 tool call(s)
+[2026-10-03T12:17:41.963Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=25 tools=6 timeoutMs=600000
+[2026-10-03T12:17:45.044Z] DEBUG [chat] HTTP 200 OK in 3081ms
+[2026-10-03T12:17:45.044Z] DEBUG [chat] response received in 3081ms: 225 chars, 1 tool call(s)
+[2026-10-03T12:17:45.044Z] INFO chat ok in 3081ms, 1 tool call(s)
+[2026-10-03T12:17:45.078Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=27 tools=6 timeoutMs=600000
+[2026-10-03T12:17:47.108Z] DEBUG [chat] HTTP 200 OK in 2030ms
+[2026-10-03T12:17:47.108Z] DEBUG [chat] response received in 2030ms: 88 chars, 1 tool call(s)
+[2026-10-03T12:17:47.108Z] INFO chat ok in 2030ms, 1 tool call(s)
+[2026-10-03T12:17:47.175Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=3 tools=6 timeoutMs=600000
+[2026-10-03T12:17:49.904Z] DEBUG [chat] HTTP 200 OK in 2729ms
+[2026-10-03T12:17:49.904Z] DEBUG [chat] response received in 2729ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:49.904Z] INFO chat ok in 2729ms, 1 tool call(s)
+[2026-10-03T12:17:49.942Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=5 tools=6 timeoutMs=600000
+[2026-10-03T12:17:52.952Z] DEBUG [chat] HTTP 200 OK in 3010ms
+[2026-10-03T12:17:52.953Z] DEBUG [chat] response received in 3011ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:52.953Z] INFO chat ok in 3011ms, 1 tool call(s)
+[2026-10-03T12:17:53.057Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=7 tools=6 timeoutMs=600000
+[2026-10-03T12:17:54.813Z] DEBUG [chat] HTTP 200 OK in 1756ms
+[2026-10-03T12:17:54.814Z] DEBUG [chat] response received in 1757ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:54.814Z] INFO chat ok in 1757ms, 1 tool call(s)
+[2026-10-03T12:17:54.890Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=9 tools=6 timeoutMs=600000
+[2026-10-03T12:17:55.835Z] DEBUG [chat] HTTP 200 OK in 945ms
+[2026-10-03T12:17:55.835Z] DEBUG [chat] response received in 945ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:55.835Z] INFO chat ok in 945ms, 1 tool call(s)
+[2026-10-03T12:17:55.918Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=11 tools=6 timeoutMs=600000
+[2026-10-03T12:17:57.629Z] DEBUG [chat] HTTP 200 OK in 1711ms
+[2026-10-03T12:17:57.629Z] DEBUG [chat] response received in 1711ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:57.629Z] INFO chat ok in 1711ms, 1 tool call(s)
+[2026-10-03T12:17:57.728Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=13 tools=6 timeoutMs=600000
+[2026-10-03T12:17:59.670Z] DEBUG [chat] HTTP 200 OK in 1942ms
+[2026-10-03T12:17:59.671Z] DEBUG [chat] response received in 1943ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:17:59.671Z] INFO chat ok in 1943ms, 1 tool call(s)
+[2026-10-03T12:17:59.760Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=15 tools=6 timeoutMs=600000
+[2026-10-03T12:18:01.504Z] DEBUG [chat] HTTP 200 OK in 1744ms
+[2026-10-03T12:18:01.504Z] DEBUG [chat] response received in 1744ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:01.504Z] INFO chat ok in 1744ms, 1 tool call(s)
+[2026-10-03T12:18:01.582Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=17 tools=6 timeoutMs=600000
+[2026-10-03T12:18:02.766Z] DEBUG [chat] HTTP 200 OK in 1184ms
+[2026-10-03T12:18:02.767Z] DEBUG [chat] response received in 1185ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:02.767Z] INFO chat ok in 1185ms, 1 tool call(s)
+[2026-10-03T12:18:02.845Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=19 tools=6 timeoutMs=600000
+[2026-10-03T12:18:04.623Z] DEBUG [chat] HTTP 200 OK in 1777ms
+[2026-10-03T12:18:04.623Z] DEBUG [chat] response received in 1777ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:04.623Z] INFO chat ok in 1777ms, 1 tool call(s)
+[2026-10-03T12:18:04.706Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=21 tools=6 timeoutMs=600000
+[2026-10-03T12:18:05.769Z] DEBUG [chat] HTTP 200 OK in 1063ms
+[2026-10-03T12:18:05.770Z] DEBUG [chat] response received in 1064ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:05.770Z] INFO chat ok in 1064ms, 1 tool call(s)
+[2026-10-03T12:18:05.804Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=23 tools=6 timeoutMs=600000
+[2026-10-03T12:18:08.220Z] DEBUG [chat] HTTP 200 OK in 2416ms
+[2026-10-03T12:18:08.220Z] DEBUG [chat] response received in 2416ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:08.220Z] INFO chat ok in 2416ms, 1 tool call(s)
+[2026-10-03T12:18:08.312Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=25 tools=6 timeoutMs=600000
+[2026-10-03T12:18:10.175Z] DEBUG [chat] HTTP 200 OK in 1863ms
+[2026-10-03T12:18:10.175Z] DEBUG [chat] response received in 1863ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:10.175Z] INFO chat ok in 1863ms, 1 tool call(s)
+[2026-10-03T12:18:10.271Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=27 tools=6 timeoutMs=600000
+[2026-10-03T12:18:11.275Z] DEBUG [chat] HTTP 200 OK in 1004ms
+[2026-10-03T12:18:11.276Z] DEBUG [chat] response received in 1005ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:11.276Z] INFO chat ok in 1005ms, 1 tool call(s)
+[2026-10-03T12:18:11.313Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=29 tools=6 timeoutMs=600000
+[2026-10-03T12:18:12.668Z] DEBUG [chat] HTTP 200 OK in 1355ms
+[2026-10-03T12:18:12.669Z] DEBUG [chat] response received in 1356ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:12.669Z] INFO chat ok in 1356ms, 1 tool call(s)
+[2026-10-03T12:18:12.699Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=31 tools=6 timeoutMs=600000
+[2026-10-03T12:18:15.240Z] DEBUG [chat] HTTP 200 OK in 2541ms
+[2026-10-03T12:18:15.240Z] DEBUG [chat] response received in 2541ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:15.240Z] INFO chat ok in 2541ms, 1 tool call(s)
+[2026-10-03T12:18:15.281Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=33 tools=6 timeoutMs=600000
+[2026-10-03T12:18:20.094Z] DEBUG [chat] HTTP 200 OK in 4813ms
+[2026-10-03T12:18:20.094Z] DEBUG [chat] response received in 4813ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:20.094Z] INFO chat ok in 4813ms, 1 tool call(s)
+[2026-10-03T12:18:20.134Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=35 tools=6 timeoutMs=600000
+[2026-10-03T12:18:24.257Z] DEBUG [chat] HTTP 200 OK in 4123ms
+[2026-10-03T12:18:24.258Z] DEBUG [chat] response received in 4124ms: 233 chars, 1 tool call(s)
+[2026-10-03T12:18:24.258Z] INFO chat ok in 4124ms, 1 tool call(s)
+[2026-10-03T12:18:24.367Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=37 tools=6 timeoutMs=600000
+[2026-10-03T12:18:27.013Z] DEBUG [chat] HTTP 200 OK in 2646ms
+[2026-10-03T12:18:27.014Z] DEBUG [chat] response received in 2647ms: 124 chars, 1 tool call(s)
+[2026-10-03T12:18:27.014Z] INFO chat ok in 2647ms, 1 tool call(s)
+[2026-10-03T12:18:27.063Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=39 tools=6 timeoutMs=600000
+[2026-10-03T12:18:29.927Z] DEBUG [chat] HTTP 200 OK in 2864ms
+[2026-10-03T12:18:29.927Z] DEBUG [chat] response received in 2864ms: 132 chars, 1 tool call(s)
+[2026-10-03T12:18:29.927Z] INFO chat ok in 2864ms, 1 tool call(s)
+[2026-10-03T12:18:30.040Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=41 tools=6 timeoutMs=600000
+[2026-10-03T12:18:31.329Z] DEBUG [chat] HTTP 200 OK in 1289ms
+[2026-10-03T12:18:31.330Z] DEBUG [chat] response received in 1290ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:31.330Z] INFO chat ok in 1290ms, 1 tool call(s)
+[2026-10-03T12:18:31.445Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=43 tools=6 timeoutMs=600000
+[2026-10-03T12:18:32.703Z] DEBUG [chat] HTTP 200 OK in 1258ms
+[2026-10-03T12:18:32.704Z] DEBUG [chat] response received in 1259ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:32.704Z] INFO chat ok in 1259ms, 1 tool call(s)
+[2026-10-03T12:18:32.798Z] DEBUG [chat] POST http://127.0.0.1:8000/v1/chat/completions model="local" internal=qwen3.5-4b messages=45 tools=6 timeoutMs=600000
+[2026-10-03T12:18:34.063Z] DEBUG [chat] HTTP 200 OK in 1265ms
+[2026-10-03T12:18:34.064Z] DEBUG [chat] response received in 1266ms: 0 chars, 1 tool call(s)
+[2026-10-03T12:18:34.064Z] INFO chat ok in 1266ms, 1 tool call(s)

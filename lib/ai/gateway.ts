@@ -118,13 +118,20 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     );
 
     if (strictFree) {
+      // The plan may DROP the saved override (setup-derived and not confirmed
+      // free). When it keeps one, its persisted origin rides along so the
+      // router records the user's explicit choice unchanged.
       const plan = prepareStrictFreeRun(catalogModels, params.task, stageOverride ?? null);
       freeCandidates = plan.freeCandidates.map((c) => ({
         provider: c.provider as ProviderName,
         model: c.model,
       }));
       stageOverride = plan.stageOverride
-        ? { provider: plan.stageOverride.provider as ProviderName, model: plan.stageOverride.model }
+        ? {
+            provider: plan.stageOverride.provider as ProviderName,
+            model: plan.stageOverride.model,
+            ...(plan.stageOverride.origin ? { origin: plan.stageOverride.origin } : {}),
+          }
         : undefined;
     } else {
       automaticCandidates = getAutomaticStageCandidates(catalogModels, params.task).map((c) => ({

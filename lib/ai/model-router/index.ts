@@ -10,6 +10,7 @@ import {
   StrategyMode,
   StageAssignment,
 } from '../strategy-selection';
+import type { ResolvedStageOverride } from '../routing';
 
 export interface RunRequest {
   task: string;
@@ -32,8 +33,13 @@ export interface RunRequest {
    * Optional per-stage model override from user preferences.
    * If present, this model is placed FIRST for this stage's fallback chain,
    * then the auto-ranked models are used as fallback.
+   *
+   * `origin` is the persisted provenance of the row ('manual' = explicitly
+   * hand-picked by the user, 'setup' = derived from a Free/Balanced/Quality
+   * setup). It is carried, never interpreted, here: the gateway's strict-Free
+   * plan uses it to tell an explicit choice apart from a setup pick.
    */
-  stageOverrides?: { provider: ProviderName; model: string } | null;
+  stageOverrides?: ResolvedStageOverride | null;
   /**
    * Strategy mode: 'auto', 'free', 'free_paid', 'fully_paid', or 'custom'.
    * Controls the per-stage model selection policy.
