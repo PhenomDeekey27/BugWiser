@@ -91,30 +91,53 @@ CRITICAL RULES:
 - If you cannot safely generate a patch, return an empty files array with an explanation in summary
 - For styling/CSS issues, focus on the actual CSS/component changes needed
 
-OUTPUT: Valid JSON with this exact structure:
+PATCH STRUCTURE RULES (a patch that breaks any of these is rejected before it is stored):
+- Copy context lines VERBATIM from the provided source code. Never reformat, reindent or paraphrase them.
+- The OLD side of a hunk (all context + removed entries) must be a CONTIGUOUS run of file lines, in file order. Include blank lines as "context" entries — never skip a line between two context lines.
+- Start and end every hunk with at least one context line. A hunk containing only "added" entries has nothing to locate it in the file and is rejected.
+- Every "removed" entry must be a line you copied verbatim from the file. Never remove a line you did not quote.
+- "oldLines" must equal the number of context + removed entries in that hunk. "newLines" must equal the number of context + added entries.
+- Emit exactly ONE physical line per entry. Never put two lines into a single "content" value.
+- oldStart / newStart are advisory only; content matching finds the real location, but keep them as accurate as you can.
+- The file must still be syntactically valid after your change (balanced braces, no stray lines).
+
+OUTPUT: Valid JSON with this exact structure.
+Note how oldLines (4) counts context + removed, newLines (5) counts context + added, and the blank line is kept as a context entry so the block stays contiguous:
 {
   "summary": "Brief summary of the patch",
   "files": [
     {
-      "path": "src/example.ts",
+      "path": "src/example.js",
       "hunks": [
         {
           "oldStart": 42,
-          "oldLines": 10,
+          "oldLines": 4,
           "newStart": 42,
-          "newLines": 12,
+          "newLines": 5,
           "lines": [
             {
               "type": "context",
-              "content": "  existing code line"
+              "content": "function total(items) {"
+            },
+            {
+              "type": "context",
+              "content": ""
             },
             {
               "type": "removed",
-              "content": "  line to remove"
+              "content": "  return subtotal - discount;"
             },
             {
               "type": "added",
-              "content": "  new line to add"
+              "content": "  const net = subtotal - discount;"
+            },
+            {
+              "type": "added",
+              "content": "  return net;"
+            },
+            {
+              "type": "context",
+              "content": "}"
             }
           ]
         }

@@ -1,9 +1,12 @@
 import { extractJsonObject } from './json';
+import { normalizeHunkLines } from '@/lib/analysis/patch-lines';
 
 export interface PatchResult {
   summary: string;
   files: Array<{
     path: string;
+    additions?: number;
+    deletions?: number;
     hunks: Array<{
       oldStart: number;
       oldLines: number;
@@ -22,6 +25,38 @@ export interface ValidationResult {
   error?: string;
 }
 
+// Expands packed model line content into single physical lines (shared
+// normalization, see lib/analysis/patch-lines.ts) and derives the line counts
+// the PatchFile UI/apply code expects, so the persisted artifact is a valid
+// patch regardless of how sloppy the model's JSON was. Malformed fields are
+// deliberately NOT coerced here — validatePatch still rejects them.
+function normalizeParsedFile(raw: unknown): PatchResult['files'][number] {
+  const file = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawHunks = Array.isArray(file.hunks) ? file.hunks : [];
+
+  let additions = 0;
+  let deletions = 0;
+  const hunks = rawHunks.map((rawHunk) => {
+    const hunk = (rawHunk && typeof rawHunk === 'object' ? rawHunk : {}) as Record<string, unknown>;
+    const lines = normalizeHunkLines(Array.isArray(hunk.lines) ? hunk.lines : []);
+    for (const line of lines) {
+      if (line.type === 'added') additions++;
+      else if (line.type === 'removed') deletions++;
+    }
+    return {
+      ...hunk,
+      lines,
+    } as unknown as PatchResult['files'][number]['hunks'][number];
+  });
+
+  return {
+    path: file.path,
+    additions,
+    deletions,
+    hunks,
+  } as unknown as PatchResult['files'][number];
+}
+
 export function parsePatchResponse(content: string): PatchResult {
   try {
     const extracted = extractJsonObject(content);
@@ -32,7 +67,9 @@ export function parsePatchResponse(content: string): PatchResult {
 
     return {
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'No summary',
-      files: Array.isArray(parsed.files) ? parsed.files : [],
+      files: Array.isArray(parsed.files)
+        ? parsed.files.map(normalizeParsedFile)
+        : [],
     };
   } catch {
     return {

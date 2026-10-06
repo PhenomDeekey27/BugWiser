@@ -1,4 +1,5 @@
 import { PatchHunk } from '@/types';
+import { buildDiffLineRows } from './diffLineRows';
 
 interface DiffViewerProps {
   hunks: PatchHunk[];
@@ -8,32 +9,32 @@ export function DiffViewer({ hunks }: DiffViewerProps) {
   return (
     <div className="overflow-x-auto bg-surface-code">
       <pre className="p-3 font-mono text-xs">
-        {hunks.map((hunk, hunkIndex) => (
-          <div key={hunkIndex}>
-            {hunk.lines.map((line) => (
+        {(hunks ?? []).map((hunk) => (
+          <div key={`hunk:${hunk.oldStart}:${hunk.newStart}`}>
+            {buildDiffLineRows(hunk).map((row) => (
               <div
-                key={line.number}
+                key={row.key}
                 className={`flex ${
-                  line.type === 'added'
+                  row.type === 'added'
                     ? 'bg-green-500/10'
-                    : line.type === 'removed'
+                    : row.type === 'removed'
                     ? 'bg-red-500/10'
                     : ''
                 }`}
               >
                 <span className="w-12 text-right pr-3 text-bw-dusty-rose/70 select-none">
-                  {line.number}
+                  {row.number}
                 </span>
                 <span
                   className={
-                    line.type === 'added'
+                    row.type === 'added'
                       ? 'text-green-400'
-                      : line.type === 'removed'
+                      : row.type === 'removed'
                       ? 'text-red-400'
                       : 'text-bw-peach-light'
                   }
                 >
-                  {line.content}
+                  {row.content}
                 </span>
               </div>
             ))}

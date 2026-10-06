@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Patch, PatchFile, ApplyFixResult } from '@/types';
+import { toPhysicalLines } from '@/lib/analysis/patch-lines';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DiffViewer } from '@/components/code/DiffViewer';
@@ -34,12 +35,11 @@ function formatPatchAsDiff(patch: Patch): string {
 
     for (const hunk of file.hunks) {
       for (const line of hunk.lines) {
-        if (line.type === 'added') {
-          lines.push(`+${line.content}`);
-        } else if (line.type === 'removed') {
-          lines.push(`-${line.content}`);
-        } else {
-          lines.push(` ${line.content}`);
+        const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
+        const parts =
+          typeof line.content === 'string' ? toPhysicalLines(line.content) : [''];
+        for (const part of parts) {
+          lines.push(`${prefix}${part}`);
         }
       }
     }
@@ -65,8 +65,8 @@ function getRemovedCode(file: PatchFile): string {
   const result: string[] = [];
   for (const hunk of file.hunks) {
     for (const line of hunk.lines) {
-      if (line.type === 'removed') {
-        result.push(line.content);
+      if (line.type === 'removed' && typeof line.content === 'string') {
+        result.push(...toPhysicalLines(line.content));
       }
     }
   }
@@ -77,12 +77,28 @@ function getAddedCode(file: PatchFile): string {
   const result: string[] = [];
   for (const hunk of file.hunks) {
     for (const line of hunk.lines) {
-      if (line.type === 'added') {
-        result.push(line.content);
+      if (line.type === 'added' && typeof line.content === 'string') {
+        result.push(...toPhysicalLines(line.content));
       }
     }
   }
   return result.join('\n');
+}
+
+function countPhysicalLines(file: PatchFile, type: 'added' | 'removed'): number {
+  return file.hunks.reduce(
+    (total, hunk) =>
+      total +
+      hunk.lines.reduce(
+        (lineTotal, line) =>
+          lineTotal +
+          (line.type === type && typeof line.content === 'string'
+            ? toPhysicalLines(line.content).length
+            : 0),
+        0
+      ),
+    0
+  );
 }
 
 function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: string }) {
@@ -90,6 +106,10 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
   const reason = `Part of: ${patchSummary}`;
   const removedCode = getRemovedCode(file);
   const addedCode = getAddedCode(file);
+  // Older artifacts predate derived counts; fall back to the hunk contents so
+  // the card never renders "+ -" with no numbers.
+  const additions = file.additions ?? countPhysicalLines(file, 'added');
+  const deletions = file.deletions ?? countPhysicalLines(file, 'removed');
 
   return (
     <div className="rounded-lg border border-border bg-surface-code overflow-hidden card-depth">
@@ -112,10 +132,10 @@ function FileCard({ file, patchSummary }: { file: PatchFile; patchSummary: strin
           </div>
           <div className="flex items-center gap-2 text-xs font-mono">
             <span className="text-green-400">
-              +{file.additions}
+              +{additions}
             </span>
             <span className="text-red-400">
-              -{file.deletions}
+              -{deletions}
             </span>
           </div>
         </div>

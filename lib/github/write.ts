@@ -65,6 +65,29 @@ interface GitHubTreeResponse {
   }>;
 }
 
+// GitHub returns file contents base64-encoded. Analysis-side source files are
+// fetched as UTF-8 text (`response.text()`), so apply MUST decode the same
+// bytes as UTF-8 — `atob` alone yields Latin-1 code units and any non-ASCII
+// character would make the expected content mismatch (and `btoa` on commit
+// would throw for anything outside Latin-1).
+export function decodeGitHubContent(base64: string): string {
+  const binary = atob(base64.replace(/\n/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+export function encodeGitHubContent(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 export async function getDefaultBranch(
   token: string,
   owner: string,
@@ -120,6 +143,39 @@ export async function getBranchExists(
   }
 }
 
+/**
+ * Best-effort removal of a fix branch we created. Used to clean up when a
+ * patch turns out to be unapplicable, so a failed attempt does not leave an
+ * empty orphan branch behind. `githubFetch` cannot be used here because a
+ * successful ref delete answers 204 with no body.
+ */
+export async function deleteBranch(
+  token: string,
+  owner: string,
+  repo: string,
+  branchName: string
+): Promise<boolean> {
+  try {
+    // Branch names may contain slashes (`BugWiser/fix/issue-1-x`); encode each
+    // path segment so the ref stays resolvable.
+    const ref = branchName.split('/').map(encodeURIComponent).join('/');
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${ref}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      }
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function getFileContent(
   token: string,
   owner: string,
@@ -133,7 +189,7 @@ export async function getFileContent(
       { token }
     );
 
-    const content = atob(data.content.replace(/\n/g, ''));
+    const content = decodeGitHubContent(data.content);
     return { content, sha: data.sha };
   } catch {
     return null;
@@ -152,7 +208,7 @@ export async function createOrUpdateFile(
 ): Promise<GitHubCommit> {
   const body: Record<string, unknown> = {
     message,
-    content: btoa(content),
+    content: encodeGitHubContent(content),
     branch,
   };
 

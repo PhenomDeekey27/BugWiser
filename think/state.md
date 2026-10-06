@@ -8854,4 +8854,134 @@ With `selected_strategy='free'` + auto mode, a model the user **explicitly hand-
 - The pre-existing `/models` UI still cannot warn that a hand-picked model under the Free strategy is outside the confirmed-free pool (Task B's "UI-MISLEADING" leg, partially moot now that the row is honored).
 - P2/P3/P4 from the Task B audit (unflagged auto-mode fallback hops, manual-mode disconnect, paid autoChain tail in manual mode) remain open and out of scope.
 - `origin` is still not written by callers other than the Configure modal and the setup chips; a hand-edited `stage_overrides` row without `origin` is treated conservatively (must be confirmed free).
-- `calculateTotal.spec.ts` at the repo root is an EMPTY DIRECTORY, not a suite (pre-existing; it exits 1 if globbed).
+- `calculateTotal.spec.ts` at the repo root is an EMPTY DIRECTORY, not a suite (pre-existing; it exits 1 if globbed). REMOVED in Task AD (it broke spec globbing).
+
+---
+
+## TASK AD — Apply-Fix pipeline: deterministic patch application + DiffViewer React key warning (October 3, 2026)
+
+**Status:** COMPLETE — the Apply-Fix failure root cause was reproduced against the REAL stored artifacts and fixed with exact-match-only semantics. `npx tsc --noEmit` = 0 errors; 25 spec suites = **556 checks ALL PASS** (529 baseline + 27 new); `npm run lint` = 34 problems (7 errors, 27 warnings) — byte-identical to the Task AA baseline (all 7 in untouched `app/models/page.tsx`); `npm run build` = success. Tests are fully offline (stubbed fetch, no network/DB/paid calls, no secrets printed).
+
+### Reported symptom
+
+POST `/api/analyses/:id/apply` returns 400 for a completed analysis even though the target file never changed:
+
+`src/services/pricingService.js: Expected content not found. The file may have changed since analysis.`
+
+Captured case: analysis `c63fb0de-f77d-4e82-81a7-510baf5a3750`, repo `PhenomDeekey27/Bug_Repo`, issue #1, Local LLM provider, `patch_status: failed`.
+
+### Root cause — three deterministic defects in `applyHunksToContent` (pre-fix repro against the REAL artifact + REAL file content returned NULL)
+
+1. **Terminator/content packing mismatch.** Model hunk line `content` carries the trailing `\n` (`"  return …;\n"`) and packs multiple physical lines into one `added` entry (`"A\nB\n"`); file lines from `split('\n')` are terminator-free and the old matcher only stripped `\r` → no line could ever match.
+2. **Forward-only search from a wrong hint.** Model reported `oldStart: 28` while the code really sits on line 24; old search started at `oldStart-1` and only scanned forward → miss.
+3. **Context-blind flattening (latent).** All `removed` lines of a hunk were flattened into ONE contiguous block, ignoring `context` lines, so any hunk with interleaved context/multiple change groups could never match.
+
+### Secondary defects found in the same flow
+
+- **UTF-8 boundary:** analysis fetches source files as UTF-8 text, but apply decoded GitHub base64 with `atob` (Latin-1) → a non-ASCII context/removed line could never match (model saw `café`, applier saw `cafÃ©`), and `btoa` throws on commit for model-authored non-ASCII.
+- **PatchViewer** rendered `+ -` with no numbers for artifacts lacking `additions`/`deletions`.
+- **DiffViewer React warning** (`Each child in a list should have a unique 'key' prop`): artifact lines carry only `{type, content}` — no `number` — so every row key was `undefined` and the gutter was blank.
+
+### The fix (smallest provider-agnostic change; no routing changes)
+
+- `lib/analysis/patch-lines.ts` (NEW): `toPhysicalLines` (split `/\r\n|\n|\r/`, terminator-free, idempotent, no phantom line) + `normalizeHunkLines`.
+- `lib/ai/validation/patch.ts`: `parsePatchResponse` normalizes every stored line to a single physical line and derives `additions`/`deletions` (added as optional fields); `validatePatch` semantics unchanged.
+- `lib/analysis/apply-patch.ts`: `applyHunksToContent` (now exported) rebuilt — builds old side (context+removed) / new side (context+added), finds an **exact whole-file match** preferring the `oldStart` hint, copies context from the ORIGINAL file bytes, appends `\r` to inserted lines when the file uses CRLF, applies collected edits bottom-up (descending start), rejects overlaps fail-closed, skips only no-change hunks, fallback error `'No files could be applied: the patch contains no changes.'`. `fileHasChanges(file)` replaces the old additions/deletions skip check.
+- `lib/github/write.ts`: `decodeGitHubContent` (base64 → TextDecoder UTF-8) / `encodeGitHubContent` (TextEncoder → base64) wired into `getFileContent` + `createOrUpdateFile`.
+- `components/code/diffLineRows.ts` (NEW) + `DiffViewer.tsx`: rows derive semantic keys `old:<n>`/`new:<n>` with real gutter numbers from hunk headers; packed contents expand to one row per physical line; hunk key `` `hunk:${oldStart}:${newStart}` ``.
+- `components/analysis/PatchViewer.tsx`: `additions`/`deletions` fall back to hunk-derived counts; Before/After/copy-diff expand packed contents via `toPhysicalLines`.
+
+### Safety preserved (explicit)
+
+- Expected content must match **exactly** — no trimming, no whitespace tolerance (spec: trailing-whitespace drift is still rejected), no fuzzy matching, no line-number-only fallback (a wrong `oldStart` still requires the exact old-side text to exist somewhere).
+- Stale/changed/missing file → `null` → 400 with the byte-identical message `Expected content not found. The file may have changed since analysis.`
+- Overlapping/duplicate hunks fail closed (no commit is written; asserted in the full-flow test).
+- `validatePatch` still rejects invalid line types/content; the shared `extractJsonObject` is untouched; no provider- or stage-specific logic; no DB/network writes.
+
+### Files changed
+
+- `lib/analysis/patch-lines.ts` (NEW), `lib/analysis/apply-patch.ts`, `lib/ai/validation/patch.ts`, `lib/github/write.ts`
+- `components/code/diffLineRows.ts` (NEW), `components/code/DiffViewer.tsx`, `components/analysis/PatchViewer.tsx`
+- `apply-patch.spec.ts` (NEW, 27 checks)
+- `think/state.md` (this record)
+
+### Tests
+
+`apply-patch.spec.ts` — 27 offline checks: the verbatim real artifact + real file content applies (packed `\n` content, `oldStart: 28` vs actual line 24); stale/missing/whitespace-drifted/overlapping inputs still rejected; interleaved-context multi-group hunk; multi-hunk offset shift after an earlier deletion; wrong-anywhere `oldStart`; pure-addition and context-only hunks; CRLF file ↔ LF model content both directions with no mixed endings; `toPhysicalLines` idempotence; fenced/bare JSON parsing with line normalization + additions/deletions derivation; prose → no files; validation negatives (`Invalid line type`, `Invalid line content`); DiffViewer key uniqueness/semantic keys/stability/numbering; UTF-8 encode/decode round-trip incl. wrapped base64; and the full `applyPatchToGitHub` flow against a stubbed GitHub API — success (branch + commit content asserted), stale → exact error string + zero commits, and a non-ASCII context line surviving get → apply → commit.
+
+### Validation
+
+- `npx tsc --noEmit` → 0.
+- 25 suites ALL PASS = 556 checks (baseline 529 + 27 new).
+- `npm run lint` → 34 problems (7 errors, 27 warnings); all 7 are the pre-existing `app/models/page.tsx` set from Task AA — that file is unmodified in this task; no finding on any changed file.
+- `npm run build` → success (all routes incl. `/api/analyses/[id]/apply`).
+- Reproduction proof: pre-fix temp repro against the real artifact returned `NULL -> "Expected content not found"`; the spec fixture is that verbatim artifact.
+
+### Known limitations / decisions
+
+- Between fetching file content and the final commit, a GitHub-side change still yields the normal 409 conflict path (out of scope; unchanged).
+- `formatPatchAsDiff`'s hunk header `@@ -0,0 +1,N @@` remains approximate (cosmetic, unchanged).
+- Model-generated hunk headers are treated as HINTS only; correctness now depends solely on exact old-side text (intended safety property).
+- The stray empty `calculateTotal.spec.ts` directory (Task AC limitation) was removed so spec globbing is clean.
+
+## TASK AE - Apply-Fix: non-contiguous alignment, patch verification + generation retry (October 6, 2026)
+
+### Reported symptom (still failing after Task AD)
+
+`POST /api/analyses/:id/apply` returned 400 with
+`src/services/orderResponseService.js: Expected content not found. The file may have changed since analysis.`
+for analysis `421faf8d-46f5-43ea-ae17-9ebea6d3091b` — **even though the file was byte-identical (725 bytes) to the source captured at analysis time.** Local LLM path; Task AD's exact-window matcher had already shipped.
+
+### Root cause (verified against the real artifact + real file bytes)
+
+1. **Non-contiguous old side.** The hunk's OLD side (context file lines 9,10,11 + removed file lines 13,14,15,16) skips blank file line 12, so it never exists as one contiguous window → the whole-file exact-window search returned `null`.
+2. **Wrong header counts (cosmetic but misleading).** Artifact declared `oldStart=13, oldLines=5, newStart=13, newLines=5` over 13 line entries; the real old side was 7 entries and the new side 9.
+3. **Corrupted content packing (the real hazard).** The model's `removed` entry was missing its trailing `  );` and its `added` entry carried a spurious leading `  );`. Applying that verbatim produces syntactically broken JS — a successful apply that would have shipped a broken file.
+
+### Design decisions (all recorded explicitly)
+
+1. **Ordered gap-fill alignment** (`alignOldSide`): match the old side as an ordered sequence, not one window. Anchors must equal the file line after `matchKey` normalization (whitespace ONLY). Allowed gap between anchors: `gapBudget = min(16, max(4, floor(n*0.5)))`; ties broken by proximity to the `oldStart` hint. The gap is emitted **immediately after its anchor** (design B) so file adjacency survives.
+2. **No 1-character content tolerance.** An earlier draft allowed context lines to differ by ≤1 character; it made a deliberately stale fixture *apply*. Content must match. Consequence: a file edited since analysis fails closed (intended).
+3. **No hard `oldLines`/`newLines` count validation.** The known-good `pricingService.js` artifact declares `oldLines=6, newLines=7` while its real sides are 2/3, so a count gate would reject working patches. Counts stay hints.
+4. **JS syntax guard instead of a count gate** (`findSyntaxRegression`): only fires when the *original* file parses and the dry-run result does not. That distinguishes "model garbled the edit" from "the repo file is exotic / not JS".
+5. **Pure-addition hunks rejected** as `unanchored` (a line number alone is not an anchor); **context-only hunks apply as a no-op**; **overlapping hunks rejected** as `overlap`.
+6. **3-attempt generation retry** (`MAX_PATCH_ATTEMPTS = 3`) with `buildPatchRetryMessage(problem)` feeding the specific failure back into the next attempt. Strictness is affordable because the model gets a second and third chance.
+
+### Files changed (this task)
+
+- `lib/analysis/patch-lines.ts` (NEW in this phase): `matchKey`, `alignOldSide` ordered gap-DP, `applyHunksDetailed` returning `ApplyOutcome` with `ApplyFailureReason` (`unanchored|not_found|overlap|malformed`), `applyHunksToContent` kept as the thin wrapper.
+- `lib/analysis/patch-verify.ts` (NEW): `parsesAsJavaScript`, `findSyntaxRegression`, `verifyPatchAgainstSources` (dry-run + guard), `describeApplyFailure`, `fileHasChanges`.
+- `lib/analysis/apply-patch.ts`: detailed reasons → user-facing message; deletes the orphan branch when zero files apply.
+- `lib/analysis/patch.ts`: 3-attempt generate → validate → dry-run → retry loop; `error_message: null` on stage entry/completion (it was `undefined`, which supabase-js strips); per-attempt `recordModelExecution` with `attemptNumber`.
+- `lib/ai/context/patch.ts`: prompt hardened (verbatim contiguous context including blanks, hunk must start/end with context, removed lines quoted verbatim, one physical line per entry, counts = entry counts, result must stay valid JS); JSON example made self-consistent.
+- `lib/github/write.ts`: `deleteBranch` (raw `fetch`, because `githubFetch` always calls `.json()` and DELETE returns 204).
+- `tsconfig.json`: `allowImportingTsExtensions: true` (spec files import `./x.ts` for Node-direct execution).
+- Restored/created specs: `lib/analysis/apply-patch.spec.ts`, `lib/analysis/apply-github-flow.spec.ts`, `lib/ai/validation/patch.spec.ts`, `components/code/diffLineRows.spec.ts`, `lib/github/write.spec.ts`.
+
+### Safety preserved (explicit)
+
+- Content must match modulo whitespace — no trimming, no character tolerance, no line-number-only fallback. A stale file returns `Expected content not found. The file may have changed since analysis.`
+- Skipped (gap) file lines are copied verbatim, so a gap in the model's view can never delete real content.
+- Removed lines are never fuzzy-matched — content we destroy must be quoted exactly.
+- `validatePatch` semantics unchanged; no provider- or stage-specific logic; no DB/network writes in the applier.
+
+### Tests
+
+- `lib/analysis/apply-patch.spec.ts` — **42 checks**, incl. the verbatim non-contiguous order artifact, the packed `pricingService.js` artifact, "detects the broken result produced by the real failing artifact", "rejects a stale file whose context line changed by one character", "never matches a line it is about to delete", unanchored/overlap/malformed negatives, CRLF both directions, and a stubbed full `applyPatchToGitHub` flow.
+- `lib/analysis/apply-github-flow.spec.ts` — 5 checks (branch+commit+PR success, stale → honest error + zero commits + branch removed, no-change patch leaves no branch, missing file, non-ASCII byte-for-byte round trip).
+- `lib/ai/validation/patch.spec.ts` — 16 checks. `components/code/diffLineRows.spec.ts` — 5 checks. `lib/github/write.spec.ts` — 4 checks.
+
+### Validation (exact, this task)
+
+- **29 spec suites: all exit 0** (24 pre-existing root suites + the 5 new/rewritten; the 5 new ones total 72 checks).
+- `npx tsc --noEmit` → **0 errors** (fixed the 3 pre-existing TS5097/TS2339/TS2304 hits the new specs introduced).
+- `npm run lint` → **35 problems (7 errors, 28 warnings)**. All 7 errors are in `app/models/page.tsx` and are **pre-existing at HEAD** — verified by stashing that file and re-running eslint on HEAD's version (same 7 errors). No finding on any file changed by this task.
+- `npm run build` → success, all routes including `/api/analyses/[id]/apply`.
+
+### Known limitations / decisions
+
+- A gap anywhere is now permitted (any file line the model omitted between anchors). Content and relative order are always preserved, so this cannot corrupt the file; it can, in a very repetitive file, anchor at an earlier occurrence — bounded by `gapBudget` and broken by proximity to `oldStart`.
+- `oldStart` remains a hint only; correctness comes from content, not line numbers.
+- The JS syntax guard is a guard, not a parser: it reports "produced syntactically invalid JavaScript", it does not validate semantics.
+- `app/models/page.tsx`, `.gitignore`, and `app/api/health/` are dirty in the worktree from other work; untouched by this task.
+- Not committed — left for review.

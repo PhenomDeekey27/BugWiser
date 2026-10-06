@@ -219,7 +219,7 @@ export default function ModelsPage() {
     if (await refresh()) await revalidate();
   }, [refresh, revalidate]);
 
-  useEffect(() => { void refreshAndSettle(); }, [refreshAndSettle]);
+  useEffect(() => { refreshAndSettle(); }, [refresh, revalidate]);
 
   /** Syncs the setup selector + stage rows from a saved preference payload. */
   const applySavedPreference = useCallback((pref: Preference) => {

@@ -1,17 +1,41 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runWithFallback } from '@/lib/ai/model-router';
-import { generate } from '@/lib/ai/gateway';
+import { generate, GenerateResult } from '@/lib/ai/gateway';
 import { buildPatchContext, PatchContext } from '@/lib/ai/context/patch';
-import { validatePatch, parsePatchResponse } from '@/lib/ai/validation/patch';
+import { validatePatch, parsePatchResponse, PatchResult } from '@/lib/ai/validation/patch';
 import { buildCanonicalContext, estimateContextSize, selectSourceFilesForStage } from '@/lib/ai/context/canonical';
 import { recordModelExecution, logStageStart, logStageResult } from '@/lib/ai/model-execution-tracker';
+import { verifyPatchAgainstSources } from './patch-verify';
+
+const MAX_PATCH_ATTEMPTS = 3;
+
+/**
+ * Feedback appended to the original context when an attempt produced a patch
+ * that could not be applied. It names the concrete problem so the next attempt
+ * fixes THAT instead of guessing, and restates the structural rules the
+ * applier enforces — none of which are provider-specific, so the same retry
+ * path corrects a local model and a cloud model alike.
+ */
+function buildPatchRetryMessage(problem: string): string {
+  return `Your previous patch could not be used:
+
+${problem}
+
+Generate the patch again, following every rule below:
+- Copy context lines EXACTLY as they appear in the provided source code, including blank lines. Never skip a line between two context lines.
+- The OLD side of a hunk (context + removed) must be a contiguous run of file lines; likewise the NEW side (context + added).
+- "oldLines" must equal the number of context + removed entries, and "newLines" the number of context + added entries.
+- Emit exactly one physical line per entry. Never pack more than one line into a single "content" value.
+- Start and end every hunk with at least one context line; a hunk made only of added lines cannot be located in the file and will be rejected.
+- Remove only lines you quote verbatim, and only touch files that appear in the provided source code.`;
+}
 
 async function updateAnalysis(
   analysisId: string,
   updates: {
     status?: string;
     current_stage?: string;
-    error_message?: string;
+    error_message?: string | null;
     ai_provider?: string;
     ai_model?: string;
     ai_duration_ms?: number;
@@ -78,7 +102,10 @@ export async function runPatchGeneration(analysisId: string): Promise<void> {
     await updateAnalysis(analysisId, {
       status: 'analyzing',
       current_stage: 'patch_generation',
-      error_message: undefined,
+      // Explicit null, not `undefined`: supabase-js drops undefined keys, so a
+      // stale failure reason from an earlier run would otherwise survive a
+      // successful re-run and keep showing next to a completed analysis.
+      error_message: null,
     });
 
     const context = await buildCanonicalContext(analysisId);
@@ -128,75 +155,129 @@ export async function runPatchGeneration(analysisId: string): Promise<void> {
     const builtContext = buildPatchContext(patchContext);
     console.log(`[patch] Context built: ${builtContext.estimatedTokens} estimated tokens`);
 
-    let attemptNumber = 0;
     const startTime = Date.now();
-    let response;
-    try {
-      response = await generate({
-        analysisId,
-        task: 'patch_generation',
-        messages: builtContext.messages,
-        temperature: 0.3,
-        maxTokens: 8192,
-        responseFormat: { type: 'json_object' },
-      });
-      attemptNumber = response.fallbackCount + 1;
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      attemptNumber = 1;
+    let response: GenerateResult | undefined;
+    let parsedResult: PatchResult | undefined;
+    let attemptNumber = 0;
+    let lastProblem = '';
+
+    // Generate → validate → DRY-RUN the patch against the exact source files
+    // it was produced from, and retry with the concrete failure reason when it
+    // would not apply. Without this the only feedback comes at the apply
+    // button, after a branch has already been created.
+    for (let attempt = 1; attempt <= MAX_PATCH_ATTEMPTS; attempt++) {
+      const attemptStartedAt = Date.now();
+      const messages =
+        attempt === 1
+          ? builtContext.messages
+          : [...builtContext.messages, { role: 'user' as const, content: buildPatchRetryMessage(lastProblem) }];
+
+      let attemptResponse: GenerateResult;
+      try {
+        attemptResponse = await generate({
+          analysisId,
+          task: 'patch_generation',
+          messages,
+          temperature: 0.3,
+          maxTokens: 8192,
+          responseFormat: { type: 'json_object' },
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        attemptNumber = attempt;
+
+        await recordModelExecution({
+          analysisId,
+          stage: 'patch_generation',
+          provider: 'unknown',
+          model: 'unknown',
+          attemptNumber,
+          startedAt: new Date(attemptStartedAt).toISOString(),
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - attemptStartedAt,
+          success: false,
+          error: error.message.slice(0, 500),
+          inputTokens: null,
+          outputTokens: null,
+          fallbackCount: 0,
+          contextChars: sizeInfo.totalChars,
+          estimatedTokens: sizeInfo.estimatedTokens,
+        });
+
+        // The gateway already exhausted its own model fallbacks; one more pass
+        // may still succeed with the feedback from this failure.
+        if (attempt < MAX_PATCH_ATTEMPTS) {
+          lastProblem = `The model call failed: ${error.message}`;
+          console.warn(`[patch] attempt ${attempt}: ${lastProblem}`);
+          continue;
+        }
+        throw error;
+      }
+
+      attemptNumber = attempt + attemptResponse.fallbackCount;
+      response = attemptResponse;
 
       await recordModelExecution({
         analysisId,
         stage: 'patch_generation',
-        provider: 'unknown',
-        model: 'unknown',
+        provider: attemptResponse.provider,
+        model: attemptResponse.model,
         attemptNumber,
-        startedAt: new Date(startTime).toISOString(),
+        startedAt: new Date(attemptStartedAt).toISOString(),
         completedAt: new Date().toISOString(),
-        durationMs: Date.now() - startTime,
-        success: false,
-        error: error.message.slice(0, 500),
-        inputTokens: null,
-        outputTokens: null,
-        fallbackCount: 0,
+        durationMs: Date.now() - attemptStartedAt,
+        success: true,
+        error: null,
+        inputTokens: attemptResponse.usage?.inputTokens || null,
+        outputTokens: attemptResponse.usage?.outputTokens || null,
+        fallbackCount: attemptResponse.fallbackCount,
         contextChars: sizeInfo.totalChars,
         estimatedTokens: sizeInfo.estimatedTokens,
       });
 
-      throw error;
+      const candidate = parsePatchResponse(attemptResponse.content);
+      console.log(`[patch] attempt ${attempt}: parsed ${candidate.files.length} files`);
+
+      const validationResult = validatePatch(candidate);
+      if (!validationResult.valid) {
+        lastProblem = `Patch validation failed: ${validationResult.error}`;
+        console.warn(`[patch] attempt ${attempt}: ${lastProblem}`);
+        continue;
+      }
+
+      const verification = verifyPatchAgainstSources(candidate.files, context.sourceFiles);
+      if (!verification.ok) {
+        lastProblem = verification.message;
+        console.warn(`[patch] attempt ${attempt}: ${lastProblem}`);
+        continue;
+      }
+
+      parsedResult = candidate;
+      break;
     }
 
     const duration = Date.now() - startTime;
 
-    logStageResult('patch', analysisId, response.provider, response.model, attemptNumber, true, duration);
+    if (!response) {
+      throw new Error(lastProblem || 'Patch generation did not run.');
+    }
 
-    await recordModelExecution({
+    logStageResult(
+      'patch',
       analysisId,
-      stage: 'patch_generation',
-      provider: response.provider,
-      model: response.model,
+      response.provider,
+      response.model,
       attemptNumber,
-      startedAt: new Date(startTime).toISOString(),
-      completedAt: new Date().toISOString(),
-      durationMs: duration,
-      success: true,
-      error: null,
-      inputTokens: response.usage?.inputTokens || null,
-      outputTokens: response.usage?.outputTokens || null,
-      fallbackCount: response.fallbackCount,
-      contextChars: sizeInfo.totalChars,
-      estimatedTokens: sizeInfo.estimatedTokens,
-    });
+      parsedResult !== undefined,
+      duration
+    );
 
-    const parsedResult = parsePatchResponse(response.content);
-    console.log(`[patch] Parsed patch: ${parsedResult.files.length} files`);
-
-    const validationResult = validatePatch(parsedResult);
-    if (!validationResult.valid) {
-      console.error('[patch] Validation failed:', validationResult.error);
+    if (!parsedResult) {
+      const message = lastProblem || 'The model did not produce a patch that can be applied.';
+      console.error('[patch] No usable patch:', message);
       await updateAnalysis(analysisId, {
         status: 'failed',
-        error_message: validationResult.error || 'Patch validation failed',
+        error_message: message.slice(0, 1000),
       });
       return;
     }
@@ -220,6 +301,7 @@ export async function runPatchGeneration(analysisId: string): Promise<void> {
     await updateAnalysis(analysisId, {
       status: 'completed',
       current_stage: 'completed',
+      error_message: null,
       ai_provider: response.provider,
       ai_model: response.model,
       ai_duration_ms: duration,

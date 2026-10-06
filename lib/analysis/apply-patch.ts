@@ -1,4 +1,6 @@
-import { Patch, PatchHunk, ApplyFixResult, ApplyFixError } from '@/types';
+import { Patch, ApplyFixResult, ApplyFixError } from '@/types';
+import { applyHunksDetailed } from './patch-lines';
+import { describeApplyFailure, fileHasChanges, findSyntaxRegression } from './patch-verify';
 import {
   getDefaultBranch,
   createBranch,
@@ -6,6 +8,7 @@ import {
   getFileContent,
   createOrUpdateFile,
   createPullRequest,
+  deleteBranch,
 } from '@/lib/github/write';
 
 interface ApplyPatchContext {
@@ -27,45 +30,7 @@ function generateCommitMessage(patch: Patch, issueNumber: number): string {
   return `fix: resolve issue #${issueNumber}\n\n${patch.summary}\n\nFiles changed: ${fileCount}`;
 }
 
-function applyHunksToContent(originalContent: string, hunks: PatchHunk[]): string | null {
-  const lines = originalContent.split('\n');
-  const result = [...lines];
-
-  for (const hunk of hunks) {
-    const oldStartIdx = hunk.oldStart - 1;
-    const removedLines: string[] = [];
-    const addedLines: string[] = [];
-
-    for (const line of hunk.lines) {
-      if (line.type === 'removed') {
-        removedLines.push(line.content);
-      } else if (line.type === 'added') {
-        addedLines.push(line.content);
-      }
-    }
-
-    if (removedLines.length === 0 && addedLines.length === 0) continue;
-
-    const normalizedRemoved = removedLines.map((l) => l.replace(/\r$/, ''));
-
-    let matchIdx = -1;
-    for (let i = oldStartIdx; i <= result.length - removedLines.length; i++) {
-      const candidate = result.slice(i, i + removedLines.length).map((l) => l.replace(/\r$/, ''));
-      if (candidate.every((line, idx) => line === normalizedRemoved[idx])) {
-        matchIdx = i;
-        break;
-      }
-    }
-
-    if (matchIdx === -1) {
-      return null;
-    }
-
-    result.splice(matchIdx, removedLines.length, ...addedLines);
-  }
-
-  return result.join('\n');
-}
+export { applyHunksToContent, applyHunksDetailed } from './patch-lines';
 
 export async function applyPatchToGitHub(
   ctx: ApplyPatchContext
@@ -124,7 +89,7 @@ export async function applyPatchToGitHub(
 
   for (const file of patch.files) {
     try {
-      if (file.additions === 0 && file.deletions === 0) {
+      if (!fileHasChanges(file)) {
         continue;
       }
 
@@ -134,11 +99,15 @@ export async function applyPatchToGitHub(
         continue;
       }
 
-      const newContent = applyHunksToContent(current.content, file.hunks);
-      if (newContent === null) {
-        fileErrors.push(
-          `${file.path}: Expected content not found. The file may have changed since analysis.`
-        );
+      const outcome = applyHunksDetailed(current.content, file.hunks);
+      if (!outcome.ok) {
+        fileErrors.push(describeApplyFailure(file.path, outcome));
+        continue;
+      }
+
+      const syntaxProblem = findSyntaxRegression(current.content, outcome.content);
+      if (syntaxProblem) {
+        fileErrors.push(`${file.path}: ${syntaxProblem}.`);
         continue;
       }
 
@@ -148,7 +117,7 @@ export async function applyPatchToGitHub(
         owner,
         repo,
         file.path,
-        newContent,
+        outcome.content,
         commitMsg,
         branchName,
         current.sha
@@ -161,9 +130,16 @@ export async function applyPatchToGitHub(
   }
 
   if (appliedFiles.length === 0) {
+    // Nothing landed on the branch we just created — remove it rather than
+    // leave an orphan `BugWiser/fix/...` ref behind on every failed attempt.
+    await deleteBranch(token, owner, repo, branchName);
+
     return {
       success: false,
-      error: `No files could be applied. Errors: ${fileErrors.join('; ')}`,
+      error:
+        fileErrors.length > 0
+          ? `No files could be applied. Errors: ${fileErrors.join('; ')}`
+          : 'No files could be applied: the patch contains no changes.',
       code: 'patch_validation_failed',
     };
   }
