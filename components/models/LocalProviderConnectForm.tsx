@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CatalogProvider } from '@/app/models/page';
+import { mixedContentHint } from '@/lib/ai/connection/local';
+import { appOrigin, serverCorsHint } from '@/lib/ai/connection/reachability';
 import { createConnectGate } from './connectState';
 import { detectLocalEndpoint } from './localEndpointDetect';
 import {
@@ -22,6 +24,13 @@ interface LocalProviderConnectFormProps {
   ) => Promise<void>;
 }
 
+// Page protocol as an external store: window is unavailable during SSR, and
+// useSyncExternalStore re-renders after hydration when the client snapshot
+// differs — no setState-in-effect, no hydration mismatch.
+const subscribeProtocol = () => () => {};
+const readProtocol = () => (typeof window !== 'undefined' ? window.location.protocol : 'http:');
+const readServerProtocol = () => 'http:';
+
 /**
  * Local LLM connection flow inside ProviderCard (disconnected state):
  * Base URL + optional API key → Test Connection → Register (Connect).
@@ -31,8 +40,11 @@ interface LocalProviderConnectFormProps {
  *
  * On mount (with an empty Base URL) the form probes the machine's common
  * local-server ports and prefills the first endpoint that validates; the
- * Detect button re-runs it. When the test was answered through the browser
- * relay (deployed app), a note explains that the tab must stay open.
+ * Detect button re-runs it. Endpoints that are up but refuse this origin are
+ * reported with CORS fix guidance instead of a dead-end not-found, plain http
+ * to a LAN address on the https app gets an input-time mixed-content hint,
+ * and when the test was answered through the browser relay (deployed app), a
+ * note explains that the tab must stay open.
  */
 export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderConnectFormProps) {
   const [state, dispatch] = useReducer(
@@ -55,20 +67,31 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
 
   const busy = state.phase === 'testing' || state.phase === 'registering';
 
+  // Input-time mixed-content guidance: plain http to a LAN address is blocked
+  // on the deployed https page.
+  const pageProtocol = useSyncExternalStore(subscribeProtocol, readProtocol, readServerProtocol);
+  const mixedHint = busy ? null : mixedContentHint(state.baseUrl, pageProtocol);
+
   const runDetect = useCallback(async () => {
     if (detecting || busy || state.phase === 'registered') return;
     setDetecting(true);
     setDetectNote(null);
     baseUrlEdited.current = false;
-    let found: Awaited<ReturnType<typeof detectLocalEndpoint>> = null;
+    let result: Awaited<ReturnType<typeof detectLocalEndpoint>> = { endpoint: null, blocked: [] };
     try {
-      found = await detectLocalEndpoint();
+      result = await detectLocalEndpoint();
     } catch {
-      found = null;
+      result = { endpoint: null, blocked: [] };
     }
     setDetecting(false);
+    const found = result.endpoint;
     if (!found) {
-      setDetectNote('No local endpoint found on common ports — enter the Base URL manually.');
+      const blockedUrl = result.blocked[0];
+      setDetectNote(
+        blockedUrl
+          ? `${blockedUrl} answered, but it blocks this site's origin — add ${appOrigin()} to the server's allowed origins (${serverCorsHint(blockedUrl)}) and run Detect again.`
+          : 'No local endpoint found on common ports — enter the Base URL manually.'
+      );
       return;
     }
     const count = found.modelIds.length;
@@ -164,6 +187,7 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
         disabled={busy || state.phase === 'registered'}
         aria-label="Local endpoint base URL"
       />
+      {mixedHint && <p className="text-[11px] text-bw-peach">{mixedHint}</p>}
       <Input
         type="password"
         placeholder="API key (optional — many local servers need none)"

@@ -83,6 +83,12 @@ export interface LocalModelsProbe {
   compatibility: LocalCompatibility;
   /** Human-readable failure reason; null on success. Never contains secrets. */
   error: string | null;
+  /**
+   * Set only on a transport-level failure (every candidate URL of the base
+   * AND its host alias refused/unreachable) — lets the browser-side detect
+   * run a no-cors reachability diagnosis instead of guessing.
+   */
+  networkFailure?: boolean;
 }
 
 export const DEFAULT_TEST_TIMEOUT_MS = 5_000;
@@ -219,11 +225,230 @@ function extractModelList(parsed: unknown): unknown[] | null {
 }
 
 /**
+ * Candidate models-endpoint URLs for ONE base URL, plus the conventional
+ * OpenAI root fallback (set only when it is an EXTRA candidate — bare-origin
+ * bases already probe `/v1/models` as their second candidate).
+ */
+function candidatesFor(baseUrl: string): { urls: string[]; originFallback: string | null } {
+  const urls: string[] = [];
+  const add = (url: string) => {
+    if (!urls.includes(url)) urls.push(url);
+  };
+  add(`${baseUrl}/models`);
+  if (!hasVersionSegment(baseUrl)) add(`${baseUrl}/v1/models`);
+
+  let originFallback: string | null = null;
+  try {
+    const url = new URL(baseUrl);
+    if (url.pathname.replace(/\/+$/, '') !== '') {
+      const candidate = `${url.origin}/v1/models`;
+      if (!urls.includes(candidate)) {
+        urls.push(candidate);
+        originFallback = candidate;
+      }
+    }
+  } catch {
+    // normalizeLocalBaseUrl already validated this URL.
+  }
+  return { urls, originFallback };
+}
+
+/**
+ * Host-alias base URL for a transport failure: a server often binds one of
+ * `localhost`/`127.0.0.1` (IPv4 vs IPv6) while the OTHER name refuses the
+ * connection. Returns the alias base, or null when no alias applies.
+ */
+function hostAliasBase(baseUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return null;
+  }
+  const bare = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  let aliasHost: string | null = null;
+  if (bare === 'localhost') aliasHost = '127.0.0.1';
+  else if (bare === '127.0.0.1') aliasHost = 'localhost';
+  else if (bare === '::1') aliasHost = '127.0.0.1';
+  if (!aliasHost) return null;
+  try {
+    const alias = new URL(url.toString());
+    alias.hostname = aliasHost; // sets the hostname, keeps scheme/port/path
+    return alias.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+type AttemptResult = { kind: 'probe'; probe: LocalModelsProbe } | { kind: 'network'; url: string };
+
+/**
+ * Probe every candidate models-endpoint URL under ONE base URL. Returns the
+ * probe result, or `{ kind: 'network' }` when the transport failed for every
+ * candidate (only then may the caller retry a host alias — a server that
+ * ANSWERED, even with 404s, must never be retried elsewhere: transport
+ * failures are the only ambiguous verdict).
+ */
+async function attemptBase(
+  fetchFn: FetchLike,
+  baseUrl: string,
+  originalBaseUrl: string,
+  headers: Record<string, string>,
+  timeoutMs: number
+): Promise<AttemptResult> {
+  const { urls, originFallback } = candidatesFor(baseUrl);
+
+  for (const candidate of urls) {
+    const outcome = await safeFetch(fetchFn, candidate, { method: 'GET', headers }, timeoutMs);
+
+    switch (outcome.kind) {
+      case 'network':
+        return { kind: 'network', url: outcome.url };
+      case 'timeout':
+        return {
+          kind: 'probe',
+          probe: fail(originalBaseUrl, 'unverified', `Connection test timed out after ${timeoutMs}ms reaching ${outcome.url}.`),
+        };
+      case 'relay-error':
+        return { kind: 'probe', probe: fail(originalBaseUrl, 'unverified', outcome.message) };
+      case 'blocked-redirect':
+        return { kind: 'probe', probe: fail(originalBaseUrl, 'unverified', outcome.reason) };
+      case 'too-many-redirects':
+        return {
+          kind: 'probe',
+          probe: fail(originalBaseUrl, 'unverified', `Too many redirects while testing ${candidate}.`),
+        };
+      case 'response':
+        break;
+    }
+
+    const response = (outcome as { kind: 'response'; response: ResponseLike }).response;
+    const { status } = response;
+
+    if (status === 401 || status === 403) {
+      return {
+        kind: 'probe',
+        probe: fail(
+          originalBaseUrl,
+          'unverified',
+          `Authentication failed (HTTP ${status}) — check the API key for ${candidate}.`,
+          candidate
+        ),
+      };
+    }
+    if (status === 404) continue; // try the next candidate endpoint
+    if (status >= 300 && status < 400) {
+      return {
+        kind: 'probe',
+        probe: fail(originalBaseUrl, 'unverified', `Unexpected redirect (HTTP ${status}) from ${candidate}.`, candidate),
+      };
+    }
+    if (!response.ok) {
+      return {
+        kind: 'probe',
+        probe: fail(originalBaseUrl, 'unverified', `Endpoint responded with HTTP ${status} from ${candidate}.`, candidate),
+      };
+    }
+
+    // 2xx — a status alone proves nothing; the body must be an OpenAI models list.
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      return {
+        kind: 'probe',
+        probe: fail(
+          originalBaseUrl,
+          'not-compatible',
+          `${candidate} responded but the response is not valid JSON — not an OpenAI-compatible endpoint.`,
+          candidate
+        ),
+      };
+    }
+
+    const list = extractModelList(parsed);
+    if (!list) {
+      return {
+        kind: 'probe',
+        probe: fail(
+          originalBaseUrl,
+          'not-compatible',
+          `${candidate} responded but did not return an OpenAI-compatible models list.`,
+          candidate
+        ),
+      };
+    }
+
+    const modelIds = extractModelIds(list);
+    if (list.length === 0) {
+      return {
+        kind: 'probe',
+        probe: fail(
+          originalBaseUrl,
+          'openai-compatible',
+          `${candidate} is OpenAI-compatible but returned an empty model list — no models are available.`,
+          candidate
+        ),
+      };
+    }
+    if (modelIds.length === 0) {
+      return {
+        kind: 'probe',
+        probe: fail(
+          originalBaseUrl,
+          'not-compatible',
+          `${candidate} returned a models list without any model IDs — malformed response.`,
+          candidate
+        ),
+      };
+    }
+
+    // Verified. When the conventional OpenAI root fallback answered, persist
+    // THAT root (`…/api` → `…/v1`) — registration must store exactly what was
+    // tested; every other candidate keeps the base the user entered.
+    const verifiedBaseUrl =
+      originFallback && candidate === originFallback ? new URL(originFallback).origin + '/v1' : baseUrl;
+
+    return {
+      kind: 'probe',
+      probe: {
+        ok: true,
+        baseUrl: verifiedBaseUrl,
+        modelsEndpoint: candidate,
+        entries: list,
+        modelIds,
+        compatibility: 'openai-compatible',
+        error: null,
+      },
+    };
+  }
+
+  return {
+    kind: 'probe',
+    probe: fail(
+      originalBaseUrl,
+      'not-compatible',
+      `No OpenAI-compatible models endpoint found at ${baseUrl} (tried ${urls.join(', ')}).`,
+      null
+    ),
+  };
+}
+
+/**
  * Probe a local OpenAI-compatible endpoint's models list. This is the ONE
  * place local-endpoint HTTP happens (connection test AND catalog discovery
  * reuse it), so URL normalization, SSRF screening, manual per-hop redirect
  * validation, timeout handling, and response-shape verification exist once.
  * Performs NO persistence and sends NO generation request.
+ *
+ * Failure escalation (each step only on the previous step's ambiguity):
+ *   1. candidate URLs under the entered base (`/models`, `/v1/models`,
+ *      conventional `${origin}/v1/models` for non-root paths)
+ *   2. the host-alias base (`localhost` ⇄ `127.0.0.1`, `::1` → `127.0.0.1`)
+ *      — ONLY when the transport itself failed (a 404 means the server
+ *      answered; never retry a server that answered)
+ *   3. a generic unreachable message flagged `networkFailure` so the browser
+ *      can run a no-cors reachability diagnosis
  */
 export async function probeLocalModelsList(
   input: { baseUrl: string; apiKey?: string },
@@ -251,108 +476,25 @@ export async function probeLocalModelsList(
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const candidates = [`${baseUrl}/models`];
-  if (!hasVersionSegment(baseUrl)) candidates.push(`${baseUrl}/v1/models`);
+  const alias = hostAliasBase(baseUrl);
+  const bases = alias && alias !== baseUrl ? [baseUrl, alias] : [baseUrl];
+  let firstNetwork: { kind: 'network'; url: string } | null = null;
 
-  for (const candidate of candidates) {
-    const outcome = await safeFetch(fetchFn, candidate, { method: 'GET', headers }, timeoutMs);
-
-    switch (outcome.kind) {
-      case 'timeout':
-        return fail(baseUrl, 'unverified', `Connection test timed out after ${timeoutMs}ms reaching ${outcome.url}.`);
-      case 'network':
-        return fail(
-          baseUrl,
-          'unverified',
-          `Could not reach ${outcome.url} — the server refused the connection or is unreachable.`
-        );
-      case 'relay-error':
-        return fail(baseUrl, 'unverified', outcome.message);
-      case 'blocked-redirect':
-        return fail(baseUrl, 'unverified', outcome.reason);
-      case 'too-many-redirects':
-        return fail(baseUrl, 'unverified', `Too many redirects while testing ${candidate}.`);
-      case 'response':
-        break;
+  for (const base of bases) {
+    const attempt = await attemptBase(fetchFn, base, baseUrl, headers, timeoutMs);
+    if (attempt.kind === 'network') {
+      firstNetwork = firstNetwork ?? attempt;
+      continue;
     }
-
-    const response = (outcome as { kind: 'response'; response: ResponseLike }).response;
-    const { status } = response;
-
-    if (status === 401 || status === 403) {
-      return fail(
-        baseUrl,
-        'unverified',
-        `Authentication failed (HTTP ${status}) — check the API key for ${candidate}.`,
-        candidate
-      );
-    }
-    if (status === 404) continue; // try the next candidate endpoint
-    if (status >= 300 && status < 400) {
-      return fail(baseUrl, 'unverified', `Unexpected redirect (HTTP ${status}) from ${candidate}.`, candidate);
-    }
-    if (!response.ok) {
-      return fail(baseUrl, 'unverified', `Endpoint responded with HTTP ${status} from ${candidate}.`, candidate);
-    }
-
-    // 2xx — a status alone proves nothing; the body must be an OpenAI models list.
-    let parsed: unknown;
-    try {
-      parsed = await response.json();
-    } catch {
-      return fail(
-        baseUrl,
-        'not-compatible',
-        `${candidate} responded but the response is not valid JSON — not an OpenAI-compatible endpoint.`,
-        candidate
-      );
-    }
-
-    const list = extractModelList(parsed);
-    if (!list) {
-      return fail(
-        baseUrl,
-        'not-compatible',
-        `${candidate} responded but did not return an OpenAI-compatible models list.`,
-        candidate
-      );
-    }
-
-    const modelIds = extractModelIds(list);
-    if (list.length === 0) {
-      return fail(
-        baseUrl,
-        'openai-compatible',
-        `${candidate} is OpenAI-compatible but returned an empty model list — no models are available.`,
-        candidate
-      );
-    }
-    if (modelIds.length === 0) {
-      return fail(
-        baseUrl,
-        'not-compatible',
-        `${candidate} returned a models list without any model IDs — malformed response.`,
-        candidate
-      );
-    }
-
-    return {
-      ok: true,
-      baseUrl,
-      modelsEndpoint: candidate,
-      entries: list,
-      modelIds,
-      compatibility: 'openai-compatible',
-      error: null,
-    };
+    return attempt.probe;
   }
 
-  return fail(
-    baseUrl,
-    'not-compatible',
-    `No OpenAI-compatible models endpoint found at ${baseUrl} (tried ${candidates.join(', ')}).`,
-    null
-  );
+  // Every base (original + alias) failed at the transport level.
+  const networkUrl = firstNetwork ? firstNetwork.url : `${baseUrl}/models`;
+  return {
+    ...fail(baseUrl, 'unverified', `Could not reach ${networkUrl} — the server refused the connection or is unreachable.`),
+    networkFailure: true,
+  };
 }
 
 /**

@@ -13,11 +13,13 @@
 //   - Stale jobs (past expires_at) never execute.
 //   - Failure messages are user-facing and actionable: a browser fetch that
 //     rejects with TypeError is AMBIGUOUS (server down OR CORS OR mixed
-//     content), so the message covers all three with concrete fix steps for
-//     common local servers. It never includes headers/keys/bodies.
+//     content), so a no-cors follow-up probe narrows the verdict and the
+//     message leads with it — always with concrete fix steps for common local
+//     servers. It never includes headers/keys/bodies.
 
 import { isRelayableTarget } from './relayTarget';
-import { blockedLocalTargetReason } from './local';
+import { blockedLocalTargetReason, isPlainHttpNonLoopback } from './local';
+import { appOrigin, diagnoseFetchFailure, serverCorsHint, type ReachabilityVerdict } from './reachability';
 
 /** Hard cap for the worker's own fetch — slightly beyond the server's longest wait budget (generation). */
 export const RELAY_JOB_FETCH_TIMEOUT_MS = 260_000;
@@ -46,37 +48,45 @@ const BROWSER_CONTROLLED_REQUEST_HEADERS = new Set([
   'connection',
 ]);
 
-function plainHttpNonLoopback(rawUrl: string): boolean {
-  try {
-    const url = new URL(rawUrl);
-    if (url.protocol !== 'http:') return false;
-    const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    return !(host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host.startsWith('127.'));
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Actionable failure text for an opaque browser fetch rejection. A refused
  * connection, a CORS block, and a mixed-content block all surface as the same
- * "Failed to fetch" TypeError, so the message addresses every possibility
- * with the concrete fix for popular local servers.
+ * "Failed to fetch" TypeError — when the no-cors diagnosis produced a verdict,
+ * the message LEADS with it (server up but blocking us / nothing answered);
+ * the 'unknown' fallback (timeout/abort, no diagnosis) keeps the combined
+ * guidance. Concrete fixes for popular local servers in every branch.
  */
-export function relayReachFailureMessage(rawUrl: string): string {
+export function relayReachFailureMessage(rawUrl: string, verdict: ReachabilityVerdict = 'unknown'): string {
   let host = 'your local endpoint';
   try {
     host = new URL(rawUrl).host;
   } catch {
     // keep the generic default
   }
-  const mixedContentNote = plainHttpNonLoopback(rawUrl)
+  const origin = appOrigin();
+  const hint = serverCorsHint(rawUrl);
+  const mixedContentNote = isPlainHttpNonLoopback(rawUrl)
     ? ' Browsers also block plain http requests to non-loopback addresses from an https page — use 127.0.0.1/localhost, or serve the endpoint over https.'
     : '';
+
+  if (verdict === 'reachable-blocked') {
+    return (
+      `Your local server at ${host} answered this browser tab but is blocking this site's origin ` +
+      `(CORS). Add ${origin} to the server's allowed origins — ${hint} — and try again.${mixedContentNote}`
+    );
+  }
+  if (verdict === 'unreachable') {
+    return (
+      `Could not reach ${host} from this browser tab — no server answered at that address (or the ` +
+      `browser blocked the request). Confirm your local LLM server is running and that the host and ` +
+      `port are correct; if this site asked for local-network permission, allow it. If the server is ` +
+      `up, it must also allow ${origin} (CORS): ${hint}.${mixedContentNote}`
+    );
+  }
   return (
     `Could not reach ${host} from this browser tab — the local server may be ` +
     'down, may refuse this connection, or may not allow this site’s origin ' +
-    '(CORS). Allow BugWiser’s origin on your local server (Ollama: ' +
+    `(CORS). Allow ${origin} on your local server (Ollama: ` +
     'OLLAMA_ORIGINS=* then restart; llama.cpp: --cors-origin "*"; LM Studio: ' +
     `enable CORS in server settings) and confirm it is running.${mixedContentNote}`
   );
@@ -128,12 +138,21 @@ export async function executeRelayJob(
     if (typeof value === 'string') headers[name] = value;
   }
 
-  const init: RequestInit = {
+  const init: RequestInit & { targetAddressSpace?: 'local' } = {
     method,
     headers,
     body: method === 'GET' || method === 'HEAD' ? undefined : job.body ?? undefined,
     redirect: 'follow',
   };
+  // Chrome (138+) only: mark plain-http requests to LAN addresses as targeting
+  // the local network so they are not blocked as mixed content from the https
+  // app origin (the user may be prompted once). Loopback is exempt from mixed
+  // content already — and claiming 'local' for it would mismatch its
+  // 'loopback' address space — so only NON-loopback local hosts qualify.
+  // Unknown dictionary members are ignored by other browsers.
+  if (isPlainHttpNonLoopback(job.url)) {
+    init.targetAddressSpace = 'local';
+  }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     init.signal = AbortSignal.timeout(RELAY_JOB_FETCH_TIMEOUT_MS);
   }
@@ -148,7 +167,17 @@ export async function executeRelayJob(
     // content-length when it rebuilds the Response so they cannot disagree.
     const body = await response.text();
     return { ok: true, status: response.status, headers: responseHeaders, body };
-  } catch {
-    return { ok: false, error: relayReachFailureMessage(job.url) };
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name;
+    // A timeout/abort is NOT a reachability verdict (a slow local model can
+    // outlive the budget while the server is healthy) — keep the combined
+    // guidance instead of running the diagnosis.
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      return { ok: false, error: relayReachFailureMessage(job.url) };
+    }
+    // Opaque rejection: disambiguate with a no-cors probe — a resolve means
+    // the server is up and refused us on origin policy (CORS).
+    const verdict = await diagnoseFetchFailure(job.url, fetchFn);
+    return { ok: false, error: relayReachFailureMessage(job.url, verdict) };
   }
 }

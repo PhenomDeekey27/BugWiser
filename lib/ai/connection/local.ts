@@ -55,10 +55,94 @@ function stripTrailingSlashes(pathname: string): string {
 }
 
 /**
+ * Scheme-less paste rescue gate: `localhost:8000`, `127.0.0.1:8000/v1`,
+ * `192.168.1.4:11434`, `[::1]:11434` — host:port shapes with a NUMERIC port
+ * are unambiguous, so they get `http://` prepended. Everything else (garbage,
+ * `javascript:…`, `/v1`, scheme-ful URLs) skips the rescue and fails
+ * validation exactly as before.
+ */
+function looksLikeHostPort(raw: string): boolean {
+  if (raw.includes('://')) return false;
+  return /^\[[^\]]+\]:\d+/.test(raw) || /^[^\s/:?#]+:\d+([/?#]|$)/.test(raw);
+}
+
+/** `host:port…` input gets `http://` prepended; anything else is returned unchanged. */
+function withHttpScheme(raw: string): string {
+  return looksLikeHostPort(raw) ? `http://${raw}` : raw;
+}
+
+/**
+ * Any-address hosts are BIND addresses, not connect addresses: servers print
+ * "listening on 0.0.0.0:8000" / `[::]` but browsers reject connecting to
+ * them. Rewrite to the loopback equivalent (same machine, same server).
+ */
+function rewriteAnyAddressHost(url: URL): void {
+  const bare = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (bare === '0.0.0.0') {
+    url.hostname = '127.0.0.1';
+  } else if (bare === '::' || bare === '0:0:0:0:0:0:0:0') {
+    url.host = url.port ? `[::1]:${url.port}` : '[::1]';
+  }
+}
+
+function hostnameOf(url: URL): string {
+  // URL.hostname keeps IPv6 brackets (e.g. `[::1]`).
+  return url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+}
+
+function isLoopbackHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '::1' ||
+    host === '0:0:0:0:0:0:0:1' ||
+    host === '::' ||
+    host === '0.0.0.0' ||
+    host.startsWith('127.')
+  );
+}
+
+/**
+ * True for plain http to a NON-loopback address — a combination browsers
+ * block as mixed content when the page itself is https (loopback http is
+ * exempt as a potentially-trustworthy address). Shared by the relay worker's
+ * failure message and the connect form's input-time hint.
+ */
+export function isPlainHttpNonLoopback(rawUrl: string): boolean {
+  const raw = (rawUrl ?? '').trim();
+  let url: URL;
+  try {
+    url = new URL(withHttpScheme(raw));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:') return false;
+  return !isLoopbackHost(hostnameOf(url));
+}
+
+/**
+ * Input-time guidance for the mixed-content case: only when the PAGE is
+ * https and the pasted URL is plain http to a non-loopback host. Returns the
+ * hint text, or null when no warning applies.
+ */
+export function mixedContentHint(rawUrl: string, pageProtocol: string): string | null {
+  if (pageProtocol !== 'https:') return null;
+  if (!isPlainHttpNonLoopback(rawUrl)) return null;
+  return (
+    'Plain http to a LAN address is blocked on an https page — use 127.0.0.1 ' +
+    'if the server runs on this machine, or serve the endpoint over https. ' +
+    '(Chrome may also ask for local-network permission.)'
+  );
+}
+
+/**
  * Normalize + validate a user-supplied local provider Base URL.
  *
  * Rules:
  *   - trims surrounding whitespace
+ *   - rescues scheme-less `host:port` paste (`localhost:8000` → `http://…`)
+ *   - maps any-address bind hosts (`0.0.0.0`, `::`) to loopback (browsers
+ *     reject connecting to a bind address; same machine, same server)
  *   - must parse as an absolute URL (rejects clearly invalid values)
  *   - scheme must be http: or https: (everything else — ftp:, file:,
  *     javascript:, data:, … — is rejected)
@@ -78,7 +162,7 @@ export function normalizeLocalBaseUrl(rawInput: string): LocalUrlResult {
 
   let url: URL;
   try {
-    url = new URL(raw);
+    url = new URL(withHttpScheme(raw));
   } catch {
     return {
       ok: false,
@@ -99,6 +183,8 @@ export function normalizeLocalBaseUrl(rawInput: string): LocalUrlResult {
       error: 'Base URL must not contain embedded credentials — use the optional API key field.',
     };
   }
+
+  rewriteAnyAddressHost(url);
 
   // A Base URL never needs a query string or fragment; drop them so they can
   // not leak into constructed API paths.
@@ -164,11 +250,6 @@ export function hasVersionSegment(baseUrl: string): boolean {
 // think/state.md.
 
 const BLOCKED_HOSTNAMES = new Set(['metadata.google.internal', 'metadata.goog']);
-
-function hostnameOf(url: URL): string {
-  // URL.hostname keeps IPv6 brackets (e.g. `[::1]`).
-  return url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-}
 
 function isIpv4Literal(host: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host);

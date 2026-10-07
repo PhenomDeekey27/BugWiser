@@ -94,11 +94,15 @@ export async function registerLocalConnection(
     deps.saveFn ??
     ((uid: string, cfg: LocalProviderConfig) =>
       saveLocalUserConnection(uid, { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey }));
-  const saved = await saveFn(userId, config);
+  // Persist the VERIFIED base URL: the probe may have resolved a different
+  // root (host alias or conventional `/v1` fallback), and what was tested is
+  // exactly what must be registered.
+  const verifiedBaseUrl = test.baseUrl ? test.baseUrl : config.baseUrl;
+  const saved = await saveFn(userId, { ...config, baseUrl: verifiedBaseUrl });
   if (!saved.ok) {
     return {
       ok: false,
-      baseUrl: config.baseUrl,
+      baseUrl: verifiedBaseUrl,
       modelCount: test.modelIds.length,
       compatibility: test.compatibility,
       error: saved.error || 'Failed to save connection.',
@@ -107,7 +111,7 @@ export async function registerLocalConnection(
 
   return {
     ok: true,
-    baseUrl: config.baseUrl,
+    baseUrl: verifiedBaseUrl,
     modelCount: test.modelIds.length,
     compatibility: test.compatibility,
     error: null,

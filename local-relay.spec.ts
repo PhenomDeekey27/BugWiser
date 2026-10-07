@@ -456,14 +456,74 @@ async function main(): Promise<void> {
     });
     assert.equal(outcome.ok, false);
     if (!outcome.ok) {
+      // Opaque rejection + unreachable no-cors verdict ⇒ "nothing answered".
       assert.match(outcome.error, /Could not reach 127\.0\.0\.1:11434/);
       assert.match(outcome.error, /CORS/);
       assert.match(outcome.error, /OLLAMA_ORIGINS/);
-      assert.match(outcome.error, /--cors-origin/);
+      assert.match(outcome.error, /no server answered/);
       assert.equal(outcome.error.includes('sk-local-test'), false); // never leaks the key
     }
     assert.match(relayReachFailureMessage('http://192.168.1.20:8080'), /non-loopback/); // mixed-content note
     assert.equal(relayReachFailureMessage('http://127.0.0.1:1').includes('non-loopback'), false);
+  });
+
+  await check('relayReachFailureMessage: verdict-specific text leads with the diagnosis', () => {
+    const blockedMsg = relayReachFailureMessage('http://192.168.1.20:8080', 'reachable-blocked');
+    assert.match(blockedMsg, /blocking this site/);
+    assert.match(blockedMsg, /CORS/);
+    assert.match(blockedMsg, /--cors-origin/); // port 8080 hint
+    assert.match(blockedMsg, /non-loopback/); // mixed-content note retained
+
+    const unreachableMsg = relayReachFailureMessage('http://192.168.1.20:8080', 'unreachable');
+    assert.match(unreachableMsg, /Could not reach 192\.168\.1\.20:8080/);
+    assert.match(unreachableMsg, /no server answered/);
+    assert.match(unreachableMsg, /CORS/);
+
+    const unknownMsg = relayReachFailureMessage('http://127.0.0.1:11434');
+    assert.match(unknownMsg, /OLLAMA_ORIGINS/); // combined fallback names every family
+    assert.match(unknownMsg, /--cors-origin/);
+    assert.match(unknownMsg, /LM Studio/);
+    assert.equal(unknownMsg.includes('non-loopback'), false);
+  });
+
+  await check('executeRelayJob: up-but-CORS-blocking server diagnosed via the no-cors probe', async () => {
+    const outcome = await executeRelayJob(jobRecord({ url: 'http://127.0.0.1:8000/v1/models' }), {
+      fetchFn: async (_url, init) => {
+        // The no-cors follow-up resolves ⇒ the server is up and refused us.
+        if ((init as RequestInit | undefined)?.mode === 'no-cors') return new Response(null, { status: 200 });
+        throw new TypeError('Failed to fetch');
+      },
+    });
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) {
+      assert.match(outcome.error, /blocking this site/);
+      assert.match(outcome.error, /--cors-origin/); // port 8000 hint
+      assert.ok(!outcome.error.includes('no server answered'), 'CORS verdict must not claim the server is down');
+      assert.equal(outcome.error.includes('sk-local-test'), false);
+    }
+  });
+
+  await check('executeRelayJob: non-loopback plain-http target claims targetAddressSpace local; loopback does not', async () => {
+    type CapturedInit = RequestInit & { targetAddressSpace?: string };
+    let lanInit: CapturedInit | undefined;
+    const lan = await executeRelayJob(jobRecord({ url: 'http://192.168.1.20:8080/v1/models' }), {
+      fetchFn: async (_url, init) => {
+        lanInit = init as CapturedInit;
+        return jsonRes(200, { data: [] });
+      },
+    });
+    assert.equal(lan.ok, true);
+    assert.equal(lanInit?.targetAddressSpace, 'local');
+
+    let loopInit: CapturedInit | undefined;
+    const loop = await executeRelayJob(jobRecord({ url: 'http://127.0.0.1:8000/v1/models' }), {
+      fetchFn: async (_url, init) => {
+        loopInit = init as CapturedInit;
+        return jsonRes(200, { data: [] });
+      },
+    });
+    assert.equal(loop.ok, true);
+    assert.equal(loopInit?.targetAddressSpace, undefined, 'loopback is exempt from mixed content');
   });
 
   await check('executeRelayJob: defense in depth — non-local target, expired job, bad method all refused', async () => {
@@ -500,9 +560,10 @@ async function main(): Promise<void> {
       ports: [11434, 9999],
       timeoutMs: 200,
     });
-    assert.ok(found);
-    assert.equal(found.baseUrl, 'http://127.0.0.1:11434');
-    assert.deepEqual(found.modelIds, ['llama3', 'qwen2.5']);
+    assert.ok(found.endpoint);
+    assert.equal(found.endpoint?.baseUrl, 'http://127.0.0.1:11434');
+    assert.deepEqual(found.endpoint?.modelIds, ['llama3', 'qwen2.5']);
+    assert.deepEqual(found.blocked, [], 'dead ports must not be reported as CORS-blocked');
   });
 
   await check('detect: loopback host wins the deterministic priority when both hosts answer', async () => {
@@ -511,21 +572,33 @@ async function main(): Promise<void> {
       throw new TypeError('Failed to fetch');
     };
     const found = await detectLocalEndpoint({ fetchFn, hosts: ['127.0.0.1', 'localhost'], ports: [11434, 1234] });
-    assert.equal(found?.baseUrl, 'http://127.0.0.1:11434');
+    assert.equal(found.endpoint?.baseUrl, 'http://127.0.0.1:11434');
   });
 
   await check('detect: empty-but-valid endpoint is detected; nothing answering ⇒ null', async () => {
     const empty: FetchLike = async () => jsonRes(200, { data: [] });
     const found = await detectLocalEndpoint({ fetchFn: empty, hosts: ['127.0.0.1'], ports: [11434] });
-    assert.ok(found);
-    assert.equal(found.baseUrl, 'http://127.0.0.1:11434');
-    assert.deepEqual(found.modelIds, []);
+    assert.ok(found.endpoint);
+    assert.equal(found.endpoint?.baseUrl, 'http://127.0.0.1:11434');
+    assert.deepEqual(found.endpoint?.modelIds, []);
 
     const dead: FetchLike = async () => {
       throw new TypeError('Failed to fetch');
     };
     const none = await detectLocalEndpoint({ fetchFn: dead, hosts: ['127.0.0.1'], ports: [11434, 1234] });
-    assert.equal(none, null);
+    assert.equal(none.endpoint, null);
+    assert.deepEqual(none.blocked, [], 'a dead server (no-cors probe also fails) is not blocked');
+  });
+
+  await check('detect: up-but-CORS-blocking endpoint reported as blocked, not not-found', async () => {
+    const fetchFn: FetchLike = async (_url, init) => {
+      // Opaque no-cors success ⇒ the server is up and refusing this origin.
+      if ((init as RequestInit | undefined)?.mode === 'no-cors') return new Response(null, { status: 200 });
+      throw new TypeError('Failed to fetch');
+    };
+    const result = await detectLocalEndpoint({ fetchFn, hosts: ['127.0.0.1'], ports: [11434, 9999] });
+    assert.equal(result.endpoint, null);
+    assert.deepEqual(result.blocked, ['http://127.0.0.1:11434', 'http://127.0.0.1:9999']);
   });
 }
 

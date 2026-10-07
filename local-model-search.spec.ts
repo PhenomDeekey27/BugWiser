@@ -157,8 +157,10 @@ async function main(): Promise<void> {
     if (url.includes('api.deepseek.com')) {
       return { ok: true, status: 200, json: async () => ({ data: [] }) };
     }
-    if (url.includes('127.0.0.1')) {
-      throw new Error('connect ECONNREFUSED 127.0.0.1:39999');
+    if (url.includes('127.0.0.1') || url.includes('localhost:39999')) {
+      // The probe's host-alias rescue retries `localhost` after a transport
+      // failure on `127.0.0.1` — same dead endpoint, same refusal.
+      throw new Error('connect ECONNREFUSED ' + (url.includes('localhost') ? 'localhost:39999' : '127.0.0.1:39999'));
     }
     unexpected.push(url);
     throw new Error('unexpected network call: ' + url);

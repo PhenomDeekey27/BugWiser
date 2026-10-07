@@ -9,8 +9,10 @@ import {
   buildLocalProviderConfig,
   blockedLocalTargetReason,
   hasVersionSegment,
+  mixedContentHint,
 } from './lib/ai/connection/local';
 import {
+  probeLocalModelsList,
   testLocalConnection,
   type FetchLike,
 } from './lib/ai/connection/testConnection';
@@ -99,6 +101,40 @@ async function main(): Promise<void> {
       assert.equal(r.ok, false, `expected rejection for ${JSON.stringify(bad)}`);
       assert.ok(r.ok === false && r.error.length > 0, 'rejection must carry a message');
     }
+  });
+
+  await check('paste rescue: scheme-less host:port gets http://; numeric-port gate keeps garbage out', () => {
+    const bare = normalizeLocalBaseUrl('localhost:8000');
+    assert.equal(bare.ok && bare.baseUrl, 'http://localhost:8000');
+    const path = normalizeLocalBaseUrl('127.0.0.1:8000/v1');
+    assert.equal(path.ok && path.baseUrl, 'http://127.0.0.1:8000/v1');
+    const v6 = normalizeLocalBaseUrl('[::1]:11434');
+    assert.equal(v6.ok && v6.baseUrl, 'http://[::1]:11434');
+    // No `host:port` shape ⇒ no rescue: still rejected.
+    assert.equal(normalizeLocalBaseUrl('not-a-url').ok, false);
+    assert.equal(normalizeLocalBaseUrl('just words').ok, false);
+  });
+
+  await check('any-address bind hosts (0.0.0.0, ::) rewrite to loopback — browsers cannot dial a bind address', () => {
+    const v4 = normalizeLocalBaseUrl('http://0.0.0.0:8000');
+    assert.equal(v4.ok && v4.baseUrl, 'http://127.0.0.1:8000');
+    const v4Paste = normalizeLocalBaseUrl('0.0.0.0:8000/v1');
+    assert.equal(v4Paste.ok && v4Paste.baseUrl, 'http://127.0.0.1:8000/v1');
+    const v6Path = normalizeLocalBaseUrl('http://[::]:8000/v1');
+    assert.equal(v6Path.ok && v6Path.baseUrl, 'http://[::1]:8000/v1');
+    const bare = normalizeLocalBaseUrl('http://[::]:11434');
+    assert.equal(bare.ok && bare.baseUrl, 'http://[::1]:11434');
+  });
+
+  await check('mixed-content hint: only plain http to a non-loopback host from an https page', () => {
+    assert.ok(mixedContentHint('http://192.168.1.4:11434', 'https:'));
+    assert.ok(mixedContentHint('192.168.1.4:11434', 'https:'), 'scheme-less LAN paste still warns');
+    assert.equal(mixedContentHint('http://192.168.1.4:11434', 'http:'), null, 'plain-http page is not mixed content');
+    assert.equal(mixedContentHint('http://127.0.0.1:8000', 'https:'), null, 'loopback is exempt');
+    assert.equal(mixedContentHint('http://localhost:8000', 'https:'), null, 'loopback is exempt');
+    assert.equal(mixedContentHint('https://192.168.1.4:11434', 'https:'), null, 'already https');
+    assert.equal(mixedContentHint('not a url', 'https:'), null);
+    assert.equal(mixedContentHint('', 'https:'), null);
   });
 
   await check('invalid URL: scheme-specific message, no secrets echoed', () => {
@@ -319,6 +355,61 @@ async function main(): Promise<void> {
     assert.equal(r.baseUrl, 'http://127.0.0.1:9000');
     assert.equal(r.modelsEndpoint, 'http://127.0.0.1:9000/v1/models');
     assert.deepEqual(r.modelIds, ['local-7b']);
+  });
+
+  await check('non-root pasted path rescued by the conventional /v1 root; verified root is what gets persisted', async () => {
+    const calls: Call[] = [];
+    const fetchFn = mockFetch(
+      (url) => (url === 'http://127.0.0.1:9100/v1/models' ? jsonRes(200, { data: [{ id: 'm1' }] }) : jsonRes(404, {})),
+      calls
+    );
+    const r = await testLocalConnection({ baseUrl: 'http://127.0.0.1:9100/api' }, { fetchFn });
+    assert.equal(r.success, true);
+    assert.equal(r.baseUrl, 'http://127.0.0.1:9100/v1', 'the verified root is the registration value');
+    assert.equal(r.modelsEndpoint, 'http://127.0.0.1:9100/v1/models');
+    assert.equal(calls.length, 3, 'tries /api/models, /api/v1/models, then the conventional /v1 root');
+    assert.ok(calls.every((c) => c.url.startsWith('http://127.0.0.1:9100/')));
+  });
+
+  await check('transport failure on localhost retries 127.0.0.1 exactly once (host alias rescue)', async () => {
+    const calls: Call[] = [];
+    const fetchFn = mockFetch((url) => {
+      if (url.startsWith('http://localhost:')) throw new TypeError('fetch failed');
+      return jsonRes(200, { data: [{ id: 'alias-ok' }] });
+    }, calls);
+    const r = await testLocalConnection({ baseUrl: 'http://localhost:19300' }, { fetchFn });
+    assert.equal(r.success, true);
+    assert.equal(r.baseUrl, 'http://127.0.0.1:19300', 'the alias that actually answered is the verified base');
+    assert.equal(calls.length, 2, 'localhost tried once, alias 127.0.0.1 succeeded on its first candidate');
+    assert.ok(calls[0].url.startsWith('http://localhost:19300'));
+    assert.ok(calls[1].url.startsWith('http://127.0.0.1:19300'));
+  });
+
+  await check('host alias is NOT tried when the server answered (404 stays on the original host)', async () => {
+    const calls: Call[] = [];
+    const fetchFn = mockFetch(() => jsonRes(404, {}), calls);
+    const r = await testLocalConnection({ baseUrl: 'http://localhost:19301' }, { fetchFn });
+    assert.equal(r.success, false);
+    assert.equal(calls.length, 2, 'a server that answered is never retried elsewhere');
+    assert.ok(calls.every((c) => c.url.startsWith('http://localhost:19301/')));
+    assert.equal(r.baseUrl, 'http://localhost:19301');
+  });
+
+  await check('full transport failure flags networkFailure for the browser-side diagnosis', async () => {
+    const fetchFn: FetchLike = async () => {
+      throw new TypeError('fetch failed');
+    };
+    const r = await testLocalConnection({ baseUrl: 'http://192.168.1.4:11434' }, { fetchFn });
+    assert.equal(r.success, false);
+    assert.ok(r.error && r.error.includes('refused the connection or is unreachable'));
+
+    const probe = await probeLocalModelsList({ baseUrl: 'http://192.168.1.4:11434' }, { fetchFn });
+    assert.equal(probe.networkFailure, true, 'transport-level failure must be flagged, not guessed at');
+
+    const answered = await probeLocalModelsList({ baseUrl: 'http://192.168.1.4:11434' }, {
+      fetchFn: mockFetch(() => jsonRes(404, {}), []),
+    });
+    assert.equal(answered.networkFailure, undefined, 'a server that answered is NOT a transport failure');
   });
 
   await check('HTTP 500 → unverified with status in the message', async () => {
