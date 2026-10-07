@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { getOrBuildCatalog, type ClassifiedModel } from '@/lib/ai/model-intelligence';
 
+// getOrBuildCatalog runs on the request path and may include a relayed local
+// models probe (≤15s) on first build — headroom beyond platform defaults.
+export const maxDuration = 60;
+
 interface ModelStrategy {
   tier: 'free' | 'balanced' | 'fast' | 'auto';
   label: string;

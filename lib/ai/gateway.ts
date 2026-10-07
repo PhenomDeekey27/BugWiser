@@ -162,6 +162,10 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     confirmedFreeIds,
     automaticCandidates,
     localEndpoint,
+    // The resolved user scopes the local provider instance and its browser-
+    // relay jobs (lib/ai/connection/relay.ts) — generation of a local model
+    // runs through the user's own open tab when deployed.
+    userId,
   });
 
   // Detect whether manual mode silently swapped models (should only happen on

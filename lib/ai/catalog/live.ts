@@ -8,6 +8,7 @@
 import type { ProviderName, ModelDefinition } from './types';
 import { envKeyForProvider, resolveLocalEndpoint } from '@/lib/ai/connection/service';
 import { probeLocalModelsList, type TestConnectionDeps } from '@/lib/ai/connection/testConnection';
+import { relayProbeDeps } from '@/lib/ai/connection/relay';
 import { normalizeProviderModel } from './normalizers';
 
 type RawEntry = Record<string, unknown>;
@@ -225,7 +226,14 @@ export async function fetchLiveModels(
       if (!localEndpoint) continue;
       push(
         'local',
-        fetcher.fetch({ apiKey: localEndpoint.apiKey || '', baseUrl: localEndpoint.baseUrl })
+        fetcher.fetch({
+          apiKey: localEndpoint.apiKey || '',
+          baseUrl: localEndpoint.baseUrl,
+          // Deployed builds cannot reach the user's loopback/private endpoint
+          // from the server — route discovery through the browser relay (no-op
+          // `{}` when direct is possible, so dev/spec behavior is unchanged).
+          probeDeps: relayProbeDeps(userId, localEndpoint.baseUrl),
+        })
       );
       continue;
     }

@@ -3,6 +3,9 @@ import { createClient } from '@/lib/supabase/server';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runPatchGeneration } from '@/lib/analysis/patch';
 
+// See root-cause route: must outlive a relayed local-model generation.
+export const maxDuration = 300;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }

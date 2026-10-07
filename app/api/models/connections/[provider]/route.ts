@@ -7,6 +7,9 @@ import {
 } from '@/lib/ai/connection/service';
 import type { ProviderName } from '@/lib/ai/providers/registry';
 
+// Kicks a background catalog rebuild (may include a relayed local probe).
+export const maxDuration = 60;
+
 export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ provider: string }> }

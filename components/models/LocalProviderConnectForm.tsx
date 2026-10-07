@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CatalogProvider } from '@/app/models/page';
 import { createConnectGate } from './connectState';
+import { detectLocalEndpoint } from './localEndpointDetect';
 import {
   canRegister,
   canTest,
@@ -27,6 +28,11 @@ interface LocalProviderConnectFormProps {
  * The Connect button only becomes enabled after a successful test that
  * discovered at least one model (see localProviderFlow.ts) — a reachable but
  * empty or unverified endpoint can never register.
+ *
+ * On mount (with an empty Base URL) the form probes the machine's common
+ * local-server ports and prefills the first endpoint that validates; the
+ * Detect button re-runs it. When the test was answered through the browser
+ * relay (deployed app), a note explains that the tab must stay open.
  */
 export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderConnectFormProps) {
   const [state, dispatch] = useReducer(
@@ -34,13 +40,61 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     provider.baseUrl ?? '',
     createInitialLocalFlowState
   );
+  const [detecting, setDetecting] = useState(false);
+  const [detectNote, setDetectNote] = useState<string | null>(null);
+  const [relayed, setRelayed] = useState(false);
 
   // Single-flight latch: the Connect button is disabled while a request is in
   // flight, but two clicks dispatched before the re-render would both read the
   // pre-request state. This makes a duplicate registration impossible.
   const registerGate = useRef(createConnectGate());
+  // Auto-detect must never overwrite a value the user typed while the probe
+  // was in flight: any edit sets this, and the fill is then skipped.
+  const baseUrlEdited = useRef(false);
+  const didAutoDetect = useRef(false);
 
   const busy = state.phase === 'testing' || state.phase === 'registering';
+
+  const runDetect = useCallback(async () => {
+    if (detecting || busy || state.phase === 'registered') return;
+    setDetecting(true);
+    setDetectNote(null);
+    baseUrlEdited.current = false;
+    let found: Awaited<ReturnType<typeof detectLocalEndpoint>> = null;
+    try {
+      found = await detectLocalEndpoint();
+    } catch {
+      found = null;
+    }
+    setDetecting(false);
+    if (!found) {
+      setDetectNote('No local endpoint found on common ports — enter the Base URL manually.');
+      return;
+    }
+    const count = found.modelIds.length;
+    const detail =
+      count > 0
+        ? `${count} model${count === 1 ? '' : 's'} available`
+        : 'reachable, but it lists no models yet';
+    if (!baseUrlEdited.current) {
+      dispatch({ type: 'field', field: 'baseUrl', value: found.baseUrl });
+    }
+    setDetectNote(
+      `${baseUrlEdited.current ? 'Found' : 'Detected'} ${found.baseUrl} — ${detail}.`
+    );
+  }, [detecting, busy, state.phase]);
+
+  // One-time auto-detect on mount, only when no stored URL prefills the form.
+  // Deferred a tick so the first paint isn't blocked and the setState rule for
+  // effect bodies is respected; the ref makes it run exactly once.
+  useEffect(() => {
+    if (didAutoDetect.current) return;
+    didAutoDetect.current = true;
+    if ((provider.baseUrl ?? '').trim().length > 0) return;
+    setTimeout(() => {
+      void runDetect();
+    }, 0);
+  }, [provider.baseUrl, runDetect]);
 
   const runTest = async () => {
     if (!canTest(state)) return;
@@ -54,6 +108,7 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
         body: JSON.stringify({ baseUrl, apiKey: apiKey || undefined }),
       });
       const data = await res.json().catch(() => ({}));
+      if (typeof data.relayed === 'boolean') setRelayed(data.relayed);
       if (!res.ok) {
         dispatch({ type: 'test-failure', error: data.error || 'Connection test failed.' });
         return;
@@ -102,7 +157,10 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
         type="text"
         placeholder="Base URL — e.g. http://127.0.0.1:8000/v1"
         value={state.baseUrl}
-        onChange={(e) => dispatch({ type: 'field', field: 'baseUrl', value: e.target.value })}
+        onChange={(e) => {
+          baseUrlEdited.current = true;
+          dispatch({ type: 'field', field: 'baseUrl', value: e.target.value });
+        }}
         disabled={busy || state.phase === 'registered'}
         aria-label="Local endpoint base URL"
       />
@@ -129,9 +187,27 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
       {state.phase === 'registered' && (
         <p className="text-xs font-mono text-bw-peach">Connected.</p>
       )}
+      {detectNote && !busy && (
+        <p className="text-xs text-bw-peach">{detectNote}</p>
+      )}
+      {relayed && (
+        <p className="text-[11px] text-bw-peach">
+          Talking to your local server through this browser tab — keep BugWiser open in this
+          browser while it (and future analyses) run.
+        </p>
+      )}
       {state.error && <p className="text-xs text-error-default">{state.error}</p>}
 
       <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-border text-bw-peach"
+          onClick={runDetect}
+          disabled={detecting || busy || state.phase === 'registered'}
+        >
+          {detecting ? 'Detecting...' : 'Detect'}
+        </Button>
         <Button
           variant="outline"
           size="sm"

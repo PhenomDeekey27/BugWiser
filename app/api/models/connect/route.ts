@@ -6,9 +6,14 @@ import {
   saveUserConnection,
 } from '@/lib/ai/connection/service';
 import { registerLocalConnection } from '@/lib/ai/connection/registerLocal';
+import { relayProbeDeps } from '@/lib/ai/connection/relay';
 import { LOCAL_PROVIDER_ID } from '@/lib/ai/connection/local';
 import { createProviderInstanceWithApiKey } from '@/lib/ai/providers/registry';
 import type { ProviderName } from '@/lib/ai/providers/registry';
+
+// Registration re-runs the connection test (relayed probe ≤15s) and kicks a
+// background catalog rebuild — headroom beyond platform defaults.
+export const maxDuration = 60;
 
 const VALID_PROVIDERS: ProviderName[] = [
   'chutes',
@@ -104,10 +109,16 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'API key must be a string' }, { status: 400 });
       }
 
-      const registration = await registerLocalConnection(user.id, {
-        baseUrl: body.baseUrl,
-        apiKey: typeof apiKey === 'string' ? apiKey : undefined,
-      });
+      const registration = await registerLocalConnection(
+        user.id,
+        {
+          baseUrl: body.baseUrl,
+          apiKey: typeof apiKey === 'string' ? apiKey : undefined,
+        },
+        // Same relay-aware probe deps as the test route: the verification test
+        // inside registration must reach the local endpoint the same way.
+        { testDeps: relayProbeDeps(user.id, body.baseUrl) }
+      );
       if (!registration.ok) {
         return NextResponse.json(
           {

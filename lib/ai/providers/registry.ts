@@ -112,6 +112,12 @@ export function createProviderInstance(providerName: ProviderName): AIProvider {
 export interface ProviderInstanceOptions {
   baseUrl?: string;
   /**
+   * The user this instance executes for. Only `local` consumes it: the
+   * browser-relay jobs its fetch enqueues are enqueued under this user's
+   * session (lib/ai/connection/relay.ts). Other providers ignore it.
+   */
+  userId?: string;
+  /**
    * Fail-closed (per-user provider disable): when set, a missing explicit key
    * THROWS instead of silently falling back to the server env credential, so
    * a provider the user disabled can never execute through the deployment
@@ -206,6 +212,7 @@ export function createProviderInstanceWithApiKey(
         model: '',
         contextLimit: 128_000,
         outputLimit: 8192,
+        ...(options.userId ? { userId: options.userId } : {}),
       });
     default:
       throw new Error(`Unknown provider: ${providerName}`);

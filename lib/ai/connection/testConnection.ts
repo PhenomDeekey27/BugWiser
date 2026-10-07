@@ -94,6 +94,10 @@ type TransportOutcome =
   | { kind: 'response'; response: ResponseLike }
   | { kind: 'timeout'; url: string }
   | { kind: 'network'; url: string }
+  // Browser-relay failure (lib/ai/connection/relay.ts): the message is already
+  // user-facing and sanitized (CORS/keep-a-tab-open guidance, no secrets), so
+  // it is surfaced verbatim instead of the generic network wording.
+  | { kind: 'relay-error'; message: string }
   | { kind: 'blocked-redirect'; reason: string }
   | { kind: 'too-many-redirects' };
 
@@ -136,6 +140,19 @@ async function requestWithTimeout(
   } catch (err) {
     if (err === TIMEOUT) return { kind: 'timeout', url };
     const name = (err as { name?: string } | null)?.name;
+    // Relay failures are recognized by NAME ONLY (duck-typed on purpose): this
+    // module must not import relay.ts — that would pull the server-only job
+    // transport into every probe consumer. See relay.ts isRelayError.
+    if (name === 'RelayError') {
+      const message = (err as { message?: unknown }).message;
+      return {
+        kind: 'relay-error',
+        message:
+          typeof message === 'string' && message.length > 0
+            ? message
+            : 'The browser relay failed to reach the endpoint.',
+      };
+    }
     if (name === 'TimeoutError' || name === 'AbortError') return { kind: 'timeout', url };
     return { kind: 'network', url };
   } finally {
@@ -249,6 +266,8 @@ export async function probeLocalModelsList(
           'unverified',
           `Could not reach ${outcome.url} — the server refused the connection or is unreachable.`
         );
+      case 'relay-error':
+        return fail(baseUrl, 'unverified', outcome.message);
       case 'blocked-redirect':
         return fail(baseUrl, 'unverified', outcome.reason);
       case 'too-many-redirects':

@@ -1,11 +1,23 @@
 import { AIProvider, AICompletionRequest, AICompletionResponse } from '../base';
 import { hasVersionSegment } from '@/lib/ai/connection/local';
+import {
+  createRelayAwareFetch,
+  RELAY_GENERATION_TIMEOUT_MS,
+  RELAY_HEALTH_TIMEOUT_MS,
+} from '@/lib/ai/connection/relay';
 
 export interface LocalProviderConfig {
   /** Normalized base URL from the user's stored local connection (non-secret). */
   baseUrl: string;
   /** Optional — many local servers require no authentication. */
   apiKey?: string;
+  /**
+   * The owning user. Enables the browser relay: when deployed, requests to
+   * this local endpoint are executed by the user's own open tab
+   * (lib/ai/connection/relay.ts) because the server cannot reach loopback.
+   * Absent ⇒ plain direct fetch (unchanged behavior).
+   */
+  userId?: string;
   model: string;
   contextLimit: number;
   outputLimit: number;
@@ -28,7 +40,10 @@ export interface LocalProviderConfig {
 // The base URL always comes from the stored connection (never an env var,
 // never another provider's endpoint), and no timeout is added — generation
 // clients in this codebase have no per-request timeout and that behavior is
-// preserved.
+// preserved. When a `userId` is present and the target relays (deployed),
+// the request instead travels through the user's open browser tab with a
+// RELAY_GENERATION_TIMEOUT_MS poll budget — a local model can take minutes,
+// and the tab (not the server) is what actually reaches 127.0.0.1.
 export class LocalProvider implements AIProvider {
   readonly name = 'local';
   private config: LocalProviderConfig;
@@ -65,9 +80,12 @@ export class LocalProvider implements AIProvider {
     };
 
     const candidates = this.candidates('chat/completions');
+    const fetchFn = createRelayAwareFetch(this.config.userId, {
+      timeoutMs: RELAY_GENERATION_TIMEOUT_MS,
+    });
     let response: Response | null = null;
     for (let i = 0; i < candidates.length; i++) {
-      const res = await fetch(candidates[i], {
+      const res = await fetchFn(candidates[i], {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body),
@@ -125,8 +143,11 @@ export class LocalProvider implements AIProvider {
       const key = (this.config.apiKey ?? '').trim();
       if (key) headers.Authorization = `Bearer ${key}`;
       const candidates = this.candidates('models');
+      const fetchFn = createRelayAwareFetch(this.config.userId, {
+        timeoutMs: RELAY_HEALTH_TIMEOUT_MS,
+      });
       for (let i = 0; i < candidates.length; i++) {
-        const response = await fetch(candidates[i], { headers });
+        const response = await fetchFn(candidates[i], { headers });
         if (response.status === 404 && i < candidates.length - 1) continue;
         return response.ok;
       }

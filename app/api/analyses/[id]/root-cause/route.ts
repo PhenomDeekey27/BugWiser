@@ -3,6 +3,11 @@ import { createClient } from '@/lib/supabase/server';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runRootCauseAnalysis } from '@/lib/analysis/root-cause';
 
+// A local-model generation may wait up to RELAY_GENERATION_TIMEOUT_MS on the
+// browser relay (lib/ai/connection/relay.ts) — the stage must outlive that
+// wait even on a deployment plan with a short default function timeout.
+export const maxDuration = 300;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }

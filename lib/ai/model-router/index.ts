@@ -97,6 +97,13 @@ export interface RunRequest {
    * back to the env credential (fail-closed). Absent ⇒ nothing is disabled.
    */
   disabledProviders?: ReadonlySet<ProviderName>;
+  /**
+   * The user this run executes for. Only the `local` provider consumes it:
+   * its instance is user-scoped (two users may store the same base URL on
+   * different machines) and its browser-relay jobs are enqueued under this
+   * user's session. Absent (scripts/specs) ⇒ local runs stay direct.
+   */
+  userId?: string;
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -224,28 +231,39 @@ export function logAttempt(
 
 const providerInstances = new Map<string, AIProvider>();
 
-function instanceKey(provider: ProviderName, model: string, apiKey: string | undefined, baseUrl?: string): string {
+function instanceKey(
+  provider: ProviderName,
+  model: string,
+  apiKey: string | undefined,
+  baseUrl?: string,
+  userId?: string
+): string {
   const keySuffix = apiKey ? apiKey.slice(-8) : 'env';
-  // The local instance is per-ENDPOINT: different stored base URLs (or a
-  // re-registered endpoint) must never share a cached instance. Other
+  // The local instance is per-ENDPOINT (different stored base URLs — or a
+  // re-registered endpoint — must never share a cached instance) and
+  // per-USER (the browser-relay jobs it enqueues are only claimable by that
+  // user's tabs, and `127.0.0.1:8000` on one machine ≠ another's). Other
   // providers keep the existing key shape byte-identically.
-  return `${provider}:${model}:${keySuffix}${baseUrl ? `:${baseUrl}` : ''}`;
+  const userSuffix = provider === 'local' && userId ? `:${userId}` : '';
+  return `${provider}:${model}:${keySuffix}${baseUrl ? `:${baseUrl}` : ''}${userSuffix}`;
 }
 
 function getOrCreateProvider(
   entry: TaskModelEntry,
   apiKey: string | undefined,
   localEndpoint?: { baseUrl: string; apiKey?: string } | null,
-  forbidEnvFallback = false
+  forbidEnvFallback = false,
+  userId?: string
 ): AIProvider {
   const baseUrl = entry.provider === 'local' ? localEndpoint?.baseUrl : undefined;
-  const key = instanceKey(entry.provider, entry.model, apiKey, baseUrl);
+  const key = instanceKey(entry.provider, entry.model, apiKey, baseUrl, userId);
   if (!providerInstances.has(key)) {
     providerInstances.set(
       key,
       createProviderInstanceWithApiKey(entry.provider, apiKey, {
         ...(baseUrl ? { baseUrl } : {}),
         forbidEnvFallback,
+        ...(entry.provider === 'local' && userId ? { userId } : {}),
       })
     );
   }
@@ -459,7 +477,8 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
       entry,
       apiKey,
       request.localEndpoint,
-      request.disabledProviders?.has(entry.provider) === true
+      request.disabledProviders?.has(entry.provider) === true,
+      request.userId
     );
     const startTime = Date.now();
 
