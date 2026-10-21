@@ -3,13 +3,20 @@
 // resolution so stages don't embed provider-specific logic.
 
 import { createBackgroundClient } from '@/lib/supabase/background';
-import { runWithFallback, RunResponse } from './model-router';
+import { runWithFallback, RunResponse, buildAvailableProviders } from './model-router';
 import { resolveAnalysisRouting, isStrictFreeSelection } from './routing';
 import { resolveLocalEndpoint } from './connection/service';
+import { relayProbeDeps } from './connection/relay';
 import { recordStageAssignment, buildStageAssignmentRecord } from './analysis-selection';
 import { getOrBuildCatalog } from './model-intelligence';
-import { toCatalogModel } from './catalog/toCatalogModel';
-import { prepareStrictFreeRun, getAutomaticStageCandidates } from './catalog/stageSelection';
+import { toCatalogModel, definitionToCatalogModel } from './catalog/toCatalogModel';
+import {
+  prepareStrictFreeRun,
+  getAutomaticStageCandidates,
+  getSingleUsableModel,
+  listUsableModels,
+} from './catalog/stageSelection';
+import { fetchLocalModels } from './catalog/live';
 import type { CatalogModel } from '@/app/models/page';
 import type { TaskModelEntry, AutomaticCandidate } from './config';
 import type { ProviderName } from './providers/registry';
@@ -38,6 +45,24 @@ export interface GenerateResult extends RunResponse {
   manualFallbackOccurred: boolean;
 }
 
+/**
+ * Injectable boundaries. Production passes nothing; the integration spec
+ * replaces them to prove the SAME resolved model reaches every stage without
+ * a database or a real provider call.
+ */
+export interface GenerateDependencies {
+  resolveLocalEndpoint?: typeof resolveLocalEndpoint;
+  resolveRouting?: typeof resolveAnalysisRouting;
+  getCatalog?: typeof getOrBuildCatalog;
+  loadAnalysisStrategy?: (analysisId: string) => Promise<string | null>;
+  runWithFallback?: typeof runWithFallback;
+  recordAssignment?: typeof recordStageAssignment;
+  fetchLocalModels?: typeof fetchLocalModels;
+}
+
+export type RuntimeCatalogState = 'ready' | 'empty' | 'unavailable';
+
+
 async function getAnalysisUserId(analysisId: string): Promise<string> {
   const db = createBackgroundClient();
   const { data, error } = await db
@@ -51,98 +76,214 @@ async function getAnalysisUserId(analysisId: string): Promise<string> {
   return data.user_id as string;
 }
 
-export async function generate(params: GenerateParams): Promise<GenerateResult> {
+async function loadAnalysisStrategy(analysisId: string): Promise<string | null> {
+  const { data } = await createBackgroundClient()
+    .from('analyses')
+    .select('model_strategy')
+    .eq('id', analysisId)
+    .single();
+  return (data?.model_strategy as string | null | undefined) ?? null;
+}
+
+// Runtime fallback for a connected local endpoint whose models are missing
+// from the persisted catalog (first build failed, catalog storage failed, or
+// refresh is stale). Reuses the existing local discovery probe — no second
+// model system — and caches the result briefly because generate() runs once
+// per analysis stage.
+const LOCAL_FALLBACK_TTL_MS = 60_000;
+const localFallbackCache = new Map<string, { at: number; models: CatalogModel[] }>();
+
+async function discoverLocalModelsForRuntime(
+  userId: string,
+  localEndpoint: { baseUrl: string; apiKey?: string },
+  fetcher: typeof fetchLocalModels
+): Promise<CatalogModel[]> {
+  const cacheKey = `${userId}:${localEndpoint.baseUrl}`;
+  const cached = localFallbackCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < LOCAL_FALLBACK_TTL_MS) return cached.models;
+
+  try {
+    const definitions = await fetcher({
+      apiKey: localEndpoint.apiKey || '',
+      baseUrl: localEndpoint.baseUrl,
+      probeDeps: relayProbeDeps(userId, localEndpoint.baseUrl),
+    });
+    const models = definitions.map(definitionToCatalogModel);
+    localFallbackCache.set(cacheKey, { at: Date.now(), models });
+    return models;
+  } catch (err) {
+    console.warn('[gateway] Local model discovery fallback failed:', err);
+    // Cache the failure briefly so five stages do not each probe an endpoint
+    // that is unreachable.
+    localFallbackCache.set(cacheKey, { at: Date.now(), models: [] });
+    return [];
+  }
+}
+
+export async function generate(
+  params: GenerateParams,
+  dependencies: GenerateDependencies = {}
+): Promise<GenerateResult> {
   const userId = params.userId || (await getAnalysisUserId(params.analysisId));
   // The user's stored local endpoint (base URL + optional decrypted key).
   // Resolved ONCE per run (cached in the connection layer) so a local model
   // can only ever execute through its own endpoint. null ⇒ the local provider
   // is treated as disconnected everywhere downstream (candidates are skipped
   // by the router's availability gate; no request is made).
-  const localEndpoint = await resolveLocalEndpoint(userId);
+  const localEndpoint = await (dependencies.resolveLocalEndpoint ?? resolveLocalEndpoint)(userId);
   // Resolve routing for THIS stage; auto mode picks up the user's saved
   // stage_overrides entry for params.task (manual mode is task-independent).
-  const routing = await resolveAnalysisRouting(userId, params.task);
+  const routing = await (dependencies.resolveRouting ?? resolveAnalysisRouting)(userId, params.task);
 
   // Get the model strategy from the analysis row
   const analysisId = params.analysisId;
-  const { data: analysis } = await createBackgroundClient()
-    .from('analyses')
-    .select('model_strategy')
-    .eq('id', analysisId)
-    .single();
-  const strategyMode = (analysis?.model_strategy || 'auto') as 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'auto';
+  const analysisStrategy = await (dependencies.loadAnalysisStrategy ?? loadAnalysisStrategy)(analysisId);
+  const strategyMode = (analysisStrategy || 'auto') as 'free' | 'free_paid' | 'fully_paid' | 'custom' | 'auto';
+
+  // The providers this user can actually execute: connected credentials +
+  // env (minus per-user tombstones) + a usable local endpoint. This is the
+  // SAME availability set the router enforces, so catalog rows from a
+  // disconnected provider can never become candidates.
+  const availableProviders = buildAvailableProviders({
+    providerTokens: routing.runArgs.providerTokens,
+    disabledProviders: routing.runArgs.disabledProviders,
+    localEndpoint,
+  });
 
   // STRICT FREE: the user's LIVE selected strategy ('free') in auto mode is
   // the contract gate — only confirmed-free models may execute for this
-  // analysis stage (primary, overrides, strategy picks, and every fallback
-  // hop). It reads the live preference (not the analysis-row snapshot, which
-  // is only a creation-time copy) so "selected strategy = free" is enforced
-  // exactly as the user last set it. A FAILED preference read also counts as
-  // strict (isStrictFreeSelection): unknown preference must not unlock paid
-  // models. Manual mode intentionally sits OUTSIDE strict Free: the user's
-  // explicit single model wins (existing design).
-  const strictFree = isStrictFreeSelection(routing);
+  // analysis stage. A FAILED preference read also counts as strict
+  // (isStrictFreeSelection): unknown preference must not unlock paid models.
+  // Manual mode sits OUTSIDE strict Free: the user's explicit model wins.
+  let strictFree = isStrictFreeSelection(routing);
 
-  let stageOverride = routing.runArgs.stageOverrides;
-  let freeCandidates: TaskModelEntry[] | undefined;
-  let confirmedFreeIds: Set<string> | undefined;
-  let automaticCandidates: AutomaticCandidate[] | undefined;
+  // ONE catalog read per stage, as before. Failures no longer abort a
+  // single-model Auto run: the configured model is still attempted.
+  let catalogModels: CatalogModel[] = [];
+  let catalogState: RuntimeCatalogState = 'ready';
+  let catalogError: unknown = null;
+  try {
+    const catalog = await (dependencies.getCatalog ?? getOrBuildCatalog)(userId);
+    catalogModels = catalog.models.map(toCatalogModel);
+  } catch (err) {
+    catalogError = err;
+    catalogState = 'unavailable';
+    console.warn('[gateway] Catalog unavailable — falling back to configured providers:', err);
+  }
+  if (catalogModels.length === 0 && !catalogError) catalogState = 'empty';
 
-  if (strictFree && routing.stageOverrideUnavailable) {
-    // Marker stage: runWithFallback fails fast with the structured
-    // no-free-model error — no catalog load, no candidate, no paid chain.
-    stageOverride = undefined;
-  } else {
-    // ONE canonical free source: this single catalog load (the same data
-    // flow strict Free already used) serves BOTH strict-Free planning and
-    // non-strict free-first ranking / engine free classification —
-    // confirmedFreeIds below is derived from catalog price.isFree and is the
-    // ONLY free authority runtime selection consults (never
-    // MODEL_REGISTRY.free). Strict-Free load failures propagate (unchanged);
-    // non-strict failures degrade conservatively (no model counts as
-    // confirmed free) and never fail the stage.
-    let catalogModels: CatalogModel[];
-    try {
-      const catalog = await getOrBuildCatalog(userId);
-      catalogModels = catalog.models.map(toCatalogModel);
-    } catch (err) {
-      if (strictFree) throw err;
-      console.warn('[gateway] Catalog unavailable for free-status resolution — no model counts as confirmed free:', err);
-      catalogModels = [];
-    }
-
-    confirmedFreeIds = new Set(
-      catalogModels
-        .filter((m) => m.price.isFree)
-        .map((m) => `${m.providerId}/${m.modelId}`)
+  // A connected local endpoint whose models are missing from the catalog is
+  // still a configured provider. Discover them through the existing local
+  // probe once (cached) instead of failing the stage on a catalog miss.
+  if (
+    localEndpoint?.baseUrl &&
+    availableProviders.has('local') &&
+    !catalogModels.some((m) => m.providerId === 'local')
+  ) {
+    const discovered = await discoverLocalModelsForRuntime(
+      userId,
+      localEndpoint,
+      dependencies.fetchLocalModels ?? fetchLocalModels
     );
-
-    if (strictFree) {
-      // The plan may DROP the saved override (setup-derived and not confirmed
-      // free). When it keeps one, its persisted origin rides along so the
-      // router records the user's explicit choice unchanged.
-      const plan = prepareStrictFreeRun(catalogModels, params.task, stageOverride ?? null);
-      freeCandidates = plan.freeCandidates.map((c) => ({
-        provider: c.provider as ProviderName,
-        model: c.model,
-      }));
-      stageOverride = plan.stageOverride
-        ? {
-            provider: plan.stageOverride.provider as ProviderName,
-            model: plan.stageOverride.model,
-            ...(plan.stageOverride.origin ? { origin: plan.stageOverride.origin } : {}),
-          }
-        : undefined;
-    } else {
-      automaticCandidates = getAutomaticStageCandidates(catalogModels, params.task).map((c) => ({
-        provider: c.provider as ProviderName,
-        model: c.model,
-        contextWindow: c.contextWindow,
-      }));
+    if (discovered.length > 0) {
+      const existing = new Set(catalogModels.map((m) => `${m.providerId}/${m.modelId}`));
+      for (const model of discovered) {
+        if (!existing.has(`${model.providerId}/${model.modelId}`)) catalogModels.push(model);
+      }
+      if (catalogState === 'unavailable') catalogState = 'ready';
     }
   }
 
-  const routed: RunResponse = await runWithFallback({
+  const usableCatalog = listUsableModels(catalogModels, availableProviders);
+
+  // Exactly one usable model ⇒ Auto uses it for EVERY stage. This is the
+  // single-provider contract: a local endpoint or a single API-key provider
+  // must never need a public free-model catalog entry. Manual mode is
+  // untouched (the user's explicit model always wins).
+  const singleModel =
+    routing.selection.mode === 'auto'
+      ? getSingleUsableModel(usableCatalog)
+      : null;
+
+  let stageOverride = routing.runArgs.stageOverrides;
+  let freeCandidates: TaskModelEntry[] | undefined;
+  const confirmedFreeIds = new Set(
+    usableCatalog
+      .filter((m) => m.price.isFree)
+      .map((m) => `${m.providerId}/${m.modelId}`)
+  );
+  let automaticCandidates: AutomaticCandidate[] | undefined;
+  let singleModelApplied = false;
+
+  const applySingleModel = (model: CatalogModel): void => {
+    singleModelApplied = true;
+    stageOverride = {
+      provider: model.providerId as ProviderName,
+      model: model.modelId,
+    };
+    console.warn(
+      `[gateway] Auto: using the single configured model ${model.providerId}/${model.modelId} for "${params.task}" (and every other stage).`
+    );
+  };
+
+  if (strictFree) {
+    if (catalogError && !singleModel) throw catalogError;
+
+    if (routing.stageOverrideUnavailable) {
+      // Marker stage. A single configured model is the ONLY alternative; with
+      // no alternative the structured no-free-model error stays intact.
+      stageOverride = undefined;
+      if (singleModel) {
+        strictFree = false;
+        applySingleModel(singleModel);
+      }
+    } else {
+      // The plan may DROP the saved override (setup-derived and not confirmed
+      // free). When it keeps one, its persisted origin rides along so the
+      // router records the user's explicit choice unchanged.
+      const plan = prepareStrictFreeRun(usableCatalog, params.task, stageOverride ?? null);
+      const hasFreePath = plan.freeCandidates.length > 0 || plan.stageOverride !== null;
+      if (hasFreePath) {
+        freeCandidates = plan.freeCandidates.map((c) => ({
+          provider: c.provider as ProviderName,
+          model: c.model,
+        }));
+        stageOverride = plan.stageOverride
+          ? {
+              provider: plan.stageOverride.provider as ProviderName,
+              model: plan.stageOverride.model,
+              ...(plan.stageOverride.origin ? { origin: plan.stageOverride.origin } : {}),
+            }
+          : undefined;
+      } else if (singleModel) {
+        // No free path exists, but exactly one model is configured. Auto must
+        // use it rather than failing on "no free model available" — the
+        // configured model is not required to be in a free catalog.
+        strictFree = false;
+        applySingleModel(singleModel);
+      } else {
+        // Keep the strict contract: an empty free chain produces the
+        // structured no-free-model error, never a silent paid fallback.
+        freeCandidates = [];
+        stageOverride = undefined;
+      }
+    }
+  }
+
+  if (!strictFree) {
+    automaticCandidates = getAutomaticStageCandidates(usableCatalog, params.task, {
+      fallbackToSingleUsableModel: true,
+      availableProviders,
+    }).map((c) => ({
+      provider: c.provider as ProviderName,
+      model: c.model,
+      contextWindow: c.contextWindow,
+    }));
+
+    if (singleModel && !singleModelApplied) applySingleModel(singleModel);
+  }
+
+  const routed: RunResponse = await (dependencies.runWithFallback ?? runWithFallback)({
     task: params.task,
     messages: params.messages,
     temperature: params.temperature,
@@ -155,17 +296,18 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     // never execute through the deployment env credential.
     disabledProviders: routing.runArgs.disabledProviders,
     stageOverrides: stageOverride,
-    strategy: strictFree ? 'free' : strategyMode,
+    // A single-model Auto run uses the automatic path; its guaranteed primary
+    // is the stageOverride above. Never pretend a paid single model is 'free'.
+    strategy: strictFree ? 'free' : singleModelApplied ? 'auto' : strategyMode,
     strictFree,
     freeCandidates,
     stageOverrideUnavailable: strictFree && routing.stageOverrideUnavailable,
     confirmedFreeIds,
     automaticCandidates,
     localEndpoint,
-    // The resolved user scopes the local provider instance and its browser-
-    // relay jobs (lib/ai/connection/relay.ts) — generation of a local model
-    // runs through the user's own open tab when deployed.
     userId,
+    catalogState,
+    configuredProviders: [...availableProviders],
   });
 
   // Detect whether manual mode silently swapped models (should only happen on
@@ -186,17 +328,28 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
     );
   }
 
+  // Report the policy that actually ran. For a single configured model this
+  // is the same provider/model for all five stage calls, not a silent switch.
+  const selection = singleModelApplied && singleModel
+    ? {
+        mode: 'auto' as const,
+        provider: singleModel.providerId,
+        model: singleModel.modelId,
+        reason: `Auto: the single configured model ${singleModel.providerId}/${singleModel.modelId} is used for every AI stage.`,
+      }
+    : routing.selection;
+
   // Persist the per-stage assignment + routing record. The record is built
   // from the router's ACTUAL result (`routed`), never from the catalog or the
   // saved preference, so model_selection.stages always reflects what ran.
   try {
-    await recordStageAssignment(
+    await (dependencies.recordAssignment ?? recordStageAssignment)(
       params.analysisId,
       params.task,
       buildStageAssignmentRecord(routed),
       {
-        mode: routing.selection.mode,
-        reason: routing.selection.reason,
+        mode: selection.mode,
+        reason: selection.reason,
         manualFallbackOccurred,
       }
     );
@@ -206,7 +359,7 @@ export async function generate(params: GenerateParams): Promise<GenerateResult> 
 
   return {
     ...routed,
-    selection: routing.selection as GenerateResult['selection'],
+    selection: selection as GenerateResult['selection'],
     manualFallbackOccurred,
   };
 }

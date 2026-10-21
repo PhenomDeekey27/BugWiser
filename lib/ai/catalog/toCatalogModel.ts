@@ -4,6 +4,7 @@
 // candidate pools match what the /models page persisted.
 
 import type { ClassifiedModel } from '@/lib/ai/model-intelligence';
+import type { ModelDefinition } from '@/lib/ai/catalog/types';
 import type { CatalogModel } from '@/app/models/page';
 
 export function toCatalogModel(m: ClassifiedModel): CatalogModel {
@@ -39,5 +40,44 @@ export function toCatalogModel(m: ClassifiedModel): CatalogModel {
     fit: m.overallScore,
     stageFit: {} as Record<string, number>,
     available: true,
+  };
+}
+
+/**
+ * ModelDefinition (live discovery, pre-classification) → CatalogModel. Used
+ * ONLY by the runtime local-endpoint fallback when the persisted catalog is
+ * missing the connected local models. Scores are the definition's 0–5 relative
+ * values scaled to the catalog's 0–100 display scale; nothing here alters the
+ * selection rules (context/price/capability/availability pass through).
+ */
+export function definitionToCatalogModel(m: ModelDefinition): CatalogModel {
+  const scale = (value: number): number =>
+    Math.max(0, Math.min(100, Math.round((value / 5) * 100)));
+  return {
+    providerId: m.providerId,
+    modelId: m.modelId,
+    displayName: m.displayName,
+    contextWindow: m.contextWindow,
+    maxOutputTokens: m.maxOutputTokens,
+    price: { input: m.price.input, output: m.price.output, isFree: m.price.isFree },
+    supportsReasoning: m.supportsReasoning,
+    supportsToolCalling: m.supportsToolCalling,
+    supportsStructuredOutput: m.supportsStructuredOutput,
+    priceSource: m.priceSource ?? 'unknown',
+    priceFetchedAt: null,
+    capabilities: [...m.capabilities],
+    availability: m.availability,
+    scoreOrigin: 'deterministic',
+    scores: {
+      coding: scale(m.scores.coding),
+      reasoning: scale(m.scores.reasoning),
+      speed: scale(m.scores.speed),
+      longContext: scale(m.scores.longContext),
+    },
+    valueScore: m.price.isFree ? 95 : 50,
+    tags: m.tags,
+    fit: 50,
+    stageFit: {},
+    available: m.availability !== 'unavailable',
   };
 }

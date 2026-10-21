@@ -742,7 +742,7 @@ async function stageChecks(stage: StageFixture): Promise<void> {
     }
     assert.match(
       message,
-      new RegExp(`No configured providers available for task: ${stage.id}`)
+      new RegExp(`No AI provider is configured for task: ${stage.id}`)
     );
     assert.equal(calls.length, 0, 'no HTTP may happen when the local provider is disconnected');
     assert.ok(!message.includes('key-without-endpoint-fixture'), 'credentials never appear in errors');

@@ -20,6 +20,11 @@ interface SelectedModelSummaryProps {
   onStart?: () => void;
   starting?: boolean;
   available?: boolean;
+  /** Server says the catalog snapshot is behind the connected provider set. */
+  catalogPending?: boolean;
+  /** Connected providers (not merely configured in the deployment env). */
+  connectedProviderCount?: number;
+  modelCount?: number;
 }
 
 function formatPrice(v: number | null): string {
@@ -41,6 +46,9 @@ export function SelectedModelSummary({
   onSave,
   onStart,
   starting,
+  catalogPending = false,
+  connectedProviderCount,
+  modelCount,
 }: SelectedModelSummaryProps) {
   const providerModels = useMemo(
     () => models.filter((m) => m.providerId === selectedProvider && m.available),
@@ -81,6 +89,23 @@ export function SelectedModelSummary({
           onClick={() => onModeChange('manual')}
         />
       </div>
+
+      {/* Provider/catalog state: say WHY Auto may have nothing to pick. */}
+      {connectedProviderCount === 0 && (
+        <div role="status" className="mb-5 p-3 rounded-lg border border-error-container bg-error-container/20 text-xs text-error-default">
+          No AI provider is connected. Connect a hosted provider or a local OpenAI-compatible endpoint on the Models page before starting.
+        </div>
+      )}
+      {connectedProviderCount !== undefined && connectedProviderCount > 0 && modelCount === 0 && (
+        <div role="status" className="mb-5 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-300">
+          Provider connected, but no models have been discovered yet. The endpoint may be unreachable or the model catalog is still building.
+        </div>
+      )}
+      {catalogPending && (modelCount ?? 0) > 0 && (
+        <div role="status" className="mb-5 p-3 rounded-lg border border-outline-variant bg-surface text-xs text-bw-peach">
+          Model catalog is refreshing. Auto uses the models currently available; no analysis is blocked by a stale catalog.
+        </div>
+      )}
 
       {mode === 'manual' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">

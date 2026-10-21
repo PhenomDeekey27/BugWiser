@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/layout/AppShell';
 import { RepositorySelector } from '@/components/analysis/RepositorySelector';
@@ -22,6 +22,14 @@ interface PreflightStrategy {
   reason: string;
 }
 
+function createSubmissionKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Non-secure-context fallback (still an opaque per-intent key).
+  return `analysis-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function NewAnalysisPage() {
   const router = useRouter();
   const [selectedRepository, setSelectedRepository] = useState<Repository | null>(null);
@@ -40,9 +48,21 @@ export default function NewAnalysisPage() {
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [showPreflight, setShowPreflight] = useState(false);
 
+  // One key per user intent. It is cleared only after a successful creation
+  // and regenerated when the repository/issue selection changes, so a retry
+  // (including a double click) maps to the SAME analysis while a deliberate
+  // second analysis gets a fresh row.
+  const submissionKeyRef = useRef<string | null>(null);
+  const submissionInFlightRef = useRef(false);
+
+  const resetSubmissionKey = useCallback(() => {
+    submissionKeyRef.current = null;
+  }, []);
+
   const [providers, setProviders] = useState<CatalogProvider[]>([]);
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [preference, setPreference] = useState<Preference | null>(null);
+  const [catalogPending, setCatalogPending] = useState(false);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
@@ -69,6 +89,7 @@ export default function NewAnalysisPage() {
         const data = await res.json();
         setProviders(data.providers || []);
         setModels(data.models || []);
+        setCatalogPending(data.catalogPending === true);
         if (data.preference) {
           const p = data.preference as Preference;
           setPreference(p);
@@ -187,10 +208,16 @@ export default function NewAnalysisPage() {
     setSelectedRepository(repo);
     setSelectedIssue(null);
     setIssues([]);
-  }, []);
+    resetSubmissionKey();
+  }, [resetSubmissionKey]);
+
+  const handleIssueSelect = useCallback((issue: Issue) => {
+    setSelectedIssue(issue);
+    resetSubmissionKey();
+  }, [resetSubmissionKey]);
 
   const handleStartAnalysis = async () => {
-    if (!selectedRepository || !selectedIssue || startingAnalysis) return;
+    if (!selectedRepository || !selectedIssue || startingAnalysis || submissionInFlightRef.current) return;
 
     // Persist the user's model selection before starting.
     const saved = await handleSaveModel();
@@ -201,22 +228,31 @@ export default function NewAnalysisPage() {
   };
 
   const handlePreflightSelect = async (strategy: PreflightStrategy) => {
+    if (submissionInFlightRef.current) return;
     setShowPreflight(false);
     await startAnalysisWithStrategy(strategy);
   };
 
   const startAnalysisWithStrategy = async (strategy: PreflightStrategy | null) => {
     if (!selectedRepository || !selectedIssue) return;
+    if (submissionInFlightRef.current) return;
 
+    submissionInFlightRef.current = true;
+    const idempotencyKey = submissionKeyRef.current ?? createSubmissionKey();
+    submissionKeyRef.current = idempotencyKey;
     setStartingAnalysis(true);
 
     try {
       const createResponse = await fetch('/api/analyses', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({
           repository: selectedRepository,
           issue: selectedIssue,
+          idempotencyKey,
           model_strategy: strategy ? {
             tier: strategy.tier,
             provider: strategy.provider,
@@ -262,11 +298,16 @@ export default function NewAnalysisPage() {
       }
 
       toast.success('Analysis created! Initializing investigation...');
+      // The operation is complete: an intentional new analysis needs a new key.
+      submissionKeyRef.current = null;
       router.push(`/analysis/${analysisId}`);
     } catch (error) {
       const err = error as Error;
       toast.error(err.message || 'Failed to start analysis');
+      // Keep the key: retrying the same operation must reuse the same analysis.
       setStartingAnalysis(false);
+    } finally {
+      submissionInFlightRef.current = false;
     }
   };
 
@@ -296,7 +337,7 @@ export default function NewAnalysisPage() {
             {selectedRepository ? (
               <IssueSelector
                 selectedIssue={selectedIssue}
-                onSelect={setSelectedIssue}
+                onSelect={handleIssueSelect}
                 issues={issues}
                 loading={issuesLoading}
                 error={issuesError}
@@ -328,6 +369,9 @@ export default function NewAnalysisPage() {
                 onStart={handleStartAnalysis}
                 starting={startingAnalysis}
                 available={!!selectedRepository && !!selectedIssue}
+                catalogPending={catalogPending}
+                connectedProviderCount={providers.filter((p) => p.status === 'connected').length}
+                modelCount={models.length}
               />
             </div>
           </div>

@@ -187,7 +187,7 @@ async function main(): Promise<void> {
     } catch (err) {
       message = (err as Error).message;
     }
-    assert.match(message, /No configured providers available for task: root_cause_analysis/);
+    assert.match(message, /No AI provider is configured for task: root_cause_analysis/);
     assert.equal(calls.length, 0, 'no HTTP may happen when no provider is available');
     assert.ok(!message.includes('key-without-endpoint-9999'), 'credential never appears in errors');
   });

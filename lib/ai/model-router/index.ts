@@ -104,6 +104,16 @@ export interface RunRequest {
    * user's session. Absent (scripts/specs) ⇒ local runs stay direct.
    */
   userId?: string;
+  /**
+   * Diagnostic state of the runtime model catalog, used ONLY to explain why a
+   * stage could not start. Never changes selection.
+   * - ready: a catalog with at least one row was available;
+   * - empty: no models were persisted/discovered yet;
+   * - unavailable: the catalog read/build failed entirely.
+   */
+  catalogState?: 'ready' | 'empty' | 'unavailable';
+  /** Providers the run could execute (connected + enabled), for diagnostics. */
+  configuredProviders?: ProviderName[];
 }
 
 export interface RunResponse extends AICompletionResponse {
@@ -276,7 +286,15 @@ function getOrCreateProvider(
  * wins over it, so a disabled provider is never available at runtime.
  * Exported (pure) so the user-scoping can be validated directly.
  */
-export function buildAvailableProviders(request: RunRequest): Set<ProviderName> {
+export interface ProviderAvailabilityInput {
+  providerTokens?: Partial<Record<ProviderName, string>>;
+  disabledProviders?: ReadonlySet<ProviderName>;
+  localEndpoint?: { baseUrl: string; apiKey?: string } | null;
+}
+
+export function buildAvailableProviders(
+  request: ProviderAvailabilityInput | RunRequest
+): Set<ProviderName> {
   const available = new Set<ProviderName>();
   const providers: ProviderName[] = [
     'gemini', 'deepseek', 'zai', 'opencode', 'openrouter', 'chutes', 'openai',
@@ -577,9 +595,27 @@ export async function runWithFallback(request: RunRequest): Promise<RunResponse>
         noFreeModelError(request.task, 'no candidate provider is reachable with your current connections')
       );
     }
+
+    // Distinguish the real reasons instead of one generic "configure
+    // providers" message (which is wrong when a provider IS configured).
+    const providerList = Array.from(availableProviders).join(', ');
+    if (availableProviders.size === 0) {
+      throw new Error(
+        `No AI provider is configured for task: ${request.task}. ` +
+        `Connect a provider API key or a local OpenAI-compatible endpoint on the Models page, then retry.`
+      );
+    }
+    if (request.catalogState === 'empty' || request.catalogState === 'unavailable') {
+      throw new Error(
+        `No usable model could be resolved for task: ${request.task}. ` +
+        `Provider(s) ${providerList} are configured, but no model catalog is available yet — ` +
+        `the provider may be unreachable or the catalog is still building. Auto will retry once models are discovered.`
+      );
+    }
     throw new Error(
-      `No configured providers available for task: ${request.task}. ` +
-      `Configure at least one provider API key.`
+      `No compatible model is available for task: ${request.task} on provider(s) ${providerList}. ` +
+      `The stage needs about ${estimatedTokens} tokens of context, and no connected model meets that requirement. ` +
+      `Connect a model with a larger context window or retry with a different strategy.`
     );
   }
 

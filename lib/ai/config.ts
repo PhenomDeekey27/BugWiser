@@ -147,12 +147,12 @@ export function selectModelsForTask(
 
   if (automaticCandidates && automaticCandidates.length > 0) {
     const requiredContext = Math.max(estimatedTokens * 2, 32_000);
-    const eligible = automaticCandidates.filter(
+    const usable = automaticCandidates.filter(
       (c) =>
         (availableProviders ? availableProviders.has(c.provider) : isProviderConfigured(c.provider)) &&
-        c.contextWindow >= requiredContext &&
         !excludeModels.has(`${c.provider}/${c.model}`)
     );
+    const eligible = usable.filter((c) => c.contextWindow >= requiredContext);
     const freeIds = confirmedFreeIds ?? new Set<string>();
     const freeFirst = [
       ...eligible.filter((c) => freeIds.has(`${c.provider}/${c.model}`)),
@@ -160,6 +160,22 @@ export function selectModelsForTask(
     ];
     if (freeFirst.length > 0) {
       return freeFirst.map((c) => ({ provider: c.provider, model: c.model }));
+    }
+
+    // Runtime resilience: exactly ONE usable model means there is nothing to
+    // rank. Use it for this task even when the conservative stage context
+    // minimum excluded it (the window may be an honest 128K default, and an
+    // unconfigured context is not an explicit capability failure). With more
+    // than one candidate, an empty eligible set is a real "no compatible
+    // model" state and is reported by the router — never silently replaced by
+    // an unrelated registry model.
+    const distinct = new Map(usable.map((c) => [`${c.provider}/${c.model}`, c]));
+    if (distinct.size === 1) {
+      const sole = Array.from(distinct.values())[0];
+      console.warn(
+        `[config] Single usable model ${sole.provider}/${sole.model} is below the ${requiredContext}-token stage minimum for ${task}; trying it anyway (no alternative configured).`
+      );
+      return [{ provider: sole.provider, model: sole.model }];
     }
   }
 

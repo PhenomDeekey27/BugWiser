@@ -29,6 +29,9 @@ interface PreflightResult {
   availableProviders: string[];
   hasPaidProviders: boolean;
   hasFreeProviders: boolean;
+  /** Why no strategies were returned, when that happens. */
+  state?: 'ready' | 'no_provider' | 'catalog_unavailable';
+  reason?: string | null;
 }
 
 interface ModelPreflightProps {
@@ -61,16 +64,31 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
   const [selected, setSelected] = useState<string>('auto');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [emptyReason, setEmptyReason] = useState<string | null>(null);
   const [showAutoDetails, setShowAutoDetails] = useState(false);
 
   useEffect(() => {
     async function fetchPreflight() {
       try {
         const res = await fetch('/api/analysis/preflight', { method: 'POST' });
-        if (!res.ok) throw new Error('Failed to load model recommendations');
-        const data: PreflightResult = await res.json();
-        setStrategies(data.strategies);
-        setSelected(data.recommended);
+        const data: PreflightResult = await res.json().catch(() => null as unknown as PreflightResult);
+        if (!res.ok) {
+          throw new Error(
+            (data as unknown as { error?: string } | null)?.error ||
+            'Failed to load model recommendations'
+          );
+        }
+        const strategies = data?.strategies ?? [];
+        setStrategies(strategies);
+        setSelected(data?.recommended || 'auto');
+        setEmptyReason(
+          strategies.length === 0
+            ? data?.reason ||
+              (data?.state === 'no_provider'
+                ? 'No AI provider is configured. Connect one on the Models page.'
+                : 'No usable model is available yet. Your provider may be unreachable or the catalog is still building.')
+            : null
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load models');
       } finally {
@@ -82,7 +100,9 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
 
   const handleConfirm = () => {
     const strategy = strategies.find((s) => s.tier === selected);
-    if (strategy) onSelect(strategy);
+    // Never close silently: with no strategies there is nothing to start.
+    if (!strategy) return;
+    onSelect(strategy);
   };
 
   if (loading) {
@@ -101,7 +121,24 @@ export function ModelPreflight({ onSelect, onCancel }: ModelPreflightProps) {
         <AlertCircle className="w-8 h-8 text-red-500" />
         <p className="text-sm text-gray-600 dark:text-gray-400">{error}</p>
         <Button variant="outline" onClick={onCancel} className="border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300">
-          Continue with defaults
+          Close
+        </Button>
+      </div>
+    );
+  }
+
+  if (strategies.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-4 p-8 text-center">
+        <AlertCircle className="w-8 h-8 text-amber-500" />
+        <p className="text-sm text-bw-peach-light">
+          {emptyReason || 'No usable model is available for this analysis yet.'}
+        </p>
+        <p className="text-xs text-bw-peach">
+          No analysis was created. Configure a provider or model and try again.
+        </p>
+        <Button variant="outline" onClick={onCancel} className="border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300">
+          Close
         </Button>
       </div>
     );

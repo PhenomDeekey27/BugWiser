@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { getOrBuildCatalog, type ClassifiedModel } from '@/lib/ai/model-intelligence';
+import { getProviderConnectionStates } from '@/lib/ai/connection/service';
+import type { ProviderName } from '@/lib/ai/catalog/types';
 
 // getOrBuildCatalog runs on the request path and may include a relayed local
 // models probe (≤15s) on first build — headroom beyond platform defaults.
@@ -204,11 +206,19 @@ export async function POST() {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  // Read from stored model intelligence catalog
-  const catalog = await getOrBuildCatalog(user.userId);
+  // Provider connection state is independent of the model catalog: a provider
+  // can be connected while its model list is still empty (first build, or an
+  // unreachable local endpoint). Reporting those as the same state is what
+  // produced the useless "No free model available" dead end.
+  const [catalog, connectionStates] = await Promise.all([
+    getOrBuildCatalog(user.userId),
+    getProviderConnectionStates(user.userId),
+  ]);
 
-  const connectedProviderIds = [...new Set(catalog.models.map((m) => m.provider))];
-  console.log('[preflight] Catalog models:', catalog.models.length, 'providers:', connectedProviderIds);
+  const connectedProviderIds = (Object.keys(connectionStates) as ProviderName[])
+    .filter((provider) => connectionStates[provider].connected);
+  const catalogProviderIds = [...new Set(catalog.models.map((m) => m.provider))];
+  console.log('[preflight] Catalog models:', catalog.models.length, 'providers:', catalogProviderIds);
 
   if (connectedProviderIds.length === 0) {
     return NextResponse.json({
@@ -217,6 +227,23 @@ export async function POST() {
       availableProviders: [],
       hasPaidProviders: false,
       hasFreeProviders: false,
+      state: 'no_provider',
+      reason:
+        'No AI provider is configured. Connect a hosted provider or a local OpenAI-compatible endpoint on the Models page, then retry.',
+    });
+  }
+
+  if (catalog.models.length === 0) {
+    return NextResponse.json({
+      strategies: [],
+      recommended: 'auto',
+      availableProviders: connectedProviderIds,
+      hasPaidProviders: false,
+      hasFreeProviders: false,
+      state: 'catalog_unavailable',
+      reason:
+        `Provider(s) ${connectedProviderIds.join(', ')} are connected, but no models could be discovered. ` +
+        'The provider may be unreachable or the model catalog is still building. Auto will attempt the configured model once it is discovered.',
     });
   }
 
@@ -231,5 +258,7 @@ export async function POST() {
     availableProviders: connectedProviderIds,
     hasPaidProviders: catalog.models.some((m) => !m.isFree),
     hasFreeProviders: catalog.models.some((m) => m.isFree),
+    state: 'ready',
+    reason: null,
   });
 }

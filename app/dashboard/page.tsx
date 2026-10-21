@@ -13,6 +13,7 @@ import { getAuthenticatedUser, viewerFromAuthUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { getInstallationStatus } from '@/lib/github/app/access';
 import { githubAppInstallUrl } from '@/lib/github/app/config';
+import { summarizeAnalyses } from '@/lib/analysis/dashboard-analyses';
 import { Analysis, AnalysisRecord } from '@/types';
 
 function recordToAnalysis(record: AnalysisRecord): Analysis {
@@ -112,9 +113,13 @@ export default async function DashboardPage() {
       .order('created_at', { ascending: false });
 
     if (analyses) {
-      issuesAnalyzed = analyses.filter((a) => a.status === 'completed').length;
-      patchesGenerated = analyses.filter((a) => a.patch_status && a.patch_status !== 'none').length;
-      recentAnalyses = analyses.slice(0, 5).map(recordToAnalysis);
+      // One deduplicated row set drives BOTH the counters and the cards.
+      // Dedupe is by the stable analysis id only: two intentional analyses of
+      // the same repository/issue keep their own ids and both stay visible.
+      const summary = summarizeAnalyses(analyses as AnalysisRecord[], 5);
+      issuesAnalyzed = summary.issuesAnalyzed;
+      patchesGenerated = summary.patchesGenerated;
+      recentAnalyses = summary.recent.map(recordToAnalysis);
     }
   } catch {
     // Keep defaults on error

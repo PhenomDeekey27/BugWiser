@@ -479,17 +479,84 @@ export interface AutomaticStageCandidate {
   contextWindow: number;
 }
 
+/**
+ * Models that may actually run for this user: their provider is in the
+ * available set (connected + enabled) and the catalog does not explicitly mark
+ * them unavailable. Deduplicated on the stable provider/model pair.
+ */
+export function listUsableModels(
+  availableModels: CatalogModel[],
+  availableProviders?: ReadonlySet<string>
+): CatalogModel[] {
+  const seen = new Set<string>();
+  const usable: CatalogModel[] = [];
+  for (const model of availableModels) {
+    if (availableProviders && !availableProviders.has(model.providerId)) continue;
+    if (model.available === false || model.availability === 'unavailable') continue;
+    const key = `${model.providerId}/${model.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    usable.push(model);
+  }
+  return usable;
+}
+
+/**
+ * The single model configured for this user, or null when there are zero or
+ * more than one. This is the runtime "one provider/model" signal: with exactly
+ * one usable model Auto must use it for every stage even when it is absent
+ * from any free-model catalog (a local endpoint, a paid API key, etc.).
+ */
+export function getSingleUsableModel(
+  availableModels: CatalogModel[],
+  availableProviders?: ReadonlySet<string>
+): CatalogModel | null {
+  const usable = listUsableModels(availableModels, availableProviders);
+  return usable.length === 1 ? usable[0] : null;
+}
+
+export interface AutomaticCandidateOptions {
+  /**
+   * Runtime-only resilience: when the stage's context gate leaves an empty
+   * pool but the user has exactly ONE usable model, return that model anyway.
+   * A defaulted/unknown context window is not an explicit capability failure,
+   * and with no alternative the stage must still be attempted (reported
+   * honestly if the provider then rejects it). Kept opt-in so the /models page
+   * keeps showing the truthful context-gated pool.
+   */
+  fallbackToSingleUsableModel?: boolean;
+  /** Restrict to connected/enabled providers (runtime callers). */
+  availableProviders?: ReadonlySet<string>;
+}
+
 export function getAutomaticStageCandidates(
   availableModels: CatalogModel[],
-  stageId: string
+  stageId: string,
+  options: AutomaticCandidateOptions = {}
 ): AutomaticStageCandidate[] {
   const stageKey: StageKey | null = Object.prototype.hasOwnProperty.call(STAGE_WEIGHTS, stageId)
     ? (stageId as StageKey)
     : null;
-  if (!stageKey || availableModels.length === 0) return [];
+  if (!stageKey) return [];
+
+  const candidates = options.availableProviders
+    ? availableModels.filter((m) => options.availableProviders!.has(m.providerId))
+    : availableModels;
+  if (candidates.length === 0) return [];
+
   const w = STAGE_WEIGHTS[stageKey];
-  const autoPool = buildAutomaticPool(availableModels, stageKey, w);
+  const autoPool = buildAutomaticPool(candidates, stageKey, w);
   const pool = scoreOrderedPool(autoPool, w);
+  if (pool.length === 0 && options.fallbackToSingleUsableModel) {
+    const sole = getSingleUsableModel(candidates, options.availableProviders);
+    if (sole) {
+      return [{
+        provider: sole.providerId,
+        model: sole.modelId,
+        contextWindow: sole.contextWindow,
+      }];
+    }
+  }
   return pool.map((m) => ({
     provider: m.providerId,
     model: m.modelId,
