@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runPatchGeneration } from '@/lib/analysis/patch';
@@ -50,17 +50,24 @@ export async function POST(
     );
   }
 
-  runPatchGeneration(id).catch(async (err) => {
-    console.error('[api/patch] Background generation failed:', err);
+  // after() hands this promise to the platform's waitUntil, so the invocation
+  // stays alive for the whole stage (including a relayed local generation).
+  // A bare floating promise is frozen as soon as the response is sent.
+  after(async () => {
     try {
-      await db.from('analyses').update({
-        status: 'failed',
-        current_stage: 'patch_generation',
-        error_message: err instanceof Error ? err.message : 'Patch generation failed unexpectedly',
-      }).eq('id', id).eq('user_id', user.userId);
-      console.error('[api/patch] Updated analysis to failed status');
-    } catch (updateErr) {
-      console.error('[api/patch] Failed to update to failed status:', updateErr);
+      await runPatchGeneration(id);
+    } catch (err) {
+      console.error('[api/patch] Background generation failed:', err);
+      try {
+        await db.from('analyses').update({
+          status: 'failed',
+          current_stage: 'patch_generation',
+          error_message: err instanceof Error ? err.message : 'Patch generation failed unexpectedly',
+        }).eq('id', id).eq('user_id', user.userId);
+        console.error('[api/patch] Updated analysis to failed status');
+      } catch (updateErr) {
+        console.error('[api/patch] Failed to update to failed status:', updateErr);
+      }
     }
   });
 

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runEvidenceExtraction } from '@/lib/analysis/evidence';
@@ -50,17 +50,24 @@ export async function POST(
     );
   }
 
-  runEvidenceExtraction(id).catch(async (err) => {
-    console.error('[api/evidence] Background extraction failed:', err);
+  // after() hands this promise to the platform's waitUntil, so the invocation
+  // stays alive for the whole stage (including a relayed local generation).
+  // A bare floating promise is frozen as soon as the response is sent.
+  after(async () => {
     try {
-      await db.from('analyses').update({
-        status: 'failed',
-        current_stage: 'evidence_extraction',
-        error_message: err instanceof Error ? err.message : 'Evidence extraction failed unexpectedly',
-      }).eq('id', id).eq('user_id', user.userId);
-      console.error('[api/evidence] Updated analysis to failed status');
-    } catch (updateErr) {
-      console.error('[api/evidence] Failed to update to failed status:', updateErr);
+      await runEvidenceExtraction(id);
+    } catch (err) {
+      console.error('[api/evidence] Background extraction failed:', err);
+      try {
+        await db.from('analyses').update({
+          status: 'failed',
+          current_stage: 'evidence_extraction',
+          error_message: err instanceof Error ? err.message : 'Evidence extraction failed unexpectedly',
+        }).eq('id', id).eq('user_id', user.userId);
+        console.error('[api/evidence] Updated analysis to failed status');
+      } catch (updateErr) {
+        console.error('[api/evidence] Failed to update to failed status:', updateErr);
+      }
     }
   });
 

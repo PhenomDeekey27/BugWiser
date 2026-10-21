@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runRootCauseAnalysis } from '@/lib/analysis/root-cause';
@@ -52,17 +52,24 @@ export async function POST(
     );
   }
 
-  runRootCauseAnalysis(id).catch(async (err) => {
-    console.error('[api/root-cause] Background analysis failed:', err);
+  // after() hands this promise to the platform's waitUntil, so the invocation
+  // stays alive for the whole stage (including a relayed local generation).
+  // A bare floating promise is frozen as soon as the response is sent.
+  after(async () => {
     try {
-      await db.from('analyses').update({
-        status: 'failed',
-        current_stage: 'root_cause_analysis',
-        error_message: err instanceof Error ? err.message : 'Root cause analysis failed unexpectedly',
-      }).eq('id', id).eq('user_id', user.userId);
-      console.error('[api/root-cause] Updated analysis to failed status');
-    } catch (updateErr) {
-      console.error('[api/root-cause] Failed to update to failed status:', updateErr);
+      await runRootCauseAnalysis(id);
+    } catch (err) {
+      console.error('[api/root-cause] Background analysis failed:', err);
+      try {
+        await db.from('analyses').update({
+          status: 'failed',
+          current_stage: 'root_cause_analysis',
+          error_message: err instanceof Error ? err.message : 'Root cause analysis failed unexpectedly',
+        }).eq('id', id).eq('user_id', user.userId);
+        console.error('[api/root-cause] Updated analysis to failed status');
+      } catch (updateErr) {
+        console.error('[api/root-cause] Failed to update to failed status:', updateErr);
+      }
     }
   });
 

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runAnalysisInitialization } from '@/lib/analysis/runner';
@@ -7,6 +7,9 @@ import { githubErrorResponse } from '@/lib/github/app/http';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Initialization is scheduled via after(), which runs for the route's max
+// duration — give it the same budget as the stage routes.
+export const maxDuration = 300;
 
 export async function POST(
   _request: Request,
@@ -46,8 +49,14 @@ export async function POST(
       return githubErrorResponse(error);
     }
 
-    runAnalysisInitialization(id, user.userId).catch((err) => {
-      console.error('[api/analyses/run] Background analysis failed:', err);
+    // after() hands this promise to the platform's waitUntil, so initialization
+    // is not frozen the moment this response is sent.
+    after(async () => {
+      try {
+        await runAnalysisInitialization(id, user.userId);
+      } catch (err) {
+        console.error('[api/analyses/run] Background analysis failed:', err);
+      }
     });
 
     return NextResponse.json({ started: true });
