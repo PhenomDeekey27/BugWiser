@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import {
   enableServerEnvConnection,
   isProviderConfiguredBysEnv,
@@ -50,9 +50,8 @@ async function scheduleCatalogRebuild(userId: string): Promise<void> {
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -89,11 +88,11 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      const result = await enableServerEnvConnection(user.id, provider as ProviderName);
+      const result = await enableServerEnvConnection(user.userId, provider as ProviderName);
       if (!result.ok) {
         return NextResponse.json({ error: result.error || 'Failed to connect provider' }, { status: 500 });
       }
-      await scheduleCatalogRebuild(user.id);
+      await scheduleCatalogRebuild(user.userId);
       return NextResponse.json({ ok: true, provider, status: 'connected' });
     }
 
@@ -110,14 +109,14 @@ export async function POST(request: Request) {
       }
 
       const registration = await registerLocalConnection(
-        user.id,
+        user.userId,
         {
           baseUrl: body.baseUrl,
           apiKey: typeof apiKey === 'string' ? apiKey : undefined,
         },
         // Same relay-aware probe deps as the test route: the verification test
         // inside registration must reach the local endpoint the same way.
-        { testDeps: relayProbeDeps(user.id, body.baseUrl) }
+        { testDeps: relayProbeDeps(user.userId, body.baseUrl) }
       );
       if (!registration.ok) {
         return NextResponse.json(
@@ -129,7 +128,7 @@ export async function POST(request: Request) {
         );
       }
 
-      await scheduleCatalogRebuild(user.id);
+      await scheduleCatalogRebuild(user.userId);
       return NextResponse.json({
         ok: true,
         provider: LOCAL_PROVIDER_ID,
@@ -153,12 +152,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await saveUserConnection(user.id, provider as ProviderName, apiKey.trim());
+    const result = await saveUserConnection(user.userId, provider as ProviderName, apiKey.trim());
     if (!result.ok) {
       return NextResponse.json({ error: result.error || 'Failed to save connection' }, { status: 500 });
     }
 
-    await scheduleCatalogRebuild(user.id);
+    await scheduleCatalogRebuild(user.userId);
 
     return NextResponse.json({
       ok: true,

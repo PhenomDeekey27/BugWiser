@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import {
   disableUserConnection,
   isProviderConfiguredBysEnv,
@@ -16,9 +16,8 @@ export async function DELETE(
 ) {
   try {
     const { provider } = await params;
-    const supabase = await createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -31,7 +30,7 @@ export async function DELETE(
     // always-row-driven local provider) keeps the plain row deletion.
     let disconnectStatus: 'disabled' | 'disconnected';
     if (isProviderConfiguredBysEnv(pid)) {
-      const result = await disableUserConnection(user.id, pid);
+      const result = await disableUserConnection(user.userId, pid);
       if (!result.ok) {
         return NextResponse.json(
           { error: result.error || 'Failed to disconnect provider' },
@@ -40,7 +39,7 @@ export async function DELETE(
       }
       disconnectStatus = 'disabled';
     } else {
-      await removeUserConnection(user.id, pid);
+      await removeUserConnection(user.userId, pid);
       disconnectStatus = 'disconnected';
     }
 
@@ -50,8 +49,8 @@ export async function DELETE(
     // handed to this refresh (it would still contain the removed provider's
     // models).
     const { markCatalogDirty, rebuildCatalogOnce } = await import('@/lib/ai/model-intelligence');
-    markCatalogDirty(user.id);
-    rebuildCatalogOnce(user.id).catch((err) =>
+    markCatalogDirty(user.userId);
+    rebuildCatalogOnce(user.userId).catch((err) =>
       console.warn('[disconnect] Catalog refresh failed:', err)
     );
 

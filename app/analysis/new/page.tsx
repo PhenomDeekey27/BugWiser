@@ -8,8 +8,7 @@ import { IssueSelector } from '@/components/analysis/IssueSelector';
 import { SelectedModelSummary } from '@/components/models/SelectedModelSummary';
 import { ModelPreflight } from '@/components/analysis/ModelPreflight';
 import { Repository, Issue, GitHubUser } from '@/types';
-import { createClient } from '@/lib/supabase/client';
-import { invalidateGitHubSession } from '@/lib/supabase/auth-session';
+import { fetchAuthSession, invalidateGitHubSession, viewerFromSession } from '@/lib/auth/client-session';
 import { toast } from 'sonner';
 import type { CatalogModel, CatalogProvider, Preference } from '@/app/models/page';
 
@@ -33,6 +32,10 @@ export default function NewAnalysisPage() {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
+  const [requiresInstallation, setRequiresInstallation] = useState(false);
+  const [requiresRepositorySelection, setRequiresRepositorySelection] = useState(false);
+  const [installUrl, setInstallUrl] = useState<string | null>(null);
+  const [manageUrl, setManageUrl] = useState<string | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [showPreflight, setShowPreflight] = useState(false);
@@ -45,16 +48,17 @@ export default function NewAnalysisPage() {
   const [selectedModel, setSelectedModel] = useState('');
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user: authUser } }) => {
-      if (authUser?.user_metadata) {
-        setUser({
-          login: authUser.user_metadata.user_name || authUser.user_metadata.login || 'user',
-          name: authUser.user_metadata.full_name || authUser.user_metadata.name || null,
-          avatarUrl: authUser.user_metadata.avatar_url || '',
-        });
+    let alive = true;
+    void fetchAuthSession().then((session) => {
+      if (!alive) return;
+      const viewer = viewerFromSession(session);
+      if (viewer) {
+        setUser({ login: viewer.login, name: viewer.name, avatarUrl: viewer.avatarUrl });
       }
     });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -111,11 +115,23 @@ export default function NewAnalysisPage() {
           await invalidateGitHubSession(router);
           return;
         }
+
+        const data = await response.json().catch(() => null);
+
         if (!response.ok) {
-          throw new Error('Failed to fetch repositories');
+          // The server distinguishes "no installation" (200) from a real
+          // failure (5xx). Never render a failure as an empty repository list.
+          setReposError(
+            data?.error || `We couldn't load your repositories (${response.status}).`
+          );
+          return;
         }
-        const data = await response.json();
-        setRepositories(data.repositories || []);
+
+        setRepositories(data?.repositories || []);
+        setRequiresInstallation(Boolean(data?.requiresInstallation));
+        setRequiresRepositorySelection(Boolean(data?.requiresRepositorySelection));
+        setInstallUrl(data?.installUrl || null);
+        setManageUrl(data?.manageUrl || null);
       } catch {
         setReposError("We couldn't load your repositories. Please try again later.");
       } finally {
@@ -269,6 +285,10 @@ export default function NewAnalysisPage() {
               repositories={repositories}
               loading={reposLoading}
               error={reposError}
+              requiresInstallation={requiresInstallation}
+              requiresRepositorySelection={requiresRepositorySelection}
+              installUrl={installUrl}
+              manageUrl={manageUrl}
             />
           </div>
 

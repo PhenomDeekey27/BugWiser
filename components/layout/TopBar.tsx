@@ -3,8 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/client';
-import { useGitHubAuthValidity } from '@/lib/supabase/auth-session';
+import { signOut, useGitHubAuthValidity } from '@/lib/auth/client-session';
 import { GitHubUser } from '@/types';
 import { toast } from 'sonner';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
@@ -31,14 +30,9 @@ export function TopBar({ className, user }: TopBarProps) {
   }, []);
 
   const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    localStorage.removeItem('analysis-selection');
     setDropdownOpen(false);
+    await signOut(router);
     toast.success('Signed out successfully');
-    setTimeout(() => {
-      router.push('/');
-    }, 800);
   };
 
   return (

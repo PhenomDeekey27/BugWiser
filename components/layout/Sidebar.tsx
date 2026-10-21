@@ -5,8 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { createClient } from '@/lib/supabase/client';
-import { useGitHubAuthValidity } from '@/lib/supabase/auth-session';
+import { signOut, useGitHubAuthValidity } from '@/lib/auth/client-session';
 import { GitHubUser } from '@/types';
 import { toast } from 'sonner';
 import { BugWiserLogo } from './BugWiserLogo';
@@ -28,13 +27,8 @@ export function Sidebar({ className, user }: SidebarProps) {
   const authValid = useGitHubAuthValidity();
 
   const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    localStorage.removeItem('analysis-selection');
+    await signOut(router);
     toast.success('Signed out successfully');
-    setTimeout(() => {
-      router.push('/');
-    }, 800);
   };
 
   return (

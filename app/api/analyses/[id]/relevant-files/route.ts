@@ -1,80 +1,80 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runRelevantFileDiscovery } from '@/lib/analysis/relevant-files';
+import { getRepositoryAccessToken } from '@/lib/github/app/access';
+import { githubErrorResponse } from '@/lib/github/app/http';
 
 // See root-cause route: must outlive a relayed local-model generation.
 export const maxDuration = 300;
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createClient();
-
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    return NextResponse.json(
-      { error: 'Not authenticated' },
-      { status: 401 }
-    );
+  const user = await getAuthenticatedUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  const { data: analysis, error: fetchError } = await supabase
+  const db = createBackgroundClient();
+  const { data: analysis, error: fetchError } = await db
     .from('analyses')
-    .select('id, user_id, status')
+    .select('id, user_id, status, repository_full_name, github_installation_id')
     .eq('id', id)
     .single();
 
   if (fetchError || !analysis) {
-    return NextResponse.json(
-      { error: 'Analysis not found' },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.id) {
-    return NextResponse.json(
-      { error: 'Forbidden' },
-      { status: 403 }
-    );
+  if (analysis.user_id !== user.userId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
   if (analysis.status !== 'ready_for_analysis' && analysis.status !== 'failed') {
     return NextResponse.json(
-      { error: `Analysis must be ready_for_analysis or failed before relevant file discovery (current: ${analysis.status})` },
+      {
+        error: `Analysis must be ready_for_analysis or failed before relevant file discovery (current: ${analysis.status})`,
+      },
       { status: 409 }
     );
   }
 
+  try {
+    await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
+  } catch (error) {
+    return githubErrorResponse(error);
+  }
+
   if (analysis.status === 'failed') {
-    await supabase.from('analyses').update({
-      status: 'queued',
-      current_stage: 'issue_context',
-      error_message: null,
-    }).eq('id', id);
+    await db
+      .from('analyses')
+      .update({
+        status: 'queued',
+        current_stage: 'issue_context',
+        error_message: null,
+      })
+      .eq('id', id)
+      .eq('user_id', user.userId);
   }
 
-  const { data: { session } } = await supabase.auth.getSession();
-  const githubToken = session?.provider_token || null;
-
-  if (!githubToken) {
-    return NextResponse.json(
-      { error: 'GitHub token not available. Please re-authenticate with GitHub.' },
-      { status: 401 }
-    );
-  }
-
-  runRelevantFileDiscovery(id, githubToken).catch(async (err) => {
+  runRelevantFileDiscovery(id, user.userId).catch(async (err) => {
     console.error('[api/relevant-files] Background discovery failed:', err);
     try {
-      const bg = createBackgroundClient();
-      await bg.from('analyses').update({
-        status: 'failed',
-        current_stage: 'relevant_files_discovery',
-        error_message: err instanceof Error ? err.message : 'Discovery failed unexpectedly',
-      }).eq('id', id);
+      await db
+        .from('analyses')
+        .update({
+          status: 'failed',
+          current_stage: 'relevant_files_discovery',
+          error_message:
+            err instanceof Error ? err.message : 'Discovery failed unexpectedly',
+        })
+        .eq('id', id)
+        .eq('user_id', user.userId);
       console.error('[api/relevant-files] Updated analysis to failed status');
     } catch (updateErr) {
       console.error('[api/relevant-files] Failed to update to failed status:', updateErr);

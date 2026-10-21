@@ -1,13 +1,18 @@
 import { Suspense } from 'react';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/layout/AppShell';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import { StatsGrid } from '@/components/dashboard/StatsGrid';
 import { RecentAnalyses } from '@/components/dashboard/RecentAnalyses';
 import { WelcomeToast } from '@/components/dashboard/WelcomeToast';
+import { GitHubStatusToast } from '@/components/dashboard/GitHubStatusToast';
+import { GitHubConnectionCard, type GitHubInstallationView } from '@/components/dashboard/GitHubConnectionCard';
 import { Button } from '@/components/ui/button';
-import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { getAuthenticatedUser, viewerFromAuthUser } from '@/lib/auth/session';
+import { createBackgroundClient } from '@/lib/supabase/background';
+import { getInstallationStatus } from '@/lib/github/app/access';
+import { githubAppInstallUrl } from '@/lib/github/app/config';
 import { Analysis, AnalysisRecord } from '@/types';
 
 function recordToAnalysis(record: AnalysisRecord): Analysis {
@@ -55,95 +60,90 @@ function recordToAnalysis(record: AnalysisRecord): Analysis {
 }
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
+  const user = await getAuthenticatedUser();
   if (!user) {
     // Backup for the middleware's protected-route redirect — same destination.
     redirect('/auth/github');
   }
 
-  const githubUser = user?.user_metadata
-    ? {
-        login: user.user_metadata.user_name || user.user_metadata.login || 'user',
-        name: user.user_metadata.full_name || user.user_metadata.name || null,
-        avatarUrl: user.user_metadata.avatar_url || '',
-      }
-    : null;
+  const githubUser = viewerFromAuthUser(user);
 
   let repoCount: string | number = '—';
+  let installation: {
+    configured: boolean;
+    installations: GitHubInstallationView[];
+    repositoryCount: number;
+    installUrl: string | null;
+    manageUrl: string;
+  } = {
+    configured: false,
+    installations: [],
+    repositoryCount: 0,
+    installUrl: githubAppInstallUrl(),
+    manageUrl: 'https://github.com/settings/installations',
+  };
+
+  try {
+    const status = await getInstallationStatus(user.userId);
+    repoCount = status.repositoryCount;
+    installation = {
+      configured: status.configured,
+      installations: status.installations,
+      repositoryCount: status.repositoryCount,
+      installUrl: status.installUrl || githubAppInstallUrl(),
+      manageUrl: status.manageUrl,
+    };
+  } catch (error) {
+    // GitHub tables unavailable or a transient read failure: keep the card
+    // honest ("not configured") instead of failing the whole dashboard.
+    console.error('[dashboard] Failed to read GitHub installation status:', (error as Error).message);
+  }
+
   let issuesAnalyzed = 0;
   let patchesGenerated = 0;
   let recentAnalyses: Analysis[] = [];
-  let tokenExpired = false;
 
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.provider_token) {
-      const response = await fetch('https://api.github.com/user', {
-        headers: {
-          Authorization: `Bearer ${session.provider_token}`,
-          Accept: 'application/vnd.github+json',
-        },
-      });
-      if (response.ok) {
-        const githubUserData = await response.json();
-        repoCount = githubUserData.public_repos ?? '—';
-      } else if (response.status === 401) {
-        tokenExpired = true;
-      }
-    } else {
-      tokenExpired = true;
+    const db = createBackgroundClient();
+    const { data: analyses } = await db
+      .from('analyses')
+      .select('*')
+      .eq('user_id', user.userId)
+      .order('created_at', { ascending: false });
+
+    if (analyses) {
+      issuesAnalyzed = analyses.filter((a) => a.status === 'completed').length;
+      patchesGenerated = analyses.filter((a) => a.patch_status && a.patch_status !== 'none').length;
+      recentAnalyses = analyses.slice(0, 5).map(recordToAnalysis);
     }
   } catch {
-    // Keep default
-  }
-
-  if (tokenExpired) {
-    // GitHub session expired (missing provider_token or GitHub rejected the
-    // token) — reconnect at /auth/github, never a silent bounce to home.
-    redirect(
-      `/auth/github?error=${encodeURIComponent('Your GitHub session has expired. Please sign in again.')}`
-    );
-  }
-
-  if (user) {
-    try {
-      const { data: analyses } = await supabase
-        .from('analyses')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (analyses) {
-        issuesAnalyzed = analyses.filter(
-          (a) => a.status === 'completed'
-        ).length;
-
-        patchesGenerated = analyses.filter(
-          (a) => a.patch_status && a.patch_status !== 'none'
-        ).length;
-
-        recentAnalyses = analyses.slice(0, 5).map(recordToAnalysis);
-      }
-    } catch {
-      // Keep defaults on error
-    }
+    // Keep defaults on error
   }
 
   return (
     <AppShell user={githubUser} gradient="dashboard">
       <Suspense>
         <WelcomeToast />
+        <GitHubStatusToast />
       </Suspense>
       <div className="p-6 max-w-4xl mx-auto">
         <DashboardHeader userName={githubUser?.login || 'developer'} />
-        <StatsGrid stats={[
-          { label: 'Repositories', value: repoCount },
-          { label: 'Issues Analyzed', value: issuesAnalyzed },
-          { label: 'Patches Generated', value: patchesGenerated },
-        ]} />
+        <StatsGrid
+          stats={[
+            { label: 'Repositories', value: repoCount },
+            { label: 'Issues Analyzed', value: issuesAnalyzed },
+            { label: 'Patches Generated', value: patchesGenerated },
+          ]}
+        />
         <RecentAnalyses analyses={recentAnalyses} />
+
+        <GitHubConnectionCard
+          configured={installation.configured}
+          installations={installation.installations}
+          repositoryCount={installation.repositoryCount}
+          installUrl={installation.installUrl}
+          manageUrl={installation.manageUrl}
+        />
 
         <div className="mt-8">
           <h2 className="text-lg font-semibold text-bw-peach-light mb-4">

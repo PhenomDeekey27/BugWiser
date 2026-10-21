@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { getOrBuildCatalog, type ClassifiedModel } from '@/lib/ai/model-intelligence';
 
 // getOrBuildCatalog runs on the request path and may include a relayed local
@@ -199,15 +199,13 @@ function buildStrategies(models: ClassifiedModel[]): ModelStrategy[] {
 }
 
 export async function POST() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
+  const user = await getAuthenticatedUser();
   if (!user) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
   // Read from stored model intelligence catalog
-  const catalog = await getOrBuildCatalog(user.id);
+  const catalog = await getOrBuildCatalog(user.userId);
 
   const connectedProviderIds = [...new Set(catalog.models.map((m) => m.provider))];
   console.log('[preflight] Catalog models:', catalog.models.length, 'providers:', connectedProviderIds);

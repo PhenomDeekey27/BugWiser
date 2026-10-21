@@ -1,6 +1,7 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { fetchIssueComments } from '@/lib/github/comments';
 import { fetchRepositoryTree } from '@/lib/github/tree';
+import { getRepositoryAccessToken } from '@/lib/github/app/access';
 import { filterTreeEntries } from './filter';
 import { detectLanguage } from './language';
 import { buildFingerprint } from './fingerprint';
@@ -94,7 +95,7 @@ function parseRepoFullName(fullName: string): { owner: string; repo: string } {
   return { owner: parts[0], repo: parts[1] };
 }
 
-export async function runAnalysisInitialization(analysisId: string, githubToken: string): Promise<void> {
+export async function runAnalysisInitialization(analysisId: string, actorUserId: string): Promise<void> {
   console.log(`[analysis-runner] Starting analysis ${analysisId}`);
 
   try {
@@ -111,9 +112,19 @@ export async function runAnalysisInitialization(analysisId: string, githubToken:
       return;
     }
 
+    if (analysis.user_id !== actorUserId) {
+      throw new Error('Analysis does not belong to the requesting user');
+    }
+
     const { owner, repo } = parseRepoFullName(analysis.repository_full_name);
 
-    const token = githubToken;
+    // Resolve a short-lived installation token inside the job. The browser
+    // session is not used, so a job that outlives the session still works.
+    const repositoryAccess = await getRepositoryAccessToken(
+      actorUserId,
+      analysis.repository_full_name
+    );
+    const token = repositoryAccess.token.token;
 
     // Step 1: Fetch Issue Context
     await updateAnalysis(analysisId, {

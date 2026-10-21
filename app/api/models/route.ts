@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { getCatalogForDisplay } from '@/lib/ai/model-intelligence';
 import { getModelPreference } from '@/lib/ai/preferences';
 import { getProviderConnectionStates, isProviderConfiguredBysEnv, resolveLocalEndpoint } from '@/lib/ai/connection/service';
@@ -10,9 +10,8 @@ import { toCatalogModel } from '@/lib/ai/catalog/toCatalogModel';
 
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -23,10 +22,10 @@ export async function GET() {
     // therefore always current, connect/disconnect or not. `catalogPending`
     // tells the client to revalidate once the background build lands.
     const [catalogView, preference, connectionStates, localEndpoint] = await Promise.all([
-      getCatalogForDisplay(user.id),
-      getModelPreference(user.id),
-      getProviderConnectionStates(user.id),
-      resolveLocalEndpoint(user.id),
+      getCatalogForDisplay(user.userId),
+      getModelPreference(user.userId),
+      getProviderConnectionStates(user.userId),
+      resolveLocalEndpoint(user.userId),
     ]);
     const catalog = catalogView.catalog;
 
@@ -121,7 +120,7 @@ export async function GET() {
     // actually dropped; the kept set is exactly what this response serves.
     if (reconcile.changed) {
       const { saveModelPreference } = await import('@/lib/ai/preferences');
-      await saveModelPreference(user.id, {
+      await saveModelPreference(user.userId, {
         selection_mode: preference.selection_mode === 'manual' ? 'manual' : 'auto',
         selected_strategy: preference.selected_strategy,
         provider: preference.provider,

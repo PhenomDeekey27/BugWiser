@@ -1,25 +1,29 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { applyPatchToGitHub } from '@/lib/analysis/apply-patch';
+import {
+  assertTokenPermissions,
+  getRepositoryAccessToken,
+} from '@/lib/github/app/access';
+import { githubErrorResponse } from '@/lib/github/app/http';
 import { Patch, ApplyFixError } from '@/types';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-  if (userError || !user) {
+  const user = await getAuthenticatedUser();
+  if (!user) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  const { data: analysis, error: fetchError } = await supabase
+  const db = createBackgroundClient();
+  const { data: analysis, error: fetchError } = await db
     .from('analyses')
     .select('*')
     .eq('id', id)
@@ -29,7 +33,7 @@ export async function POST(
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.id) {
+  if (analysis.user_id !== user.userId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -44,23 +48,18 @@ export async function POST(
     );
   }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const githubToken = session?.provider_token || null;
-
-  if (!githubToken) {
-    return NextResponse.json(
-      {
-        error:
-          'GitHub authorization is no longer valid. Please reconnect GitHub.',
-        code: 'token_expired',
-      },
-      { status: 401 }
+  let repositoryAccess;
+  try {
+    repositoryAccess = await getRepositoryAccessToken(
+      user.userId,
+      analysis.repository_full_name
     );
+    assertTokenPermissions(repositoryAccess.token, { contents: 'write' });
+  } catch (error) {
+    return githubErrorResponse(error);
   }
 
-  const { data: patchArtifact, error: patchError } = await supabase
+  const { data: patchArtifact, error: patchError } = await db
     .from('analysis_artifacts')
     .select('data')
     .eq('analysis_id', id)
@@ -68,31 +67,24 @@ export async function POST(
     .single();
 
   if (patchError || !patchArtifact) {
-    return NextResponse.json(
-      { error: 'No patch found for this analysis.' },
-      { status: 404 }
-    );
+    return NextResponse.json({ error: 'No patch found for this analysis.' }, { status: 404 });
   }
 
   const patchData = patchArtifact.data as unknown as Patch;
-
-  if (!patchData || !patchData.files || patchData.files.length === 0) {
-    return NextResponse.json(
-      { error: 'Patch contains no files to apply.' },
-      { status: 400 }
-    );
+  if (!patchData?.files || patchData.files.length === 0) {
+    return NextResponse.json({ error: 'Patch contains no files to apply.' }, { status: 400 });
   }
 
-  const bg = createBackgroundClient();
-  await bg
+  await db
     .from('analyses')
     .update({ patch_status: 'pending' })
-    .eq('id', id);
+    .eq('id', id)
+    .eq('user_id', user.userId);
 
-  const [owner, repo] = analysis.repository_full_name.split('/');
+  const { owner, name: repo } = repositoryAccess.repository;
 
   const result = await applyPatchToGitHub({
-    token: githubToken,
+    token: repositoryAccess.token.token,
     owner,
     repo,
     analysisId: id,
@@ -101,12 +93,11 @@ export async function POST(
   });
 
   if (!result.success) {
-    await bg
+    await db
       .from('analyses')
-      .update({
-        patch_status: 'failed',
-      })
-      .eq('id', id);
+      .update({ patch_status: 'failed' })
+      .eq('id', id)
+      .eq('user_id', user.userId);
 
     const errorResult = result as ApplyFixError;
     const isPermissionError =
@@ -121,7 +112,7 @@ export async function POST(
     );
   }
 
-  await bg
+  await db
     .from('analyses')
     .update({
       patch_status: 'applied',
@@ -131,8 +122,10 @@ export async function POST(
       changed_files: result.filesChanged,
       applied_at: new Date().toISOString(),
       pull_request_url: result.pullRequestUrl || null,
+      github_installation_id: repositoryAccess.installationId,
     })
-    .eq('id', id);
+    .eq('id', id)
+    .eq('user_id', user.userId);
 
   return NextResponse.json(result);
 }

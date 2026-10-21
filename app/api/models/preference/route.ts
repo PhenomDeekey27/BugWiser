@@ -1,18 +1,17 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { getModelPreference, resolveSavedStrategy, saveModelPreference, type SelectedStrategy } from '@/lib/ai/preferences';
 import type { StageOverrideOrigin } from '@/lib/ai/catalog/overrideReconcile';
 import type { ProviderName } from '@/lib/ai/providers/registry';
 
 export async function GET() {
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const preference = await getModelPreference(user.id);
+    const preference = await getModelPreference(user.userId);
     return NextResponse.json({ preference });
   } catch (error) {
     const err = error as Error;
@@ -23,9 +22,8 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -52,13 +50,13 @@ export async function PUT(request: Request) {
     // off selected_strategy === 'free'. When the stored read FAILS, refuse to
     // save rather than clobber the stored strategy with a fabricated default.
     const storedPreference =
-      body.selected_strategy == null ? await getModelPreference(user.id) : null;
+      body.selected_strategy == null ? await getModelPreference(user.userId) : null;
     const strategyResolution = resolveSavedStrategy(body.selected_strategy, storedPreference);
     if (!strategyResolution.ok) {
       return NextResponse.json({ error: strategyResolution.error }, { status: 503 });
     }
 
-    const result = await saveModelPreference(user.id, {
+    const result = await saveModelPreference(user.userId, {
       selection_mode: body.selection_mode,
       provider: body.provider || null,
       model: body.model || null,

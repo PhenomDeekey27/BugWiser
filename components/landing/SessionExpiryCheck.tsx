@@ -2,50 +2,45 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import { invalidateGitHubSession, isGitHubSessionValid } from '@/lib/supabase/auth-session';
+import { fetchAuthSession, invalidateGitHubSession } from '@/lib/auth/client-session';
 
 /**
- * Global GitHub-session expiry detector. Mounted once in the root layout so
- * every page (protected and public alike) shares one detection →
- * invalidation → redirect flow instead of each page improvising.
+ * Global session-expiry detector. Mounted once in the root layout so every
+ * page shares one detection → invalidation → redirect flow instead of each
+ * page improvising.
  *
- * Triggers ONLY on a session that exists but no longer carries the GitHub
- * `provider_token` (the canonical condition shared in
- * `lib/supabase/auth-session.ts`). A missing session is a normal signed-out
- * state and is left to the middleware and the pages themselves.
+ * Only a definitive "not authenticated" answer from `/api/auth/session`
+ * triggers the flow. A transport failure leaves the session alone, and public
+ * pages keep working while signed out.
  */
 export function SessionExpiryCheck() {
   const router = useRouter();
 
   useEffect(() => {
-    const supabase = createClient();
     let alive = true;
 
-    const invalidateIfExpired = (session: Parameters<typeof isGitHubSessionValid>[0]) => {
-      if (!alive) return;
-      // Session exists but lost its GitHub token → expired. No session at
-      // all is just "signed out" and must NOT trigger the expiry flow.
-      if (session && !isGitHubSessionValid(session)) {
+    const check = async () => {
+      const session = await fetchAuthSession({ force: true });
+      if (!alive || !session) return;
+
+      // Signed out on a public page is normal; only a protected page needs the
+      // redirect, and the middleware handles that before render.
+      const path = window.location.pathname;
+      const isProtected =
+        path.startsWith('/dashboard') || path.startsWith('/analysis') || path.startsWith('/models');
+      if (!session.authenticated && isProtected) {
         void invalidateGitHubSession(router);
       }
     };
 
-    supabase.auth.getSession().then(({ data: { session } }) => invalidateIfExpired(session));
+    void check();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      // SIGNED_OUT is either the user's own sign-out or the invalidation flow
-      // itself — both are already handled; only "session exists but expired"
-      // is ours to invalidate.
-      if (event === 'SIGNED_OUT') return;
-      invalidateIfExpired(session);
-    });
+    const onFocus = () => void check();
+    window.addEventListener('focus', onFocus);
 
     return () => {
       alive = false;
-      subscription.unsubscribe();
+      window.removeEventListener('focus', onFocus);
     };
   }, [router]);
 

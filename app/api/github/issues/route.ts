@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { fetchIssues, isPullRequest } from '@/lib/github/issues';
+import {
+  assertTokenPermissions,
+  getRepositoryAccessToken,
+} from '@/lib/github/app/access';
+import { githubErrorResponse } from '@/lib/github/app/http';
 import { Issue } from '@/types';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const owner = searchParams.get('owner');
   const repo = searchParams.get('repo');
   const state = searchParams.get('state') as 'open' | 'closed' | 'all' | null;
-  const page = searchParams.get('page');
+  const pageRaw = searchParams.get('page');
+  const page = pageRaw ? Number.parseInt(pageRaw, 10) : 1;
 
   if (!owner || !repo) {
     return NextResponse.json(
@@ -16,33 +25,25 @@ export async function GET(request: NextRequest) {
       { status: 400 }
     );
   }
-
-  const supabase = await createClient();
-
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) {
-    return NextResponse.json(
-      { error: 'Not authenticated' },
-      { status: 401 }
-    );
+  if (!Number.isSafeInteger(page) || page <= 0) {
+    return NextResponse.json({ error: 'page must be a positive integer' }, { status: 400 });
   }
 
-  const { data: { session } } = await supabase.auth.getSession();
-
-  if (!session?.provider_token) {
-    return NextResponse.json(
-      { error: 'GitHub token not available. Please sign in again.' },
-      { status: 401 }
-    );
+  const user = await getAuthenticatedUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
   try {
+    const { token } = await getRepositoryAccessToken(user.userId, `${owner}/${repo}`);
+    assertTokenPermissions(token, { issues: 'read' });
+
     const { issues: githubIssues } = await fetchIssues(
-      session.provider_token,
+      token.token,
       owner,
       repo,
       state || 'open',
-      page ? parseInt(page, 10) : 1,
+      page,
       30
     );
 
@@ -65,12 +66,8 @@ export async function GET(request: NextRequest) {
         repositoryId: `${owner}/${repo}`,
       }));
 
-    return NextResponse.json({ issues });
+    return NextResponse.json({ issues }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
-    console.error('Failed to fetch issues:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch issues' },
-      { status: 500 }
-    );
+    return githubErrorResponse(error);
   }
 }

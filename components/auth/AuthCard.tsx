@@ -7,19 +7,34 @@ import { createClient } from '@/lib/supabase/client';
 import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 
 const permissions = [
-  'Read repositories',
+  'Read repository contents and metadata',
   'Read issues',
-  'Read repository files',
-  'Create fix branches and commits',
+  'Read and write pull requests and branches (only when you apply a fix)',
 ];
 
+function safeReturnTo(value: string | null): string {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) {
+    return '/dashboard';
+  }
+  return value;
+}
+
 export function AuthCard() {
-  const [loading, setLoading] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+  const [legacyLoading, setLegacyLoading] = useState(false);
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
+  const returnTo = safeReturnTo(searchParams.get('returnTo'));
 
-  const handleGitHubLogin = async () => {
-    setLoading(true);
+  const startUrl = `/api/auth/github/start?returnTo=${encodeURIComponent(returnTo)}`;
+
+  const handleGitHubLogin = () => {
+    setRedirecting(true);
+    window.location.assign(startUrl);
+  };
+
+  const handleLegacyLogin = async () => {
+    setLegacyLoading(true);
     const supabase = createClient();
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'github',
@@ -29,7 +44,7 @@ export function AuthCard() {
       },
     });
     if (authError) {
-      setLoading(false);
+      setLegacyLoading(false);
     }
   };
 
@@ -46,13 +61,18 @@ export function AuthCard() {
           </div>
 
           {error && (
-            <div className="mb-6 p-3 rounded-lg border border-error-default/30 bg-error-container/10">
+            <div
+              role="alert"
+              className="mb-6 p-3 rounded-lg border border-error-default/30 bg-error-container/10"
+            >
               <p className="text-sm text-error-default text-center">{error}</p>
             </div>
           )}
 
           <p className="text-sm text-bw-peach text-center mb-6 leading-relaxed">
-            BugWiser needs GitHub access to inspect repositories and issues. We only request read permissions.
+            BugWiser signs you in with GitHub, then asks you to install the BugWiser
+            GitHub App on the repositories you choose. Only those repositories are
+            accessible.
           </p>
 
           <div className="mb-6 p-4 rounded-xl bg-surface/50 border border-[rgba(70,50,40,0.08)]">
@@ -61,23 +81,52 @@ export function AuthCard() {
             </p>
             <ul className="space-y-2">
               {permissions.map((permission) => (
-                <li key={permission} className="flex items-center gap-2 text-sm text-bw-peach-light">
-                  <span className="w-4 h-4 rounded-full bg-green-500/15 flex items-center justify-center flex-shrink-0">
+                <li key={permission} className="flex items-start gap-2 text-sm text-bw-peach-light">
+                  <span className="w-4 h-4 mt-0.5 rounded-full bg-green-500/15 flex items-center justify-center flex-shrink-0">
                     <span className="text-green-600 text-[10px]">✓</span>
                   </span>
                   <span>{permission}</span>
                 </li>
               ))}
             </ul>
+            <p className="text-xs text-bw-dusty-rose mt-3">
+              Nothing is written to your repository until you explicitly apply a
+              suggested patch.
+            </p>
           </div>
 
           <Button
             className="w-full btn-bw-primary h-11 font-medium cursor-pointer rounded-lg"
             onClick={handleGitHubLogin}
-            disabled={loading}
+            disabled={redirecting || legacyLoading}
           >
-            {loading ? 'Connecting to GitHub...' : 'Continue with GitHub'}
+            {redirecting ? 'Redirecting to GitHub…' : 'Continue with GitHub'}
           </Button>
+
+          {redirecting && (
+            <button
+              type="button"
+              onClick={() => setRedirecting(false)}
+              className="w-full text-xs text-bw-dusty-rose hover:text-bw-peach-light underline mt-3 cursor-pointer"
+            >
+              Taking too long? Cancel and try again
+            </button>
+          )}
+
+          <div className="mt-6 pt-4 border-t border-[rgba(70,50,40,0.08)]">
+            <p className="text-xs text-bw-dusty-rose mb-2">
+              Existing account with a GitHub sign-in? Use the legacy session while
+              the new GitHub App sign-in rolls out.
+            </p>
+            <Button
+              variant="ghost"
+              className="w-full text-xs font-medium cursor-pointer"
+              onClick={handleLegacyLogin}
+              disabled={redirecting || legacyLoading}
+            >
+              {legacyLoading ? 'Connecting…' : 'Use legacy GitHub sign-in'}
+            </Button>
+          </div>
 
           <p className="text-xs text-bw-dusty-rose text-center mt-4">
             By continuing, you agree to our{' '}

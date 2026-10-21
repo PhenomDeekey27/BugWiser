@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { testLocalConnection } from '@/lib/ai/connection/testConnection';
 import { relayEnabledFor, relayProbeDeps } from '@/lib/ai/connection/relay';
 
@@ -24,12 +24,8 @@ export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-    if (userError || !user) {
+    const user = await getAuthenticatedUser();
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -56,7 +52,7 @@ export async function POST(request: Request) {
         baseUrl,
         apiKey: typeof apiKey === 'string' ? apiKey : undefined,
       },
-      relayProbeDeps(user.id, normalizedBase)
+      relayProbeDeps(user.userId, normalizedBase)
     );
     return NextResponse.json({ ...result, relayed: relayEnabledFor(normalizedBase) });
   } catch (error) {

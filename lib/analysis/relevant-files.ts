@@ -1,4 +1,5 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
+import { getRepositoryAccessToken } from '@/lib/github/app/access';
 import { generate } from '@/lib/ai/gateway';
 import { buildRelevantFileContext, RelevantFileContext } from '@/lib/ai/context';
 import { deterministicPreFilter } from '@/lib/ai/context/prefilter';
@@ -98,7 +99,7 @@ async function fetchGitHubFile(
   }
 }
 
-export async function runRelevantFileDiscovery(analysisId: string, githubToken: string): Promise<void> {
+export async function runRelevantFileDiscovery(analysisId: string, actorUserId: string): Promise<void> {
   console.log(`[relevant-files] Starting relevant file discovery for ${analysisId}`);
 
   try {
@@ -115,7 +116,17 @@ export async function runRelevantFileDiscovery(analysisId: string, githubToken: 
       throw new Error('Analysis not found in database');
     }
 
-    const token = githubToken;
+    if (analysis.user_id !== actorUserId) {
+      throw new Error('Analysis does not belong to the requesting user');
+    }
+
+    // Installation token is resolved inside the job, not carried in from the
+    // browser, so long-running discovery never uses an expired session token.
+    const repositoryAccess = await getRepositoryAccessToken(
+      actorUserId,
+      analysis.repository_full_name
+    );
+    const token = repositoryAccess.token.token;
     const [owner, repo] = analysis.repository_full_name.split('/');
 
     await updateAnalysis(analysisId, {

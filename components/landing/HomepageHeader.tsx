@@ -3,8 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
-import { useGitHubAuthValidity } from '@/lib/supabase/auth-session';
+import { signOut, useGitHubAuthValidity } from '@/lib/auth/client-session';
 import { GitHubUser } from '@/types';
 import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 import { ThemeToggle } from '@/components/theme/ThemeToggle';
@@ -34,14 +33,9 @@ export function HomepageHeader({ user }: HomepageHeaderProps) {
   }, []);
 
   const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    localStorage.removeItem('analysis-selection');
     setDropdownOpen(false);
+    await signOut(router);
     toast.success('Signed out successfully');
-    setTimeout(() => {
-      router.push('/');
-    }, 800);
   };
 
   return (

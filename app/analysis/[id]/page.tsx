@@ -11,7 +11,7 @@ import { ModelTierPipeline } from '@/components/analysis/ModelTierBadge';
 import { ProgressOverlay } from '@/components/analysis/ProgressOverlay';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import { createClient } from '@/lib/supabase/client';
+import { fetchAuthSession, viewerFromSession } from '@/lib/auth/client-session';
 import {
   Analysis,
   AnalysisContext,
@@ -163,16 +163,17 @@ export default function InvestigationPage() {
   const [pendingStart, setPendingStart] = useState(false);
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user: authUser } }) => {
-      if (authUser?.user_metadata) {
-        setUser({
-          login: authUser.user_metadata.user_name || authUser.user_metadata.login || 'user',
-          name: authUser.user_metadata.full_name || authUser.user_metadata.name || null,
-          avatarUrl: authUser.user_metadata.avatar_url || '',
-        });
+    let alive = true;
+    void fetchAuthSession().then((session) => {
+      if (!alive) return;
+      const viewer = viewerFromSession(session);
+      if (viewer) {
+        setUser({ login: viewer.login, name: viewer.name, avatarUrl: viewer.avatarUrl });
       }
     });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const storedContext = useMemo<AnalysisContext | null>(() => {

@@ -20,6 +20,7 @@ import {
   WrenchIcon,
 } from 'lucide-react';
 import type { GitHubUser } from '@/types';
+import { fetchAuthSession, viewerFromSession, type ClientAuthUser } from '@/lib/auth/client-session';
 import { ProviderCard } from '@/components/models/ProviderCard';
 import { StageConfigPanel } from '@/components/models/StageConfigPanel';
 import { markProviderConnected, markProviderDisabled, markProviderDisconnected, runConnect, runDisconnect } from '@/components/models/connectState';
@@ -128,21 +129,23 @@ export default function ModelsPage() {
   }, [stageModels, automaticPicks]);
 
   const loadData = useCallback(async () => {
-    const supabase = (await import('@/lib/supabase/client')).createClient();
-    const { data: { user: au } } = await supabase.auth.getUser();
-    const res = await fetch('/api/models');
+    const [session, res] = await Promise.all([
+      fetchAuthSession(),
+      fetch('/api/models'),
+    ]);
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       throw new Error((d as { error?: string }).error || 'Failed to load models');
     }
     const data = await res.json();
-    return { user: au, data };
+    return { viewer: viewerFromSession(session), data };
   }, []);
 
-  const applyData = useCallback((payload: { user: { user_metadata?: Record<string, unknown> } | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; stageOverridesReconciled?: boolean; droppedStageOverrides?: string[]; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; catalogPending?: boolean; }; }) => {
-    const au = payload.user;
-    const meta = au?.user_metadata ?? {};
-    setUser({ login: (meta.user_name as string) || (meta.login as string) || 'user', name: (meta.full_name as string) || (meta.name as string) || null, avatarUrl: (meta.avatar_url as string) || '' });
+  const applyData = useCallback((payload: { viewer: ClientAuthUser | null; data: { providers?: CatalogProvider[]; models?: CatalogModel[]; preference?: Preference; stageOverridesReconciled?: boolean; droppedStageOverrides?: string[]; classifiedByAi?: boolean; classificationModel?: string | null; analyzedAt?: string; catalogPending?: boolean; }; }) => {
+    const viewer = payload.viewer;
+    if (viewer) {
+      setUser({ login: viewer.login, name: viewer.name, avatarUrl: viewer.avatarUrl });
+    }
     const data = payload.data;
     setProviders(data.providers || []);
     setModels(data.models || []);

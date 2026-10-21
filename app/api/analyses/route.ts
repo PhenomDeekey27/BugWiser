@@ -1,76 +1,73 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { Repository, Issue } from '@/types';
+import { resolveRepositoryAccess } from '@/lib/github/app/access';
+import { githubErrorResponse } from '@/lib/github/app/http';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
-
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    if (userError || !user) {
-      return NextResponse.json(
-        { error: 'Not authenticated' },
-        { status: 401 }
-      );
+    const user = await getAuthenticatedUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     let body: { repository?: Repository; issue?: Issue };
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json(
-        { error: 'Invalid request body' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
 
     const { repository, issue } = body;
-
     if (!repository || !issue) {
-      return NextResponse.json(
-        { error: 'repository and issue are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'repository and issue are required' }, { status: 400 });
+    }
+    if (!repository.fullName) {
+      return NextResponse.json({ error: 'repository.fullName is required' }, { status: 400 });
+    }
+    if (!Number.isSafeInteger(issue.number) || issue.number <= 0) {
+      return NextResponse.json({ error: 'issue.number must be a positive integer' }, { status: 400 });
     }
 
-    if (!repository.fullName || !repository.owner) {
-      return NextResponse.json(
-        { error: 'repository.fullName and repository.owner are required' },
-        { status: 400 }
-      );
+    // Never trust the client's repository id/owner/name: resolve the repository
+    // through the signed-in user's GitHub App installation.
+    let access;
+    try {
+      access = await resolveRepositoryAccess(user.userId, repository.fullName);
+    } catch (error) {
+      return githubErrorResponse(error);
     }
 
-    const [owner, repo] = repository.fullName.split('/');
+    const db = createBackgroundClient();
 
-    // Get user's preferred strategy from model preferences
-    const { data: preference, error: prefError } = await createBackgroundClient()
+    const { data: preference } = await db
       .from('user_model_preferences')
       .select('selected_strategy')
-      .eq('user_id', user.id)
+      .eq('user_id', user.userId)
       .maybeSingle();
 
-    // analyses.model_strategy only accepts engine strategies — map /models page
-    // UI setups to 'custom' (their concrete picks live in stage_overrides).
     const rawStrategy = preference?.selected_strategy || 'auto';
-    const modelStrategy = rawStrategy === 'balanced' || rawStrategy === 'quality' ? 'custom' : rawStrategy;
+    const modelStrategy =
+      rawStrategy === 'balanced' || rawStrategy === 'quality' ? 'custom' : rawStrategy;
 
-    // Insert the analysis record. `.select()` is REQUIRED: without it PostgREST
-    // answers with `return=minimal`, so supabase-js resolves `data` to null and
-    // the inserted id is never available.
-    const { data: insertedRows, error: insertError } = await createBackgroundClient()
+    const { data: insertedRows, error: insertError } = await db
       .from('analyses')
       .insert({
-        user_id: user.id,
-        repository_id: repository.id,
-        repository_full_name: repository.fullName,
-        repository_owner: owner,
-        repository_name: repo,
+        user_id: user.userId,
+        repository_id: String(access.repository.repoId),
+        repository_full_name: access.repository.fullName,
+        repository_owner: access.repository.owner,
+        repository_name: access.repository.name,
         issue_number: issue.number,
         issue_title: issue.title,
         status: 'queued',
         current_stage: 'issue_context',
         model_strategy: modelStrategy,
+        github_installation_id: access.installationId,
       })
       .select();
 
@@ -83,7 +80,6 @@ export async function POST(request: Request) {
     }
 
     const insertedId = insertedRows?.[0]?.id;
-
     if (!insertedId) {
       console.error('[api/analyses] Insert returned no row');
       return NextResponse.json(
@@ -92,31 +88,25 @@ export async function POST(request: Request) {
       );
     }
 
-    // Get the full record from the inserted ID
-    const { data: analysis, error: fetchError } = await createBackgroundClient()
+    const { data: analysis, error: fetchError } = await db
       .from('analyses')
       .select('*')
       .eq('id', insertedId)
+      .eq('user_id', user.userId)
       .single();
 
-    if (fetchError) {
-      console.error('[api/analyses] Fetch analysis error:', fetchError.message);
+    if (fetchError || !analysis) {
+      console.error('[api/analyses] Fetch analysis error:', fetchError?.message);
       return NextResponse.json(
-        { error: 'Failed to fetch analysis after creation: ' + fetchError.message },
+        { error: 'Failed to fetch analysis after creation' },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({
-      analysisId: analysis.id,
-      status: 'queued',
-    });
+    return NextResponse.json({ analysisId: analysis.id, status: 'queued' });
   } catch (error) {
     const err = error as Error;
     console.error('[api/analyses] Unexpected error:', err.message);
-    return NextResponse.json(
-      { error: 'Failed to create analysis' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to create analysis' }, { status: 500 });
   }
 }
