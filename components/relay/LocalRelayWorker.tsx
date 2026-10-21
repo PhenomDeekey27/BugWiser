@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { executeRelayJob } from '@/lib/ai/connection/relayJobs';
 
 // Browser relay worker — the OTHER half of lib/ai/connection/relay.ts.
@@ -11,24 +10,43 @@ import { executeRelayJob } from '@/lib/ai/connection/relayJobs';
 // once in the root layout) runs the user's OWN browser tab against the local
 // endpoint and writes the response back for the server to replay.
 //
-// Loop per tick: getSession → pick the oldest pending, unexpired, OWN job →
-// atomically claim it (`status: pending` guard — two open tabs cannot both
-// win) → execute it (lib/ai/connection/relayJobs.ts) → write the outcome back
-// while SCRUBBING the request payload (headers/body never rest in the row).
+// AUTH: the tab talks to same-origin API routes (/api/relay/jobs/*) which are
+// authenticated by the BugWiser session cookie. It used to query Supabase
+// directly with `supabase.auth.getSession()`, but sign-in moved to a GitHub App
+// signed cookie — there is no Supabase Auth session in the browser, so those
+// queries returned nothing and every relayed request timed out. The API routes
+// scope every read/write to the signed-in user; the browser never sees the
+// service role or the job table.
 //
-// Cadence: fast (ACTIVE_POLL_MS) while jobs are flowing; backs off to a few
-// seconds when idle so an open tab costs ~one cheap query every few seconds.
-// Every CLEANUP_INTERVAL ticks, this tab deletes its own expired rows — no
-// janitor process needed. Signed-out tabs (and SSR) do nothing.
+// Loop per tick: claim → execute (lib/ai/connection/relayJobs.ts) → write the
+// outcome back (the route scrubs the request payload). Cadence is fast while
+// jobs flow and backs off when idle. Signed-out tabs do nothing.
+// Every CLEANUP_INTERVAL ticks this tab deletes its own expired rows.
 
 const ACTIVE_POLL_MS = 600;
-const IDLE_POLL_MS = 4_000;
-const IDLE_MAX_MS = 8_000;
+const IDLE_POLL_MS = 2_000;
+const IDLE_MAX_MS = 5_000;
+// A signed-out or misconfigured deployment must not hammer the endpoint.
+const SUPPRESSED_POLL_MS = 30_000;
 const CLEANUP_INTERVAL_TICKS = 30;
+
+const CLAIM_URL = '/api/relay/jobs/claim';
+const CLEANUP_URL = '/api/relay/jobs/cleanup';
+
+type TickResult = 'worked' | 'idle' | 'suppressed';
+
+async function postJson(url: string, body?: unknown): Promise<Response> {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+}
 
 export function LocalRelayWorker() {
   useEffect(() => {
-    const supabase = createClient();
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -37,89 +55,60 @@ export function LocalRelayWorker() {
         timer = setTimeout(resolve, ms);
       });
 
-    async function claimAndRun(): Promise<boolean> {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session || cancelled) return false;
-
-      const { data: pending, error } = await supabase
-        .from('local_relay_jobs')
-        .select('id, method, url, headers, body, expires_at, attempts, created_at')
-        .eq('user_id', session.user.id)
-        .eq('status', 'pending')
-        .gt('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: true })
-        .limit(1);
-      if (error) {
-        console.warn('[relay-worker] poll failed:', error.message);
-        return false;
+    async function claimAndRun(): Promise<TickResult> {
+      let response: Response;
+      try {
+        response = await postJson(CLAIM_URL);
+      } catch {
+        return 'idle';
       }
-      const job = pending?.[0];
-      if (!job) return false;
+      // 401: no BugWiser session (signed out) — nothing to do until sign-in.
+      // 503: relay storage unavailable on this deployment — back off, do not
+      // spam. Both are quiet: the UI surfaces connection problems when the
+      // user actually asks for one.
+      if (response.status === 401 || response.status === 403) return 'suppressed';
+      if (response.status === 503) return 'suppressed';
+      if (!response.ok) return 'idle';
 
-      // Atomic claim: only one tab flips pending → claimed for this row.
-      const { data: claimed } = await supabase
-        .from('local_relay_jobs')
-        .update({
-          status: 'claimed',
-          claimed_at: new Date().toISOString(),
-          attempts: (job.attempts ?? 0) + 1,
-        })
-        .eq('id', job.id)
-        .eq('status', 'pending')
-        .select('id')
-        .maybeSingle();
-      if (!claimed) return true; // another tab won it — there IS work, just not ours
+      const payload = (await response.json().catch(() => null)) as {
+        job?: {
+          id: string;
+          method: string;
+          url: string;
+          headers: Record<string, string> | null;
+          body: string | null;
+          expires_at: string;
+        } | null;
+      } | null;
+      const job = payload?.job;
+      if (!job) return 'idle';
 
       const outcome = await executeRelayJob({
         id: job.id,
         method: job.method,
         url: job.url,
-        headers: (job.headers ?? {}) as Record<string, string>,
+        headers: job.headers,
         body: job.body,
         expires_at: job.expires_at,
       });
 
-      const patch = outcome.ok
-        ? {
-            status: 'done',
-            response_status: outcome.status,
-            response_headers: outcome.headers,
-            response_body: outcome.body,
-            error: null,
-          }
-        : {
-            status: 'error',
-            response_status: null,
-            response_headers: null,
-            response_body: null,
-            error: outcome.error,
-          };
-      // Request payload is scrubbed on EVERY completion — a local endpoint's
-      // optional Authorization header must not outlive the job.
-      const { error: writeError } = await supabase
-        .from('local_relay_jobs')
-        .update({ ...patch, headers: {}, body: null, completed_at: new Date().toISOString() })
-        .eq('id', job.id)
-        .eq('user_id', session.user.id);
-      if (writeError) console.warn('[relay-worker] write-back failed:', writeError.message);
-      return true;
+      try {
+        await postJson(
+          `/api/relay/jobs/${encodeURIComponent(job.id)}/complete`,
+          outcome
+        );
+      } catch {
+        // The server's poller will time the job out; its message covers this.
+      }
+      return 'worked';
     }
 
     async function cleanupExpired(): Promise<void> {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session || cancelled) return;
-      // Rows past expires_at are never read again (the server's poll deadline
-      // sits ~30s before expiry), so deleting them is safe.
-      const { error } = await supabase
-        .from('local_relay_jobs')
-        .delete()
-        .eq('user_id', session.user.id)
-        .lt('expires_at', new Date().toISOString());
-      if (error) console.warn('[relay-worker] cleanup failed:', error.message);
+      try {
+        await postJson(CLEANUP_URL);
+      } catch {
+        // Best effort: expired rows are ignored by every reader anyway.
+      }
     }
 
     async function run(): Promise<void> {
@@ -127,14 +116,17 @@ export function LocalRelayWorker() {
       let idleStreak = 0;
       let sinceCleanup = 0;
       while (!cancelled) {
+        let result: TickResult = 'idle';
         try {
-          const didWork = await claimAndRun();
-          if (didWork) {
+          result = await claimAndRun();
+          if (result === 'worked') {
             idleStreak = 0;
             delay = ACTIVE_POLL_MS;
+          } else if (result === 'suppressed') {
+            delay = SUPPRESSED_POLL_MS;
           } else {
             idleStreak++;
-            delay = Math.min(IDLE_MAX_MS, IDLE_POLL_MS + (idleStreak - 1) * 2_000);
+            delay = Math.min(IDLE_MAX_MS, IDLE_POLL_MS + (idleStreak - 1) * 1_000);
           }
           if (++sinceCleanup >= CLEANUP_INTERVAL_TICKS) {
             sinceCleanup = 0;

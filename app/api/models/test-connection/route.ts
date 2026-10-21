@@ -46,15 +46,17 @@ export async function POST(request: Request) {
 
     // Structured outcome (success or failure) — the test itself ran, so the
     // result is data: HTTP 200 with success/compatibility/error fields.
-    const normalizedBase = typeof baseUrl === 'string' ? baseUrl : '';
     const result = await testLocalConnection(
       {
         baseUrl,
         apiKey: typeof apiKey === 'string' ? apiKey : undefined,
       },
-      relayProbeDeps(user.userId, normalizedBase)
+      relayProbeDeps(user.userId, baseUrl)
     );
-    return NextResponse.json({ ...result, relayed: relayEnabledFor(normalizedBase) });
+    // Report the relay decision for the endpoint that was actually tested (the
+    // normalized URL — the raw input may be scheme-less).
+    const relayed = result.baseUrl ? relayEnabledFor(result.baseUrl) : false;
+    return NextResponse.json({ ...result, relayed });
   } catch (error) {
     const err = error as Error;
     console.error('[api/models/test-connection] Error:', err.message);

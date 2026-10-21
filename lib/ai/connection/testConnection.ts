@@ -307,7 +307,11 @@ async function attemptBase(
       case 'timeout':
         return {
           kind: 'probe',
-          probe: fail(originalBaseUrl, 'unverified', `Connection test timed out after ${timeoutMs}ms reaching ${outcome.url}.`),
+          probe: fail(
+            originalBaseUrl,
+            'unverified',
+            `Connection test timed out after ${timeoutMs}ms reaching ${outcome.url}. Verify the server is running and that the Base URL and port are correct.`
+          ),
         };
       case 'relay-error':
         return { kind: 'probe', probe: fail(originalBaseUrl, 'unverified', outcome.message) };
@@ -360,7 +364,7 @@ async function attemptBase(
         probe: fail(
           originalBaseUrl,
           'not-compatible',
-          `${candidate} responded but the response is not valid JSON — not an OpenAI-compatible endpoint.`,
+          `${candidate} responded but the response is not valid JSON. BugWiser requires an OpenAI-compatible API: GET /models must return {"data":[{"id":"…"}]} and POST /chat/completions must exist.`,
           candidate
         ),
       };
@@ -373,7 +377,7 @@ async function attemptBase(
         probe: fail(
           originalBaseUrl,
           'not-compatible',
-          `${candidate} responded but did not return an OpenAI-compatible models list.`,
+          `${candidate} responded but did not return an OpenAI-compatible models list (expected {"data":[{"id":"…"}]} or a bare array). This server uses a different API format.`,
           candidate
         ),
       };
@@ -386,7 +390,7 @@ async function attemptBase(
         probe: fail(
           originalBaseUrl,
           'openai-compatible',
-          `${candidate} is OpenAI-compatible but returned an empty model list — no models are available.`,
+          `${candidate} is OpenAI-compatible but returned an empty model list — no models are available. Load a model on the server and try again.`,
           candidate
         ),
       };
@@ -397,7 +401,7 @@ async function attemptBase(
         probe: fail(
           originalBaseUrl,
           'not-compatible',
-          `${candidate} returned a models list without any model IDs — malformed response.`,
+          `${candidate} returned a models list without any model IDs — malformed response (each entry needs an "id").`,
           candidate
         ),
       };
@@ -492,7 +496,11 @@ export async function probeLocalModelsList(
   // Every base (original + alias) failed at the transport level.
   const networkUrl = firstNetwork ? firstNetwork.url : `${baseUrl}/models`;
   return {
-    ...fail(baseUrl, 'unverified', `Could not reach ${networkUrl} — the server refused the connection or is unreachable.`),
+    ...fail(
+      baseUrl,
+      'unverified',
+      `Could not reach ${networkUrl} — the server refused the connection or is unreachable. Verify the local LLM server is running and that the Base URL and port are correct.`
+    ),
     networkFailure: true,
   };
 }

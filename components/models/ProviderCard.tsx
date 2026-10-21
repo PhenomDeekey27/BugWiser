@@ -27,6 +27,9 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
   const [saving, setSaving] = useState(false);
   const [busyDisconnect, setBusyDisconnect] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Connected local endpoint: reopen the prefilled form to change endpoint or
+  // reconnect without retyping the saved Base URL.
+  const [editingLocal, setEditingLocal] = useState(false);
   // Same single-flight latch as the local connect form: two clicks before the
   // re-render must not fire two disconnect requests.
   const disconnectGate = useRef(createConnectGate());
@@ -119,24 +122,50 @@ export function ProviderCard({ provider, onConnect, onDisconnect, modelCount }: 
       )}
 
       {connected ? (
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col gap-0.5 min-w-0">
-            <span className="text-xs text-bw-peach">{sourceLabel}</span>
-            {provider.providerId === 'local' && provider.baseUrl && (
-              <span className="text-[11px] font-mono text-bw-peach truncate" title={provider.baseUrl}>
-                {provider.baseUrl}
-              </span>
-            )}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-xs text-bw-peach">{sourceLabel}</span>
+              {provider.providerId === 'local' && provider.baseUrl && (
+                <span
+                  className="text-[11px] font-mono text-bw-peach truncate"
+                  title={provider.baseUrl}
+                >
+                  {provider.baseUrl}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {provider.providerId === 'local' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingLocal((open) => !open)}
+                  className="border-border cursor-pointer"
+                >
+                  {editingLocal ? 'Cancel' : 'Reconnect'}
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={busyDisconnect}
+                className="border-border cursor-pointer"
+              >
+                {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
+              </Button>
+            </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDisconnect}
-            disabled={busyDisconnect}
-            className="border-border cursor-pointer"
-          >
-            {busyDisconnect ? 'Disconnecting...' : 'Disconnect'}
-          </Button>
+          {provider.providerId === 'local' && editingLocal && (
+            <LocalProviderConnectForm
+              provider={provider}
+              onConnect={async (providerId, submittedKey, options) => {
+                await onConnect(providerId, submittedKey, options);
+                setEditingLocal(false);
+              }}
+            />
+          )}
         </div>
       ) : provider.providerId === 'local' ? (
         <LocalProviderConnectForm provider={provider} onConnect={onConnect} />

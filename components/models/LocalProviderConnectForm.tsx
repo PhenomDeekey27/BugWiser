@@ -1,18 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react';
+import { useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CatalogProvider } from '@/app/models/page';
-import { mixedContentHint } from '@/lib/ai/connection/local';
+import { mixedContentHint, normalizeLocalBaseUrl } from '@/lib/ai/connection/local';
 import { appOrigin, serverCorsHint } from '@/lib/ai/connection/reachability';
 import { createConnectGate } from './connectState';
 import { detectLocalEndpoint } from './localEndpointDetect';
 import {
+  canConnect,
   canRegister,
   canTest,
   createInitialLocalFlowState,
   localFlowReducer,
+  nextConnectStep,
 } from './localProviderFlow';
 
 interface LocalProviderConnectFormProps {
@@ -31,20 +33,29 @@ const subscribeProtocol = () => () => {};
 const readProtocol = () => (typeof window !== 'undefined' ? window.location.protocol : 'http:');
 const readServerProtocol = () => 'http:';
 
+const MAX_LISTED_MODELS = 50;
+
+interface TestOutcome {
+  ok: boolean;
+  modelIds: string[];
+  baseUrl: string;
+  error: string | null;
+}
+
 /**
- * Local LLM connection flow inside ProviderCard (disconnected state):
- * Base URL + optional API key → Test Connection → Register (Connect).
- * The Connect button only becomes enabled after a successful test that
- * discovered at least one model (see localProviderFlow.ts) — a reachable but
- * empty or unverified endpoint can never register.
+ * Local LLM connection flow inside ProviderCard.
  *
- * On mount (with an empty Base URL) the form probes the machine's common
- * local-server ports and prefills the first endpoint that validates; the
- * Detect button re-runs it. Endpoints that are up but refuse this origin are
- * reported with CORS fix guidance instead of a dead-end not-found, plain http
- * to a LAN address on the https app gets an input-time mixed-content hint,
- * and when the test was answered through the browser relay (deployed app), a
- * note explains that the tab must stay open.
+ * The Base URL input is always the primary path: paste the endpoint your
+ * server prints (e.g. http://127.0.0.1:1234/v1) and press Connect. Connect is
+ * ONE action — it tests the endpoint and only then registers it (the existing
+ * architecture's validate-before-save gate). "Test" is an optional separate
+ * check; "Detect" only fills the field when the user asks for it and never
+ * overwrites a URL the user typed.
+ *
+ * What the test actually does (server-side, relayed to this browser tab when
+ * the app is deployed): GET <base>/models (falling back to /v1/models), require
+ * an OpenAI-compatible model list, and return the discovered model IDs. A
+ * reachable-but-empty endpoint is shown as such and can never be registered.
  */
 export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderConnectFormProps) {
   const [state, dispatch] = useReducer(
@@ -56,23 +67,19 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
   const [detectNote, setDetectNote] = useState<string | null>(null);
   const [relayed, setRelayed] = useState(false);
 
-  // Single-flight latch: the Connect button is disabled while a request is in
+  // Single-flight latch: the buttons are disabled while a request is in
   // flight, but two clicks dispatched before the re-render would both read the
-  // pre-request state. This makes a duplicate registration impossible.
-  const registerGate = useRef(createConnectGate());
-  // Auto-detect must never overwrite a value the user typed while the probe
-  // was in flight: any edit sets this, and the fill is then skipped.
+  // pre-request state. This makes duplicate tests/registrations impossible.
+  const requestGate = useRef(createConnectGate());
+  // Detect must never overwrite a value the user typed while the probe was in
+  // flight: any edit sets this, and the fill is then skipped.
   const baseUrlEdited = useRef(false);
-  const didAutoDetect = useRef(false);
 
   const busy = state.phase === 'testing' || state.phase === 'registering';
-
-  // Input-time mixed-content guidance: plain http to a LAN address is blocked
-  // on the deployed https page.
   const pageProtocol = useSyncExternalStore(subscribeProtocol, readProtocol, readServerProtocol);
   const mixedHint = busy ? null : mixedContentHint(state.baseUrl, pageProtocol);
 
-  const runDetect = useCallback(async () => {
+  const runDetect = async () => {
     if (detecting || busy || state.phase === 'registered') return;
     setDetecting(true);
     setDetectNote(null);
@@ -90,7 +97,7 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
       setDetectNote(
         blockedUrl
           ? `${blockedUrl} answered, but it blocks this site's origin — add ${appOrigin()} to the server's allowed origins (${serverCorsHint(blockedUrl)}) and run Detect again.`
-          : 'No local endpoint found on common ports — enter the Base URL manually.'
+          : 'No local endpoint answered on the common ports — paste your server’s Base URL instead.'
       );
       return;
     }
@@ -105,25 +112,11 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     setDetectNote(
       `${baseUrlEdited.current ? 'Found' : 'Detected'} ${found.baseUrl} — ${detail}.`
     );
-  }, [detecting, busy, state.phase]);
+  };
 
-  // One-time auto-detect on mount, only when no stored URL prefills the form.
-  // Deferred a tick so the first paint isn't blocked and the setState rule for
-  // effect bodies is respected; the ref makes it run exactly once.
-  useEffect(() => {
-    if (didAutoDetect.current) return;
-    didAutoDetect.current = true;
-    if ((provider.baseUrl ?? '').trim().length > 0) return;
-    setTimeout(() => {
-      void runDetect();
-    }, 0);
-  }, [provider.baseUrl, runDetect]);
-
-  const runTest = async () => {
-    if (!canTest(state)) return;
-    const baseUrl = state.baseUrl;
-    const apiKey = state.apiKey;
-    dispatch({ type: 'test-start' });
+  /** One test request; dispatches its own state transition and returns the
+   *  raw outcome so Connect can chain registration without stale state. */
+  const runTestRequest = async (baseUrl: string, apiKey: string): Promise<TestOutcome> => {
     try {
       const res = await fetch('/api/models/test-connection', {
         method: 'POST',
@@ -132,60 +125,137 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
       });
       const data = await res.json().catch(() => ({}));
       if (typeof data.relayed === 'boolean') setRelayed(data.relayed);
+      const modelIds: string[] = Array.isArray(data.modelIds)
+        ? data.modelIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      const normalizedBase =
+        typeof data.baseUrl === 'string' && data.baseUrl ? data.baseUrl : baseUrl;
       if (!res.ok) {
-        dispatch({ type: 'test-failure', error: data.error || 'Connection test failed.' });
-        return;
+        return {
+          ok: false,
+          modelIds: [],
+          baseUrl: normalizedBase,
+          error: data.error || 'Connection test failed.',
+        };
       }
-      if (data.success) {
-        dispatch({
-          type: 'test-success',
-          modelCount: Array.isArray(data.modelIds) ? data.modelIds.length : 0,
-          baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? data.baseUrl : baseUrl,
-        });
-      } else {
-        dispatch({ type: 'test-failure', error: data.error || 'Connection test failed.' });
+      if (data.success === true) {
+        dispatch({ type: 'test-success', modelIds, baseUrl: normalizedBase });
+        return { ok: true, modelIds, baseUrl: normalizedBase, error: null };
       }
+      // A server that ANSWERED as OpenAI-compatible but lists no models is not
+      // a failed connection — it is an empty endpoint. Show that state (Connect
+      // stays blocked) instead of a generic failure. `success` remains false
+      // server-side, so registration is still impossible.
+      if (data.compatibility === 'openai-compatible' && modelIds.length === 0) {
+        dispatch({ type: 'test-success', modelIds: [], baseUrl: normalizedBase });
+        return { ok: true, modelIds: [], baseUrl: normalizedBase, error: null };
+      }
+      return {
+        ok: false,
+        modelIds: [],
+        baseUrl: normalizedBase,
+        error: data.error || 'Connection test failed.',
+      };
     } catch (e) {
-      dispatch({ type: 'test-failure', error: (e as Error).message || 'Connection test failed.' });
+      const error = `Could not reach BugWiser's connection test endpoint: ${
+        (e as Error).message || 'network error'
+      }.`;
+      return { ok: false, modelIds: [], baseUrl, error };
     }
   };
 
-  const runRegister = useCallback(async () => {
-    if (!canRegister(state)) return;
-    if (!registerGate.current.tryBegin()) return;
-    const baseUrl = state.verifiedBaseUrl ?? state.baseUrl;
-    const apiKey = state.apiKey;
+  const runTest = async (): Promise<TestOutcome | null> => {
+    if (!canTest(state)) return null;
+    dispatch({ type: 'test-start' });
+    // Fast local validation first: an unsupported scheme or a non-URL should
+    // never reach the server. Same rules as the server-side normalizer.
+    const validation = normalizeLocalBaseUrl(state.baseUrl);
+    if (!validation.ok) {
+      dispatch({ type: 'test-failure', error: validation.error });
+      return { ok: false, modelIds: [], baseUrl: '', error: validation.error };
+    }
+    const outcome = await runTestRequest(validation.baseUrl, state.apiKey);
+    if (!outcome.ok) {
+      dispatch({ type: 'test-failure', error: outcome.error ?? 'Connection test failed.' });
+    }
+    return outcome;
+  };
+
+  const runRegister = async (verifiedBaseUrl: string): Promise<boolean> => {
     dispatch({ type: 'register-start' });
     try {
-      // Resolves as soon as the registration request finishes (success or
-      // failure) — the catalog refresh it triggers runs in the background, so
-      // this can never leave the button on "Connecting...".
-      await onConnect(provider.providerId, apiKey, { baseUrl });
+      await onConnect(provider.providerId, state.apiKey, { baseUrl: verifiedBaseUrl });
       dispatch({ type: 'register-success' });
       // Submitted — drop the secret from the form immediately.
       dispatch({ type: 'clear-api-key' });
+      return true;
     } catch (e) {
       dispatch({
         type: 'register-failure',
         error: (e as Error).message || 'Registration failed.',
       });
-    } finally {
-      registerGate.current.end();
+      return false;
     }
-  }, [state, onConnect, provider.providerId]);
+  };
+
+  /** Connect: test when this URL has not been verified yet, then register. */
+  const runConnect = async () => {
+    const next = nextConnectStep(state);
+    if (next.step === 'blocked') {
+      if (state.baseUrl.trim().length === 0) {
+        dispatch({ type: 'test-failure', error: next.reason });
+      }
+      return;
+    }
+    if (!requestGate.current.tryBegin()) return;
+    try {
+      let target: string;
+      if (next.step === 'register') {
+        target = next.baseUrl;
+      } else {
+        const outcome = await runTest();
+        if (!outcome || !outcome.ok) return;
+        if (outcome.modelIds.length === 0) return; // 'no-models' is shown
+        target = outcome.baseUrl;
+      }
+      await runRegister(target);
+    } finally {
+      requestGate.current.end();
+    }
+  };
+
+  const runTestOnly = async () => {
+    if (!requestGate.current.tryBegin()) return;
+    try {
+      await runTest();
+    } finally {
+      requestGate.current.end();
+    }
+  };
+
+  const listedModels = state.modelIds.slice(0, MAX_LISTED_MODELS);
+  const remainingModels = state.modelIds.length - listedModels.length;
 
   return (
     <div className="space-y-2">
       <Input
         type="text"
-        placeholder="Base URL — e.g. http://127.0.0.1:8000/v1"
+        placeholder="Base URL — e.g. http://127.0.0.1:1234/v1"
         value={state.baseUrl}
         onChange={(e) => {
           baseUrlEdited.current = true;
           dispatch({ type: 'field', field: 'baseUrl', value: e.target.value });
         }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void runConnect();
+          }
+        }}
         disabled={busy || state.phase === 'registered'}
         aria-label="Local endpoint base URL"
+        autoComplete="off"
+        spellCheck={false}
       />
       {mixedHint && <p className="text-[11px] text-bw-peach">{mixedHint}</p>}
       <Input
@@ -197,30 +267,58 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
         aria-label="Local endpoint API key"
       />
 
-      {state.phase === 'verified' && (
+      {state.phase === 'testing' && (
         <p className="text-xs font-mono text-bw-peach">
-          Endpoint verified — {state.modelCount} model{state.modelCount === 1 ? '' : 's'} found
+          Testing {state.baseUrl} — fetching its model list…
         </p>
       )}
+      {state.phase === 'verified' && (
+        <div className="rounded-md border border-border/60 bg-surface-container-lowest/60 p-2">
+          <p className="text-xs font-mono text-bw-peach">
+            {state.verifiedBaseUrl} — {state.modelCount} model
+            {state.modelCount === 1 ? '' : 's'} found
+          </p>
+          <ul className="mt-1 max-h-24 space-y-0.5 overflow-auto">
+            {listedModels.map((id, index) => (
+              <li
+                key={`${index}-${id}`}
+                className="truncate text-[11px] font-mono text-bw-peach/80"
+                title={id}
+              >
+                {id}
+              </li>
+            ))}
+          </ul>
+          {remainingModels > 0 && (
+            <p className="mt-1 text-[11px] font-mono text-bw-peach/70">
+              +{remainingModels} more
+            </p>
+          )}
+        </div>
+      )}
       {state.phase === 'no-models' && (
-        <p className="text-xs text-bw-peach">
-          Endpoint verified, but it lists no models. Connect stays disabled until the server
-          exposes models.
+        <p className="text-xs text-bw-peach" role="status">
+          The server answered and is OpenAI-compatible, but its model list is empty. Load or
+          download a model in your local server, then press Connect again.
         </p>
       )}
       {state.phase === 'registered' && (
-        <p className="text-xs font-mono text-bw-peach">Connected.</p>
+        <p className="text-xs font-mono text-bw-peach" role="status">
+          Connected — the discovered models are being added to your catalog.
+        </p>
       )}
-      {detectNote && !busy && (
-        <p className="text-xs text-bw-peach">{detectNote}</p>
-      )}
+      {detectNote && !busy && <p className="text-xs text-bw-peach">{detectNote}</p>}
       {relayed && (
         <p className="text-[11px] text-bw-peach">
           Talking to your local server through this browser tab — keep BugWiser open in this
           browser while it (and future analyses) run.
         </p>
       )}
-      {state.error && <p className="text-xs text-error-default">{state.error}</p>}
+      {state.error && (
+        <p className="text-xs text-error-default" role="alert">
+          {state.error}
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button
@@ -229,6 +327,7 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
           className="border-border text-bw-peach"
           onClick={runDetect}
           disabled={detecting || busy || state.phase === 'registered'}
+          title="Probe the common local ports (optional — pasting the Base URL is enough)"
         >
           {detecting ? 'Detecting...' : 'Detect'}
         </Button>
@@ -236,24 +335,36 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
           variant="outline"
           size="sm"
           className="border-border text-bw-peach"
-          onClick={runTest}
+          onClick={runTestOnly}
           disabled={!canTest(state)}
         >
-          {state.phase === 'testing' ? 'Testing...' : 'Test Connection'}
+          {state.phase === 'testing' ? 'Testing...' : 'Test'}
         </Button>
         <Button
           size="sm"
           className="flex-1 btn-bw-primary font-medium"
-          onClick={runRegister}
-          disabled={!canRegister(state)}
+          onClick={runConnect}
+          disabled={!canConnect(state)}
         >
-          {state.phase === 'registering' ? 'Connecting...' : 'Connect'}
+          {state.phase === 'testing'
+            ? 'Testing...'
+            : state.phase === 'registering'
+              ? 'Connecting...'
+              : state.phase === 'verified'
+                ? 'Save connection'
+                : 'Connect'}
         </Button>
       </div>
 
       <p className="text-[11px] text-bw-peach">
-        A successful connection test is required before this provider can connect.
+        Connect tests the endpoint and saves it only if it returns an OpenAI-compatible model
+        list. Your server must allow requests from this site (CORS).
       </p>
+      {canRegister(state) && (
+        <p className="text-[11px] font-mono text-bw-peach/70">
+          Verified endpoint ready to save.
+        </p>
+      )}
     </div>
   );
 }

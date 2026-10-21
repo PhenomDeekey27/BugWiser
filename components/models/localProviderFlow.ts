@@ -1,11 +1,15 @@
-// Task M — pure state machine for the Local LLM connect flow (Test Connection
-// → Register). No React, no fetch: the component drives it and tests exercise
-// it directly.
+// Pure state machine for the Local LLM connect flow (Connect → test →
+// verified → register). No React, no fetch: the component drives it and tests
+// exercise it directly.
 //
 // The core gate: registration is only possible after a SUCCESSFUL test
 // ('verified' with ≥1 discovered model). Editing any field after a test
 // invalidates the verification ('idle'), so what gets registered is exactly
 // what was tested — the server re-runs the test anyway before saving.
+//
+// Connect is ONE user action: nextConnectStep says whether it still needs the
+// test (nothing verified yet) or can register the verified URL straight away.
+// A retry after a failed test never needs the URL re-typed.
 
 export type LocalFlowPhase =
   | 'idle' // no successful test yet (or fields changed since one)
@@ -20,7 +24,9 @@ export interface LocalFlowState {
   phase: LocalFlowPhase;
   baseUrl: string;
   apiKey: string;
-  /** Models discovered by the last successful test (0 unless verified). */
+  /** Model IDs discovered by the last successful test. */
+  modelIds: string[];
+  /** Convenience count; always modelIds.length after a test. */
   modelCount: number;
   /** Error for display; constructed server-side, never contains secrets. */
   error: string | null;
@@ -31,7 +37,14 @@ export interface LocalFlowState {
 export type LocalFlowAction =
   | { type: 'field'; field: 'baseUrl' | 'apiKey'; value: string }
   | { type: 'test-start' }
-  | { type: 'test-success'; modelCount: number; baseUrl: string }
+  | {
+      type: 'test-success';
+      /** Discovered model IDs (preferred — the UI lists them). */
+      modelIds?: string[];
+      /** Legacy count-only form (kept for callers that only know the count). */
+      modelCount?: number;
+      baseUrl: string;
+    }
   | { type: 'test-failure'; error: string }
   | { type: 'register-start' }
   | { type: 'register-success' }
@@ -44,17 +57,21 @@ export function createInitialLocalFlowState(baseUrl = ''): LocalFlowState {
     phase: 'idle',
     baseUrl,
     apiKey: '',
+    modelIds: [],
     modelCount: 0,
     error: null,
     verifiedBaseUrl: null,
   };
 }
 
+function isBusy(state: LocalFlowState): boolean {
+  return state.phase === 'testing' || state.phase === 'registering';
+}
+
 /** A test may start only when no request is in flight and a base URL is
  * present. 'registered' is terminal (the parent refresh flips the card). */
 export function canTest(state: LocalFlowState): boolean {
-  if (state.phase === 'testing' || state.phase === 'registering') return false;
-  if (state.phase === 'registered') return false;
+  if (isBusy(state) || state.phase === 'registered') return false;
   return state.baseUrl.trim().length > 0;
 }
 
@@ -64,10 +81,41 @@ export function canRegister(state: LocalFlowState): boolean {
   return state.phase === 'verified' && state.modelCount > 0 && state.verifiedBaseUrl !== null;
 }
 
+/** The Connect button: one action that tests when needed, then registers. */
+export function canConnect(state: LocalFlowState): boolean {
+  if (isBusy(state) || state.phase === 'registered') return false;
+  return state.baseUrl.trim().length > 0;
+}
+
+export type LocalConnectStep =
+  | { step: 'test' }
+  | { step: 'register'; baseUrl: string }
+  | { step: 'blocked'; reason: string };
+
+/**
+ * What must happen next when the user clicks Connect. When a test already
+ * verified this exact URL, registration runs immediately (no re-entering the
+ * URL); otherwise the test runs first. `resume` after a failure lands back on
+ * 'test' because the URL is still in the field.
+ */
+export function nextConnectStep(state: LocalFlowState): LocalConnectStep {
+  if (isBusy(state)) return { step: 'blocked', reason: 'A connection request is already running.' };
+  if (state.phase === 'registered') {
+    return { step: 'blocked', reason: 'This endpoint is already connected.' };
+  }
+  if (state.baseUrl.trim().length === 0) {
+    return { step: 'blocked', reason: 'Enter the Base URL of your local LLM server first.' };
+  }
+  if (state.phase === 'verified' && state.verifiedBaseUrl) {
+    return { step: 'register', baseUrl: state.verifiedBaseUrl };
+  }
+  return { step: 'test' };
+}
+
 export function localFlowReducer(state: LocalFlowState, action: LocalFlowAction): LocalFlowState {
   switch (action.type) {
     case 'field': {
-      if (state.phase === 'testing' || state.phase === 'registering' || state.phase === 'registered') {
+      if (isBusy(state) || state.phase === 'registered') {
         return state;
       }
       // Any edit invalidates a previous verification: register exactly what
@@ -76,6 +124,7 @@ export function localFlowReducer(state: LocalFlowState, action: LocalFlowAction)
         ...state,
         [action.field]: action.value,
         phase: 'idle',
+        modelIds: [],
         modelCount: 0,
         error: null,
         verifiedBaseUrl: null,
@@ -83,16 +132,26 @@ export function localFlowReducer(state: LocalFlowState, action: LocalFlowAction)
     }
     case 'test-start': {
       if (!canTest(state)) return state;
-      return { ...state, phase: 'testing', error: null, modelCount: 0, verifiedBaseUrl: null };
+      return {
+        ...state,
+        phase: 'testing',
+        error: null,
+        modelIds: [],
+        modelCount: 0,
+        verifiedBaseUrl: null,
+      };
     }
     case 'test-success': {
+      const modelIds = action.modelIds ?? [];
+      const modelCount = modelIds.length > 0 ? modelIds.length : (action.modelCount ?? 0);
       // Distinguish a verified-but-empty endpoint from a working one — the
       // empty case stays registrable=false below via its own phase.
-      const verified = action.modelCount > 0;
+      const verified = modelCount > 0;
       return {
         ...state,
         phase: verified ? 'verified' : 'no-models',
-        modelCount: action.modelCount,
+        modelIds,
+        modelCount,
         verifiedBaseUrl: action.baseUrl,
         error: null,
       };
@@ -101,6 +160,7 @@ export function localFlowReducer(state: LocalFlowState, action: LocalFlowAction)
       return {
         ...state,
         phase: 'failed',
+        modelIds: [],
         modelCount: 0,
         verifiedBaseUrl: null,
         error: action.error,

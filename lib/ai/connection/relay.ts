@@ -25,7 +25,7 @@
 // Everything time/transport shaped is injectable for specs (local-relay.spec.ts).
 
 import type { FetchLike, TestConnectionDeps } from './testConnection';
-import { blockedLocalTargetReason } from './local';
+import { blockedLocalTargetReason, normalizeLocalBaseUrl } from './local';
 import {
   isRelayableTarget,
   relayModeFromEnv,
@@ -468,10 +468,26 @@ export function createRelayAwareFetch(
  * the plain server-side probe with its 5s default (direct behavior unchanged).
  * Routes pass the result straight into testLocalConnection/registerLocal.
  */
-export function relayProbeDeps(userId: string, baseUrl: string): TestConnectionDeps {
-  if (!userId || !relayEnabledFor(baseUrl.trim())) return {};
+export function relayProbeDeps(
+  userId: string,
+  baseUrl: string,
+  env: RelayEnabledEnv = {}
+): TestConnectionDeps {
+  if (!userId) return {};
+
+  // Decide on the NORMALIZED url: a scheme-less paste (`localhost:1234/v1`)
+  // parses as a bogus `localhost:` scheme, so classifying the raw input would
+  // skip the relay and make Vercel try to reach the user's machine directly.
+  const normalized = normalizeLocalBaseUrl(baseUrl);
+  const target = normalized.ok ? normalized.baseUrl : baseUrl.trim();
+  if (!relayEnabledFor(target, env)) return {};
+
   return {
-    fetchFn: createRelayAwareFetch(userId, { timeoutMs: RELAY_PROBE_FETCH_TIMEOUT_MS }),
+    fetchFn: createRelayAwareFetch(userId, {
+      timeoutMs: RELAY_PROBE_FETCH_TIMEOUT_MS,
+      deployed: env.deployed,
+      mode: env.mode,
+    }),
     timeoutMs: RELAY_PROBE_TIMEOUT_MS,
   };
 }
