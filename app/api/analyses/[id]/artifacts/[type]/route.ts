@@ -53,7 +53,9 @@ export async function GET(
     .select('data')
     .eq('analysis_id', id)
     .eq('artifact_type', type)
-    .single();
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (artifactError || !artifact) {
     return NextResponse.json({ artifact: null });

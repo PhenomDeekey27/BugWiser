@@ -70,6 +70,7 @@ TASK: Analyze the GitHub issue and repository code to identify the root cause of
 
 RULES:
 - Analyze the issue description, comments, and relevant source code
+- If the comments record an agreed approach between maintainers, follow that approach and state it in the explanation. Do not invent a conflicting approach without saying why the discussion is wrong.
 - Identify the most likely root cause based on evidence
 - Distinguish between confirmed evidence, strong inference, and weak inference
 - Do NOT fabricate code or evidence

@@ -30,12 +30,14 @@ export function AnalysisOverview({
         </h3>
         <div className="space-y-2">
           <div className="flex items-start gap-2">
-            <span className="text-xs font-mono text-primary-default">#{issue.number}</span>
+            <span className="text-xs font-mono text-primary-default">
+              {issue.number > 0 ? `#${issue.number}` : 'Reported'}
+            </span>
             <span className="text-sm text-bw-peach-light">{issue.title}</span>
           </div>
           <div className="flex items-center gap-2 text-xs text-bw-peach">
-            <span>by @{issue.author}</span>
-            <span>·</span>
+            {issue.author && <span>by @{issue.author}</span>}
+            {issue.author && <span>·</span>}
             <span>{issue.state}</span>
             <span>·</span>
             <span>{comments.length} comments</span>
@@ -57,6 +59,41 @@ export function AnalysisOverview({
           )}
         </div>
       </div>
+
+      {comments.length > 0 && (
+        <div className="rounded-lg bg-surface border border-border p-4 card-depth">
+          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach mb-2">
+            Discussion context
+          </h3>
+          <p className="text-xs text-bw-peach leading-relaxed mb-3">
+            Root-cause analysis reads this discussion before it inspects code. Where
+            maintainers agreed on an approach in the comments, the investigation follows
+            that approach and says so in the root cause.
+          </p>
+          <div className="space-y-3 max-h-80 overflow-y-auto pr-1 scrollbar-thin">
+            {comments.map((comment, index) => (
+              <div
+                key={comment.id || `${comment.author}-${index}`}
+                className="border-l-2 border-outline-variant pl-3"
+              >
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <span className="text-[10px] font-mono text-primary-default">
+                    @{comment.author || 'unknown'}
+                  </span>
+                  {comment.createdAt && (
+                    <span className="text-[10px] font-mono text-bw-peach">
+                      {comment.createdAt.slice(0, 10)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-bw-peach-light whitespace-pre-wrap leading-relaxed">
+                  {comment.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {fingerprint && (
         <div className="rounded-lg bg-surface border border-border p-4 card-depth">

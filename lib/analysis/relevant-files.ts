@@ -1,5 +1,12 @@
 import { createBackgroundClient } from '@/lib/supabase/background';
-import { getRepositoryAccessToken } from '@/lib/github/app/access';
+import {
+  fetchSnapshotFile,
+  resolveRepositorySnapshot,
+} from './repository-source';
+import {
+  buildRepositoryContext,
+  manifestPathsToFetch,
+} from './repository-context';
 import { generate } from '@/lib/ai/gateway';
 import { buildRelevantFileContext, RelevantFileContext } from '@/lib/ai/context';
 import { deterministicPreFilter } from '@/lib/ai/context/prefilter';
@@ -37,6 +44,27 @@ async function storeArtifact(
   }
 }
 
+/**
+ * Re-running discovery must not leave two artifacts of the same type behind:
+ * readers pick one row, and a duplicate makes the newest result ambiguous.
+ */
+async function replaceArtifact(
+  analysisId: string,
+  artifactType: string,
+  data: Record<string, unknown>
+) {
+  const supabase = createBackgroundClient();
+  const { error } = await supabase
+    .from('analysis_artifacts')
+    .delete()
+    .eq('analysis_id', analysisId)
+    .eq('artifact_type', artifactType);
+  if (error) {
+    console.error('[relevant-files] Failed to clear previous artifact:', artifactType, error.message);
+  }
+  await storeArtifact(analysisId, artifactType, data);
+}
+
 async function getArtifact(
   analysisId: string,
   artifactType: string
@@ -68,37 +96,6 @@ async function getRepositoryFiles(analysisId: string): Promise<RepositoryFileRec
   return (data as RepositoryFileRecord[]) || [];
 }
 
-async function fetchGitHubFile(
-  token: string,
-  owner: string,
-  repo: string,
-  path: string,
-  ref: string
-): Promise<{ path: string; content: string; size: number; sha: string } | null> {
-  try {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}`;
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'application/vnd.github.v3.raw',
-        Authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
-
-    if (!response.ok) return null;
-
-    const content = await response.text();
-    return {
-      path,
-      content,
-      size: content.length,
-      sha: response.headers.get('etag') || '',
-    };
-  } catch {
-    return null;
-  }
-}
-
 export async function runRelevantFileDiscovery(analysisId: string, actorUserId: string): Promise<void> {
   console.log(`[relevant-files] Starting relevant file discovery for ${analysisId}`);
 
@@ -120,14 +117,13 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       throw new Error('Analysis does not belong to the requesting user');
     }
 
-    // Installation token is resolved inside the job, not carried in from the
-    // browser, so long-running discovery never uses an expired session token.
-    const repositoryAccess = await getRepositoryAccessToken(
-      actorUserId,
-      analysis.repository_full_name
+    // The snapshot is resolved inside the job (installation token or public
+    // read), and every file is fetched at the SAME pinned commit the index was
+    // built from — never at a moving branch head.
+    const snapshot = await resolveRepositorySnapshot(analysis, actorUserId);
+    console.log(
+      `[relevant-files] Snapshot ${snapshot.fullName}@${snapshot.commitSha.slice(0, 12)} (${snapshot.source})`
     );
-    const token = repositoryAccess.token.token;
-    const [owner, repo] = analysis.repository_full_name.split('/');
 
     await updateAnalysis(analysisId, {
       status: 'relevant_file_discovery',
@@ -229,7 +225,7 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       discoverySource = 'ai';
     }
 
-    await storeArtifact(analysisId, 'relevant_files', {
+    await replaceArtifact(analysisId, 'relevant_files', {
       files: enrichedFiles,
       totalCandidates: candidates.length,
       validFiles: enrichedFiles.length,
@@ -252,7 +248,7 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       current_stage: 'relevant_files_fetch',
     });
 
-    console.log(`[relevant-files] Fetching ${enrichedFiles.length} files from GitHub`);
+    console.log(`[relevant-files] Fetching ${enrichedFiles.length} files at ${snapshot.commitSha.slice(0, 12)}`);
 
     const sourceFiles: Array<{
       path: string;
@@ -263,25 +259,96 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       lineCount: number;
     }> = [];
 
+    const unavailableFiles: Array<{ path: string; reason: string }> = [];
+    let totalBytes = 0;
+    const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+
     for (const file of enrichedFiles.slice(0, 15)) {
-      const fetched = await fetchGitHubFile(token, owner, repo, file.path, 'HEAD');
-      if (fetched) {
-        const lineCount = fetched.content.split('\n').length;
-        sourceFiles.push({
+      let fetched;
+      try {
+        fetched = await fetchSnapshotFile(snapshot, file.path);
+      } catch (err) {
+        unavailableFiles.push({
           path: file.path,
-          content: fetched.content,
-          size: fetched.size,
-          language: file.language,
-          sha: fetched.sha,
-          lineCount,
+          reason: err instanceof Error ? err.message : 'Source could not be retrieved.',
         });
-        console.log(`[relevant-files] Fetched ${file.path} (${fetched.size} bytes, ${lineCount} lines)`);
+        continue;
+      }
+
+      if (!fetched) {
+        unavailableFiles.push({
+          path: file.path,
+          reason: 'File was not retrievable at the pinned commit (missing, binary, or above the size limit).',
+        });
+        continue;
+      }
+
+      totalBytes += fetched.bytes;
+      if (totalBytes > MAX_TOTAL_BYTES) {
+        unavailableFiles.push({
+          path: file.path,
+          reason: 'Total source budget for this analysis was exceeded.',
+        });
+        continue;
+      }
+
+      const lineCount = fetched.content.split('\n').length;
+      sourceFiles.push({
+        path: file.path,
+        content: fetched.content,
+        size: fetched.bytes,
+        language: file.language,
+        sha: fetched.sha,
+        lineCount,
+      });
+      console.log(`[relevant-files] Fetched ${file.path} (${fetched.bytes} bytes, ${lineCount} lines)`);
+    }
+
+    await replaceArtifact(analysisId, 'source_files', {
+      files: sourceFiles,
+      totalFetched: sourceFiles.length,
+      unavailableFiles,
+      commitSha: snapshot.commitSha,
+      source: snapshot.source,
+    } as unknown as Record<string, unknown>);
+
+    // ── Grounded repository context (manifests, tests, symbols) ─────────────
+    const manifests: Array<{ path: string; content: string }> = [];
+    for (const path of manifestPathsToFetch(repositoryFiles)) {
+      try {
+        const manifest = await fetchSnapshotFile(snapshot, path);
+        if (manifest) manifests.push({ path, content: manifest.content });
+      } catch {
+        // A manifest that cannot be read is simply absent from the context.
       }
     }
 
-    await storeArtifact(analysisId, 'source_files', {
-      files: sourceFiles,
-      totalFetched: sourceFiles.length,
+    const repositoryContext = buildRepositoryContext(
+      repositoryFiles.map((file) => ({
+        path: file.path,
+        size: file.size,
+        language: file.language,
+        isIgnored: file.is_ignored,
+      })),
+      manifests,
+      sourceFiles.map((file) => ({ path: file.path, content: file.content }))
+    );
+
+    const contextArtifact = {
+      ...repositoryContext,
+      commitSha: snapshot.commitSha,
+      branch: snapshot.branch,
+      source: snapshot.source,
+      manifestsFetched: manifests.map((manifest) => manifest.path),
+      unavailableFiles,
+    };
+
+    await replaceArtifact(analysisId, 'repository_context', contextArtifact as unknown as Record<string, unknown>);
+
+    await replaceArtifact(analysisId, 'verification', {
+      ...repositoryContext.verification,
+      commitSha: snapshot.commitSha,
+      generatedAt: new Date().toISOString(),
     } as unknown as Record<string, unknown>);
 
     await updateAnalysis(analysisId, {
@@ -289,7 +356,9 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       current_stage: 'relevant_files_complete',
     });
 
-    console.log(`[relevant-files] Discovery complete: ${enrichedFiles.length} relevant files, ${sourceFiles.length} source files fetched`);
+    console.log(
+      `[relevant-files] Discovery complete: ${enrichedFiles.length} relevant files, ${sourceFiles.length} source files fetched, ${repositoryContext.verification.commands.length} verification commands detected (not run)`
+    );
 
   } catch (error) {
     const err = error as Error;

@@ -52,8 +52,13 @@ export function isUniqueViolation(error: DatabaseErrorLike | null | undefined): 
 /** Missing column/table (migration not applied yet) — reported distinctly. */
 export function isMissingSchema(error: DatabaseErrorLike | null | undefined): boolean {
   if (!error) return false;
+  // PostgREST schema-cache errors: PGRST204 (unknown column) / PGRST205
+  // (unknown table). These arrive instead of Postgres' own 42703/42P01 code.
   if (error.code === '42703' || error.code === '42P01') return true;
+  if (error.code === 'PGRST204' || error.code === 'PGRST205') return true;
+
   const message = (error.message ?? '').toLowerCase();
+  if (message.includes('schema cache') && message.includes('could not find')) return true;
   if (!message.includes('does not exist')) return false;
   return (
     message.includes('column') ||

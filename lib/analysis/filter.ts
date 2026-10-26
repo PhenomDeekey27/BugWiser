@@ -161,6 +161,41 @@ const ALWAYS_KEEP_FILES = new Set([
   '.github/dependabot.yml',
 ]);
 
+const SECRET_FILENAMES = new Set([
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test',
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  '.htpasswd',
+  'id_rsa',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+  'credentials',
+  'credentials.json',
+  'secrets.json',
+  'secrets.yml',
+  'secrets.yaml',
+]);
+
+const SECRET_EXTENSIONS = new Set(['pem', 'key', 'p12', 'pfx', 'jks', 'keystore']);
+
+/** Files whose contents must never be treated as indexable source. */
+export function isSecretFilePath(path: string): boolean {
+  const filename = getFilename(path).toLowerCase();
+  // Templates are safe and useful context; they contain no real values.
+  if (filename.endsWith('.example') || filename.endsWith('.template') || filename.endsWith('.sample')) {
+    return false;
+  }
+  if (SECRET_FILENAMES.has(filename)) return true;
+  if (filename.startsWith('.env.')) return true;
+  return SECRET_EXTENSIONS.has(getExtension(filename));
+}
+
 export interface TreeEntry {
   path: string;
   mode: string;
@@ -176,6 +211,37 @@ export interface FilteredFile {
   sha: string;
   language: string;
   isIgnored: boolean;
+  /** Why the file was excluded; only present on ignored entries. */
+  exclusionReason?: 'directory' | 'extension' | 'secret' | 'oversized';
+}
+
+export interface FilterOptions {
+  /** Files above this size are never treated as source. */
+  maxFileSizeBytes?: number;
+  /**
+   * Maximum number of non-ignored files. Exceeding it fails the whole index
+   * rather than silently analysing a partial repository.
+   */
+  maxActiveFiles?: number;
+}
+
+export const DEFAULT_FILTER_LIMITS = {
+  maxFileSizeBytes: 1024 * 1024,
+  maxActiveFiles: 40_000,
+} as const;
+
+export class RepositoryTooLargeError extends Error {
+  activeFiles: number;
+  limit: number;
+
+  constructor(activeFiles: number, limit: number) {
+    super(
+      `Repository has ${activeFiles.toLocaleString()} indexable files, above the ${limit.toLocaleString()} file limit.`
+    );
+    this.name = 'RepositoryTooLargeError';
+    this.activeFiles = activeFiles;
+    this.limit = limit;
+  }
 }
 
 function getFilename(path: string): string {
@@ -205,25 +271,47 @@ function isIgnoredFile(filename: string, ext: string): boolean {
 
 export function filterTreeEntries(
   entries: TreeEntry[],
-  detectLanguageFn: (path: string) => string
+  detectLanguageFn: (path: string) => string,
+  options: FilterOptions = {}
 ): FilteredFile[] {
-  return entries
+  const maxFileSizeBytes = options.maxFileSizeBytes ?? DEFAULT_FILTER_LIMITS.maxFileSizeBytes;
+  const maxActiveFiles = options.maxActiveFiles ?? DEFAULT_FILTER_LIMITS.maxActiveFiles;
+
+  const filtered = entries
     .filter((entry) => entry.type === 'blob')
-    .map((entry) => {
+    .map((entry): FilteredFile => {
       const filename = getFilename(entry.path);
       const ext = getExtension(filename);
-      const ignored = isIgnoredDirectory(entry.path) || isIgnoredFile(filename, ext);
-      const language = detectLanguageFn(entry.path);
+      const size = entry.size || 0;
+
+      let exclusionReason: FilteredFile['exclusionReason'];
+      if (isIgnoredDirectory(entry.path)) {
+        exclusionReason = 'directory';
+      } else if (isIgnoredFile(filename, ext)) {
+        exclusionReason = 'extension';
+      } else if (isSecretFilePath(entry.path)) {
+        exclusionReason = 'secret';
+      } else if (size > maxFileSizeBytes) {
+        exclusionReason = 'oversized';
+      }
 
       return {
         path: entry.path,
         type: 'file' as const,
-        size: entry.size || 0,
+        size,
         sha: entry.sha,
-        language,
-        isIgnored: ignored,
+        language: detectLanguageFn(entry.path),
+        isIgnored: exclusionReason !== undefined,
+        ...(exclusionReason ? { exclusionReason } : {}),
       };
     });
+
+  const activeCount = filtered.reduce((count, file) => count + (file.isIgnored ? 0 : 1), 0);
+  if (activeCount > maxActiveFiles) {
+    throw new RepositoryTooLargeError(activeCount, maxActiveFiles);
+  }
+
+  return filtered;
 }
 
 export function getActiveFiles(files: FilteredFile[]): FilteredFile[] {

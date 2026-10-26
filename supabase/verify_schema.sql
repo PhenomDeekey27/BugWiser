@@ -1,4 +1,4 @@
--- Schema verification for BugWiser migrations 001–019.
+-- Schema verification for BugWiser migrations 001–020.
 --
 -- Run in the Supabase SQL Editor of the project the APP actually uses
 -- (NEXT_PUBLIC_SUPABASE_URL -> https://<ref>.supabase.co).
@@ -60,6 +60,27 @@ with expected_columns(table_name, column_name) as (
     ('analyses', 'model_selection'),
     ('analyses', 'github_installation_id'),
     ('analyses', 'idempotency_key'),
+    -- 020 public repositories and workspaces
+    ('analyses', 'repository_source'),
+    ('analyses', 'repository_url'),
+    ('analyses', 'repository_branch'),
+    ('analyses', 'repository_default_branch'),
+    ('analyses', 'repository_commit'),
+    ('analyses', 'issue_source'),
+    ('analyses', 'issue_url'),
+    ('analyses', 'issue_description'),
+    ('analyses', 'workspace_status'),
+    ('analyses', 'workspace_staged_at'),
+    ('analysis_workspace_files', 'id'),
+    ('analysis_workspace_files', 'analysis_id'),
+    ('analysis_workspace_files', 'path'),
+    ('analysis_workspace_files', 'base_commit'),
+    ('analysis_workspace_files', 'base_content'),
+    ('analysis_workspace_files', 'content'),
+    ('analysis_workspace_files', 'diff'),
+    ('analysis_workspace_files', 'additions'),
+    ('analysis_workspace_files', 'deletions'),
+    ('analysis_workspace_files', 'created_at'),
     -- 009 / 015 provider connections
     ('provider_connections', 'id'),
     ('provider_connections', 'user_id'),
@@ -193,7 +214,10 @@ expected_indexes(index_name) as (
     ('idx_github_installation_repositories_full_name'),
     ('idx_github_installation_repositories_installation'),
     ('idx_analyses_github_installation'),
-    ('idx_analyses_user_idempotency_key')
+    ('idx_analyses_user_idempotency_key'),
+    ('idx_analyses_repository_commit'),
+    ('idx_analyses_repository_source'),
+    ('idx_analysis_workspace_files_analysis')
 ),
 missing_columns as (
   select e.table_name, e.column_name
@@ -230,5 +254,5 @@ select
     (select string_agg(kind || ': ' || object || coalesce('.' || detail, ''), E'\n'
                        order by kind, object, detail)
      from missing),
-    'ALL OK - schema matches migrations 001-019'
+    'ALL OK - schema matches migrations 001-020'
   ) as missing_detail;

@@ -4,6 +4,7 @@ import { buildRootCauseContext, RootCauseContext } from '@/lib/ai/context/root-c
 import { validateRootCause, parseRootCauseResponse } from '@/lib/ai/validation/root-cause';
 import { buildCanonicalContext, estimateContextSize, selectSourceFilesForStage } from '@/lib/ai/context/canonical';
 import { recordModelExecution, logStageStart, logStageResult } from '@/lib/ai/model-execution-tracker';
+import { verifyAffectedFiles } from './evidence-verify';
 
 async function updateAnalysis(
   analysisId: string,
@@ -209,21 +210,38 @@ export async function runRootCauseAnalysis(analysisId: string): Promise<void> {
       return;
     }
 
-    await storeArtifact(analysisId, 'root_cause', {
-      ...parsedResult,
-      provider: response.provider,
-      model: response.model,
-      duration,
-      usage: response.usage,
-      attemptNumber,
-      sourceFileCount: selectedSourceFiles.length,
-      sourceChars: sizeInfo.sourceFilesChars,
-      selection: {
-        mode: response.selection?.mode || 'auto',
-        reason: response.selection?.reason || '',
-        manualFallbackOccurred: response.manualFallbackOccurred || false,
-      },
-    } as unknown as Record<string, unknown>);
+    await storeArtifact(analysisId, 'root_cause', (() => {
+      const affected = verifyAffectedFiles(
+        parsedResult.affectedFiles.map((file) => file.path),
+        context.sourceFiles.map((file) => file.path)
+      );
+      return {
+        ...parsedResult,
+        affectedFiles: parsedResult.affectedFiles
+          .filter((file) => affected.files.includes(file.path))
+          .map((file) => ({ ...file, verified: true })),
+        unverifiedAffectedFiles: parsedResult.affectedFiles
+          .filter((file) => affected.unknownFiles.includes(file.path))
+          .map((file) => file.path),
+        verification: {
+          knownFileCount: context.sourceFiles.length,
+          verifiedFileCount: affected.files.length,
+          rejectedFileCount: affected.unknownFiles.length,
+        },
+        provider: response.provider,
+        model: response.model,
+        duration,
+        usage: response.usage,
+        attemptNumber,
+        sourceFileCount: selectedSourceFiles.length,
+        sourceChars: sizeInfo.sourceFilesChars,
+        selection: {
+          mode: response.selection?.mode || 'auto',
+          reason: response.selection?.reason || '',
+          manualFallbackOccurred: response.manualFallbackOccurred || false,
+        },
+      };
+    })() as unknown as Record<string, unknown>);
 
     await updateAnalysis(analysisId, {
       status: 'root_cause_complete',

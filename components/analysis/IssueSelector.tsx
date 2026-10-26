@@ -10,6 +10,7 @@ interface IssueSelectorProps {
   issues: Issue[];
   loading?: boolean;
   error?: string | null;
+  title?: string;
 }
 
 export function IssueSelector({
@@ -18,11 +19,12 @@ export function IssueSelector({
   issues,
   loading = false,
   error = null,
+  title = 'Select Issue',
 }: IssueSelectorProps) {
   return (
     <div>
       <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
-        Select Issue
+        {title}
       </h2>
 
       {loading && (
@@ -67,9 +69,16 @@ export function IssueSelector({
               )}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="text-sm font-mono text-bw-peach-light">
-                  #{issue.number}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono text-bw-peach-light">
+                    #{issue.number}
+                  </span>
+                  {issue.comments > 0 && (
+                    <span className="text-[10px] font-mono text-bw-peach">
+                      {issue.comments} comment{issue.comments === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </div>
                 <div className="flex gap-1">
                   {issue.labels.slice(0, 2).map((label, labelIdx) => (
                     <Badge key={`${labelIdx}-${label}`} variant="secondary" className="text-xs font-mono">

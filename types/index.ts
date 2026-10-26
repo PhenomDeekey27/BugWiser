@@ -77,6 +77,15 @@ export interface RelevantFile {
   source?: 'ai' | 'deterministic';
 }
 
+/**
+ * A file the analysis could not read at the pinned commit. It is listed so a
+ * missing snippet is never mistaken for a hallucinated one.
+ */
+export interface UnavailableSourceFile {
+  path: string;
+  reason: string;
+}
+
 export interface CodeLine {
   number: number;
   content: string;
@@ -109,6 +118,9 @@ export interface Evidence {
     code: string;
     explanation: string;
     type: 'direct' | 'supporting';
+    verification?: 'verified' | 'unverified' | 'rejected';
+    verificationReason?: string;
+    correctedRange?: { lineStart: number; lineEnd: number };
   }>;
   requiredFiles?: string[];
 }
@@ -305,6 +317,19 @@ export interface AnalysisRecord {
     | 'completed';
   model_strategy: AnalysisModelStrategy | null;
 
+  /** Where repository data came from. Legacy rows are 'installation'. */
+  repository_source?: 'installation' | 'public';
+  repository_url?: string | null;
+  repository_branch?: string | null;
+  repository_default_branch?: string | null;
+  /** Pinned commit the analysis was generated from. */
+  repository_commit?: string | null;
+  issue_source?: 'github' | 'description';
+  issue_url?: string | null;
+  issue_description?: string | null;
+  workspace_status?: 'none' | 'staged' | 'discarded';
+  workspace_staged_at?: string | null;
+
   error_message: string | null;
   total_files: number;
   filtered_files: number;
@@ -327,6 +352,8 @@ export interface AnalysisRecord {
   commit_message: string | null;
   changed_files: string[] | null;
   applied_at: string | null;
+  /** Set only when the fix was opened as a pull request. */
+  pull_request_url?: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -358,7 +385,12 @@ export interface AnalysisArtifactRecord {
     | 'evidence'
     | 'solution'
     | 'patch'
-    | 'model_execution';
+    | 'model_execution'
+    | 'model_selection'
+    | 'repository_context'
+    | 'evidence_verification'
+    | 'verification'
+    | 'workspace';
   data: Record<string, unknown>;
   created_at: string;
 }
@@ -460,4 +492,39 @@ export interface PatchResult {
       }>;
     }>;
   }>;
+}
+
+export interface VerificationCommandRecord {
+  name: string;
+  command: string;
+  source: string;
+  required: boolean;
+}
+
+export interface VerificationPlanRecord {
+  commands: VerificationCommandRecord[];
+  status: 'not_run';
+  reason: string;
+  regressionTests: string[];
+}
+
+export interface WorkspaceFileRecord {
+  id: string;
+  analysis_id: string;
+  path: string;
+  base_commit: string;
+  base_content: string;
+  content: string;
+  diff: string;
+  additions: number;
+  deletions: number;
+  created_at: string;
+}
+
+export interface WorkspaceSummary {
+  status: 'none' | 'staged' | 'discarded';
+  stagedAt: string | null;
+  baseCommit: string | null;
+  files: WorkspaceFileRecord[];
+  verification: VerificationPlanRecord | null;
 }

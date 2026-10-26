@@ -41,6 +41,14 @@ Summary: ${context.rootCause.rootCause.summary}
 Explanation: ${context.rootCause.rootCause.explanation}
 Confidence: ${context.rootCause.rootCause.confidence}`;
 
+  const commentsBlock =
+    context.comments.length > 0
+      ? `\n\nIssue discussion (${context.comments.length} total):\n${context.comments
+          .slice(0, 10)
+          .map((c) => `- ${c.author}: ${c.body.slice(0, 500)}`)
+          .join('\n')}`
+      : '';
+
   let evidenceBlock: string;
   if (context.evidence && context.evidence.evidence && context.evidence.evidence.length > 0) {
     evidenceBlock = `\n\nEvidence:
@@ -73,6 +81,7 @@ TASK: Generate a proposed solution to fix the identified root cause.
 
 RULES:
 - Base the solution on the root cause analysis and available evidence
+- If the issue comments record an agreed approach between maintainers, follow it; if your solution differs, say why
 - If evidence is unavailable, rely more heavily on root cause analysis and source code inspection
 - Provide clear, actionable steps
 - Consider potential side effects and risks
@@ -101,7 +110,7 @@ OUTPUT: Valid JSON with this exact structure:
   "confidence": 0.85
 }`;
 
-  const userMessage = `${issueBlock}${rootCauseBlock}${evidenceBlock}${relevantFilesBlock}${sourceCodeBlocks}`;
+  const userMessage = `${issueBlock}${commentsBlock}${rootCauseBlock}${evidenceBlock}${relevantFilesBlock}${sourceCodeBlocks}`;
 
   const estimatedTokens = estimateTokens(systemMessage + userMessage);
 

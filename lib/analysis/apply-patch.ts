@@ -1,6 +1,7 @@
 import { Patch, ApplyFixResult, ApplyFixError } from '@/types';
 import { applyHunksDetailed } from './patch-lines';
 import { describeApplyFailure, fileHasChanges, findSyntaxRegression } from './patch-verify';
+import { normalizeCommitSha } from '@/lib/github/public';
 import {
   getDefaultBranch,
   createBranch,
@@ -17,25 +18,49 @@ interface ApplyPatchContext {
   repo: string;
   analysisId: string;
   patch: Patch;
-  issueNumber: number;
+  /** GitHub issue number, or null/0 for a description-only analysis. */
+  issueNumber?: number | null;
+  /**
+   * Exact commit the patch was generated from. Pinning it keeps the fix branch
+   * on the analysed snapshot instead of drifting to whatever the branch head is
+   * now. Falls back to the default branch head only for legacy rows.
+   */
+  baseSha?: string | null;
+  /** Creating a pull request is always explicit opt-in. */
+  openPullRequest?: boolean;
+  commitMessage?: string | null;
 }
 
-function generateBranchName(issueNumber: number): string {
+function analysisLabel(ctx: Pick<ApplyPatchContext, 'issueNumber' | 'analysisId'>): string {
+  if (ctx.issueNumber && ctx.issueNumber > 0) return `issue-${ctx.issueNumber}`;
+  return `analysis-${ctx.analysisId.slice(0, 8)}`;
+}
+
+function generateBranchName(label: string): string {
   const shortId = Math.random().toString(36).substring(2, 8);
-  return `BugWiser/fix/issue-${issueNumber}-${shortId}`;
+  return `BugWiser/fix/${label}-${shortId}`;
 }
 
-function generateCommitMessage(patch: Patch, issueNumber: number): string {
-  const fileCount = patch.files.length;
-  return `fix: resolve issue #${issueNumber}\n\n${patch.summary}\n\nFiles changed: ${fileCount}`;
+export function generateCommitMessage(patch: Patch, ctx: ApplyPatchContext): string {
+  if (ctx.commitMessage && ctx.commitMessage.trim()) return ctx.commitMessage.trim();
+  const reference =
+    ctx.issueNumber && ctx.issueNumber > 0
+      ? `issue #${ctx.issueNumber}`
+      : `analysis ${ctx.analysisId.slice(0, 8)}`;
+  return `fix: resolve ${reference}\n\n${patch.summary}\n\nFiles changed: ${patch.files.length}`;
 }
 
 export { applyHunksToContent, applyHunksDetailed } from './patch-lines';
 
+/**
+ * Applies a validated patch to a new branch. Callers must have already staged
+ * and reviewed the patch in the analysis workspace; this function performs the
+ * remote write only after explicit approval.
+ */
 export async function applyPatchToGitHub(
   ctx: ApplyPatchContext
 ): Promise<ApplyFixResult | ApplyFixError> {
-  const { token, owner, repo, patch, issueNumber } = ctx;
+  const { token, owner, repo, patch } = ctx;
 
   if (!patch.files || patch.files.length === 0) {
     return {
@@ -56,12 +81,23 @@ export async function applyPatchToGitHub(
     };
   }
 
-  let branchName = generateBranchName(issueNumber);
+  const pinnedBase = ctx.baseSha ? normalizeCommitSha(ctx.baseSha) : null;
+  if (ctx.baseSha && !pinnedBase) {
+    return {
+      success: false,
+      error: 'The analysis base commit is not a valid full commit SHA.',
+      code: 'patch_validation_failed',
+    };
+  }
+  const baseSha = pinnedBase || defaultBranch.commitSha;
+
+  const label = analysisLabel(ctx);
+  let branchName = generateBranchName(label);
   let attempts = 0;
   while (attempts < 5) {
     const exists = await getBranchExists(token, owner, repo, branchName);
     if (!exists) break;
-    branchName = generateBranchName(issueNumber);
+    branchName = generateBranchName(label);
     attempts++;
   }
 
@@ -74,7 +110,7 @@ export async function applyPatchToGitHub(
   }
 
   try {
-    await createBranch(token, owner, repo, branchName, defaultBranch.commitSha);
+    await createBranch(token, owner, repo, branchName, baseSha);
   } catch (err) {
     const error = err as Error;
     return {
@@ -86,6 +122,7 @@ export async function applyPatchToGitHub(
 
   const appliedFiles: string[] = [];
   const fileErrors: string[] = [];
+  let headCommitSha = baseSha;
 
   for (const file of patch.files) {
     try {
@@ -112,7 +149,7 @@ export async function applyPatchToGitHub(
       }
 
       const commitMsg = `fix: update ${file.path}`;
-      await createOrUpdateFile(
+      const commit = await createOrUpdateFile(
         token,
         owner,
         repo,
@@ -122,6 +159,7 @@ export async function applyPatchToGitHub(
         branchName,
         current.sha
       );
+      if (commit?.sha) headCommitSha = commit.sha;
       appliedFiles.push(file.path);
     } catch (err) {
       const error = err as Error;
@@ -144,31 +182,38 @@ export async function applyPatchToGitHub(
     };
   }
 
-  const commitMessage = generateCommitMessage(patch, issueNumber);
+  const commitMessage = generateCommitMessage(patch, ctx);
   const branchUrl = `https://github.com/${owner}/${repo}/tree/${branchName}`;
 
   let pullRequestUrl: string | undefined;
-  try {
-    const prTitle = `fix: resolve issue #${issueNumber}`;
-    const prBody = `## Summary\n\n${patch.summary}\n\n## Changes\n\n${appliedFiles.map((f) => `- \`${f}\``).join('\n')}\n\n## Related Issue\n\nCloses #${issueNumber}`;
-    const pr = await createPullRequest(
-      token,
-      owner,
-      repo,
-      prTitle,
-      prBody,
-      branchName,
-      defaultBranch.name
-    );
-    pullRequestUrl = pr.html_url;
-  } catch {
-    // PR creation is optional; branch is still valid
+  if (ctx.openPullRequest === true) {
+    try {
+      const reference =
+        ctx.issueNumber && ctx.issueNumber > 0 ? `issue #${ctx.issueNumber}` : 'the reported issue';
+      const prTitle =
+        ctx.issueNumber && ctx.issueNumber > 0
+          ? `fix: resolve issue #${ctx.issueNumber}`
+          : `fix: ${patch.summary.split('\n')[0].slice(0, 120)}`;
+      const prBody = `## Summary\n\n${patch.summary}\n\n## Changes\n\n${appliedFiles.map((f) => `- \`${f}\``).join('\n')}\n\n## Related\n\nFixes ${reference}.`;
+      const pr = await createPullRequest(
+        token,
+        owner,
+        repo,
+        prTitle,
+        prBody,
+        branchName,
+        defaultBranch.name
+      );
+      pullRequestUrl = pr.html_url;
+    } catch {
+      // The branch is still valid; the caller reports the missing PR.
+    }
   }
 
   return {
     success: true,
     branch: branchName,
-    commitSha: defaultBranch.commitSha,
+    commitSha: headCommitSha,
     commitMessage,
     filesChanged: appliedFiles,
     repositoryFullName: `${owner}/${repo}`,

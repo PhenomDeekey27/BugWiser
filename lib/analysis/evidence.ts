@@ -5,6 +5,7 @@ import { buildEvidenceContext, EvidenceContext } from '@/lib/ai/context/evidence
 import { validateEvidence, parseEvidenceResponse } from '@/lib/ai/validation/evidence';
 import { buildCanonicalContext, estimateContextSize, selectSourceFilesForStage } from '@/lib/ai/context/canonical';
 import { recordModelExecution, logStageStart, logStageResult } from '@/lib/ai/model-execution-tracker';
+import { verifyEvidenceClaims } from './evidence-verify';
 
 async function updateAnalysis(
   analysisId: string,
@@ -73,7 +74,7 @@ export async function runEvidenceExtraction(analysisId: string): Promise<void> {
 
     console.log(`[evidence] Current status: ${analysis.status}, stage: ${analysis.current_stage}`);
 
-    await deleteArtifactsByType(analysisId, ['evidence', 'solution', 'patch']);
+    await deleteArtifactsByType(analysisId, ['evidence', 'evidence_verification', 'solution', 'patch']);
 
     await updateAnalysis(analysisId, {
       status: 'analyzing',
@@ -190,13 +191,56 @@ export async function runEvidenceExtraction(analysisId: string): Promise<void> {
       return;
     }
 
+    // Verify every claim against the files actually retrieved at the pinned
+    // commit. An invented file, range, or snippet must never be presented as
+    // verified evidence.
+    const sourceMap = new Map(context.sourceFiles.map((file) => [file.path, file.content]));
+    const knownPaths = context.sourceFiles.map((file) => file.path);
+    const verification = verifyEvidenceClaims(parsedResult.evidence, sourceMap, knownPaths);
+    const verificationByClaim = new Map(
+      [...verification.verified, ...verification.unverified, ...verification.rejected].map(
+        (entry) => [entry.claim, entry.verification]
+      )
+    );
+
+    const annotatedEvidence = parsedResult.evidence.map((claim) => {
+      const result = verificationByClaim.get(claim);
+      return {
+        ...claim,
+        ...(result
+          ? {
+              verification: result.status,
+              verificationReason: result.reason,
+              ...(result.correctedRange ? { correctedRange: result.correctedRange } : {}),
+            }
+          : {}),
+      };
+    });
+
+    const effectiveStatus =
+      parsedResult.status === 'evidence_found' && verification.summary.verified === 0
+        ? 'insufficient_evidence'
+        : parsedResult.status;
+
+    await storeArtifact(analysisId, 'evidence_verification', {
+      summary: verification.summary,
+      verified: verification.verified.map((entry) => entry.verification),
+      unverified: verification.unverified.map((entry) => entry.verification),
+      rejected: verification.rejected.map((entry) => entry.verification),
+      commitSha: analysis.repository_commit || null,
+    } as unknown as Record<string, unknown>);
+
     await storeArtifact(analysisId, 'evidence', {
-      status: parsedResult.status,
+      status: effectiveStatus,
       description: parsedResult.description,
-      reason: parsedResult.reason,
+      reason:
+        effectiveStatus !== parsedResult.status
+          ? 'No evidence reference could be confirmed against the retrieved source files.'
+          : parsedResult.reason,
       confidence: parsedResult.confidence,
-      evidence: parsedResult.evidence,
+      evidence: annotatedEvidence,
       requiredFiles: parsedResult.requiredFiles,
+      verificationSummary: verification.summary,
       provider: response.provider,
       model: response.model,
       duration,

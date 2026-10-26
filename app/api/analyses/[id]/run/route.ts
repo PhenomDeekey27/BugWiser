@@ -25,7 +25,7 @@ export async function POST(
     const db = createBackgroundClient();
     const { data: analysis, error: fetchError } = await db
       .from('analyses')
-      .select('id, user_id, status, repository_full_name, github_installation_id')
+      .select('id, user_id, status, repository_full_name, github_installation_id, repository_source, repository_commit')
       .eq('id', id)
       .single();
 
@@ -42,11 +42,21 @@ export async function POST(
     }
 
     // Fail fast when the installation no longer covers this repository, rather
-    // than starting a job that can only fail later.
-    try {
-      await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
-    } catch (error) {
-      return githubErrorResponse(error);
+    // than starting a job that can only fail later. Public analyses have no
+    // installation: their pinned commit is the only requirement.
+    if (analysis.repository_source === 'public') {
+      if (!analysis.repository_commit) {
+        return NextResponse.json(
+          { error: 'Public analysis is not pinned to a commit.', code: 'invalid_base_commit' },
+          { status: 409 }
+        );
+      }
+    } else {
+      try {
+        await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
+      } catch (error) {
+        return githubErrorResponse(error);
+      }
     }
 
     // after() hands this promise to the platform's waitUntil, so initialization

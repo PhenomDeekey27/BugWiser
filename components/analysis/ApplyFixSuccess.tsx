@@ -1,8 +1,10 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { CloneAndTestPanel } from '@/components/analysis/CloneAndTestPanel';
 
 interface ApplyFixSuccessProps {
+  analysisId: string;
   branch: string;
   commitSha: string;
   repositoryFullName: string;
@@ -13,14 +15,16 @@ interface ApplyFixSuccessProps {
 }
 
 export function ApplyFixSuccess({
+  analysisId,
   branch,
   commitSha,
   repositoryFullName,
   filesChanged,
+  commitMessage,
   htmlUrl,
   pullRequestUrl,
 }: ApplyFixSuccessProps) {
-  const shortSha = commitSha.substring(0, 7);
+  const shortSha = commitSha ? commitSha.substring(0, 7) : 'unknown';
 
   return (
     <div className="p-6 rounded-xl bg-surface border border-green-500/30 bg-green-500/5 card-depth-lg">
@@ -54,6 +58,16 @@ export function ApplyFixSuccess({
           </span>
           <span className="text-sm font-mono text-bw-peach-light">{shortSha}</span>
         </div>
+        {commitMessage && (
+          <div className="flex items-start gap-2">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
+              Message
+            </span>
+            <span className="text-sm font-mono text-bw-peach-light whitespace-pre-wrap">
+              {commitMessage}
+            </span>
+          </div>
+        )}
         {filesChanged.length > 0 && (
           <div className="flex items-start gap-2">
             <span className="text-xs font-mono font-bold uppercase tracking-wider text-bw-peach w-24 shrink-0">
@@ -101,6 +115,8 @@ export function ApplyFixSuccess({
           </a>
         )}
       </div>
+
+      <CloneAndTestPanel analysisId={analysisId} />
     </div>
   );
 }

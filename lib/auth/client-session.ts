@@ -16,7 +16,7 @@ export interface ClientAuthUser {
   login: string;
   name: string | null;
   avatarUrl: string;
-  authSource: 'github_app' | 'supabase';
+  authSource: 'github_app' | 'supabase' | 'guest';
 }
 
 export interface ClientInstallationSummary {
@@ -178,20 +178,29 @@ export function viewerFromSession(session: ClientAuthSession | null): ClientAuth
 }
 
 /**
- * Reports whether the GitHub session is currently valid. Initial value is
- * `true` so a server-rendered shell (which only renders for a session the
- * server already verified) does not flash a signed-out state before
+ * Reports whether the session is currently valid and how it was established.
+ * Initial value is `true` so a server-rendered shell (which only renders for a
+ * session the server already verified) does not flash a signed-out state before
  * hydration. A failed check keeps the current value instead of signing out.
  */
-export function useGitHubAuthValidity(): boolean {
-  const [valid, setValid] = useState(true);
+export interface ClientAuthState {
+  valid: boolean;
+  source: ClientAuthUser['authSource'] | null;
+}
+
+export function useClientAuthState(): ClientAuthState {
+  const [state, setState] = useState<ClientAuthState>({ valid: true, source: null });
 
   useEffect(() => {
     let alive = true;
 
     const check = async (force: boolean) => {
       const session = await fetchAuthSession({ force });
-      if (alive && session) setValid(session.authenticated);
+      if (!alive || !session) return;
+      setState({
+        valid: session.authenticated,
+        source: session.authenticated ? session.user?.authSource ?? null : null,
+      });
     };
 
     void check(false);
@@ -213,5 +222,14 @@ export function useGitHubAuthValidity(): boolean {
     };
   }, []);
 
-  return valid;
+  return state;
+}
+
+export function useGitHubAuthValidity(): boolean {
+  return useClientAuthState().valid;
+}
+
+/** `guest` means the visitor has no GitHub identity and no write access. */
+export function useAuthSource(): ClientAuthUser['authSource'] | null {
+  return useClientAuthState().source;
 }

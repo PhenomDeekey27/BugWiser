@@ -1,12 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { Patch, PatchFile, ApplyFixResult } from '@/types';
+import { Patch, PatchFile } from '@/types';
 import { toPhysicalLines } from '@/lib/analysis/patch-lines';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DiffViewer } from '@/components/code/DiffViewer';
-import { ApplyFixModal } from '@/components/analysis/ApplyFixModal';
 import { ApplyFixSuccess } from '@/components/analysis/ApplyFixSuccess';
 import { toast } from 'sonner';
 
@@ -14,11 +12,12 @@ interface PatchViewerProps {
   patch: Patch;
   analysisId: string;
   repositoryFullName: string;
-  issueNumber: number;
   patchStatus?: 'none' | 'pending' | 'applied' | 'failed' | null;
   createdBranch?: string | null;
   commitSha?: string | null;
+  commitMessage?: string | null;
   changedFiles?: string[] | null;
+  pullRequestUrl?: string | null;
 }
 
 function formatPatchAsDiff(patch: Patch): string {
@@ -181,15 +180,13 @@ export function PatchViewer({
   patch,
   analysisId,
   repositoryFullName,
-  issueNumber,
   patchStatus,
   createdBranch,
   commitSha,
+  commitMessage,
   changedFiles,
+  pullRequestUrl,
 }: PatchViewerProps) {
-  const [showApplyModal, setShowApplyModal] = useState(false);
-  const [applyResult, setApplyResult] = useState<ApplyFixResult | null>(null);
-
   const handleCopy = async () => {
     try {
       const diff = formatPatchAsDiff(patch);
@@ -200,19 +197,17 @@ export function PatchViewer({
     }
   };
 
-  const handleApplySuccess = (result: ApplyFixResult) => {
-    setApplyResult(result);
-    setShowApplyModal(false);
-  };
-
   if (patchStatus === 'applied' && createdBranch) {
     return (
       <ApplyFixSuccess
+        analysisId={analysisId}
         branch={createdBranch}
         commitSha={commitSha || ''}
         repositoryFullName={repositoryFullName}
         filesChanged={changedFiles || []}
-        commitMessage={`fix: resolve issue #${issueNumber}`}
+        commitMessage={commitMessage || ''}
+        pullRequestUrl={pullRequestUrl || undefined}
+        htmlUrl={`https://github.com/${repositoryFullName}/tree/${createdBranch}`}
       />
     );
   }
@@ -237,21 +232,6 @@ export function PatchViewer({
           >
             Copy Patch
           </Button>
-          <Button
-            size="sm"
-            className="btn-bw-primary font-medium"
-            onClick={() => setShowApplyModal(true)}
-            disabled={patchStatus === 'pending'}
-          >
-            {patchStatus === 'pending' ? (
-              <span className="flex items-center gap-2">
-                <span className="w-3 h-3 border-2 border-bw-peach-light/30 border-t-bw-peach-light rounded-full animate-spin" />
-                Applying...
-              </span>
-            ) : (
-              'Apply Fix to New Branch'
-            )}
-          </Button>
         </div>
       </div>
 
@@ -266,8 +246,9 @@ export function PatchViewer({
 
       <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/30 mb-4">
         <p className="text-xs text-green-400 leading-relaxed">
-          Your default branch will not be modified. A new fix branch will be
-          created from the latest commit.
+          The patch is applied to the pinned analysis commit in the isolated
+          workspace above. Your default branch is not modified, and no branch is
+          created until you explicitly push.
         </p>
       </div>
 
@@ -276,29 +257,6 @@ export function PatchViewer({
           <FileCard key={`${fileIdx}-${file.path}`} file={file} patchSummary={patch.summary} />
         ))}
       </div>
-
-      {showApplyModal && (
-        <ApplyFixModal
-          analysisId={analysisId}
-          repositoryFullName={repositoryFullName}
-          issueNumber={issueNumber}
-          patch={patch}
-          onClose={() => setShowApplyModal(false)}
-          onSuccess={handleApplySuccess}
-        />
-      )}
-
-      {applyResult && !showApplyModal && (
-        <ApplyFixSuccess
-          branch={applyResult.branch}
-          commitSha={applyResult.commitSha}
-          repositoryFullName={applyResult.repositoryFullName}
-          filesChanged={applyResult.filesChanged}
-          commitMessage={applyResult.commitMessage}
-          htmlUrl={applyResult.htmlUrl}
-          pullRequestUrl={applyResult.pullRequestUrl}
-        />
-      )}
     </div>
   );
 }

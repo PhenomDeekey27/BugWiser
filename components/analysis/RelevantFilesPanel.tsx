@@ -1,10 +1,11 @@
-import { RelevantFile } from '@/types';
+import { RelevantFile, UnavailableSourceFile } from '@/types';
 
 interface RelevantFilesPanelProps {
   files: RelevantFile[];
+  unavailableFiles?: UnavailableSourceFile[];
 }
 
-export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
+export function RelevantFilesPanel({ files, unavailableFiles = [] }: RelevantFilesPanelProps) {
   return (
     <div>
       <h2 className="text-lg font-semibold text-bw-peach-light mb-4">
@@ -31,6 +32,29 @@ export function RelevantFilesPanel({ files }: RelevantFilesPanelProps) {
           </div>
         ))}
       </div>
+
+      {unavailableFiles.length > 0 && (
+        <div className="mt-4 p-3 rounded-lg bg-surface-dim border border-yellow-500/30">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2 h-2 rounded-full bg-yellow-400" />
+            <span className="text-xs font-semibold text-yellow-400">
+              Files that could not be read at the pinned commit
+            </span>
+          </div>
+          <p className="text-xs text-bw-peach leading-relaxed mb-2">
+            Evidence citing these files cannot be verified. That is a retrieval limit,
+            not proof the location is wrong.
+          </p>
+          <ul className="space-y-1">
+            {unavailableFiles.map((file) => (
+              <li key={file.path} className="text-xs leading-relaxed">
+                <span className="font-mono text-bw-peach-light">{file.path}</span>
+                <span className="text-bw-peach"> — {file.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

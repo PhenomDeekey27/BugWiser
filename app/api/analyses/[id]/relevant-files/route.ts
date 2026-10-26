@@ -23,7 +23,7 @@ export async function POST(
   const db = createBackgroundClient();
   const { data: analysis, error: fetchError } = await db
     .from('analyses')
-    .select('id, user_id, status, repository_full_name, github_installation_id')
+    .select('id, user_id, status, repository_full_name, github_installation_id, repository_source')
     .eq('id', id)
     .single();
 
@@ -44,10 +44,12 @@ export async function POST(
     );
   }
 
-  try {
-    await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
-  } catch (error) {
-    return githubErrorResponse(error);
+  if (analysis.repository_source !== 'public') {
+    try {
+      await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
+    } catch (error) {
+      return githubErrorResponse(error);
+    }
   }
 
   if (analysis.status === 'failed') {

@@ -26,6 +26,8 @@ import {
   Evidence,
   Solution,
   Patch,
+  UnavailableSourceFile,
+  ApplyFixResult,
 } from '@/types';
 
 type ActiveTab = 'overview' | 'files' | 'root-cause' | 'evidence' | 'solution' | 'patch';
@@ -147,6 +149,7 @@ export default function InvestigationPage() {
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [repositoryFiles, setRepositoryFiles] = useState<RepositoryFileRecord[]>([]);
   const [relevantFiles, setRelevantFiles] = useState<RelevantFile[]>([]);
+  const [unavailableSourceFiles, setUnavailableSourceFiles] = useState<UnavailableSourceFile[]>([]);
   const [issueContext, setIssueContext] = useState<IssueContext | null>(null);
   const [comments, setComments] = useState<IssueComment[]>([]);
   const [rootCause, setRootCause] = useState<RootCause | null>(null);
@@ -320,7 +323,7 @@ export default function InvestigationPage() {
       let cancelled = false;
       const load = async () => {
         try {
-          const [filesRes, issueRes, commentsRes, relevantRes, rootCauseRes, evidenceRes, solutionRes, patchRes] = await Promise.all([
+          const [filesRes, issueRes, commentsRes, relevantRes, rootCauseRes, evidenceRes, solutionRes, patchRes, sourceRes] = await Promise.all([
             fetch(`/api/analyses/${analysisId}/repository-files`),
             fetch(`/api/analyses/${analysisId}/artifacts/issue_context`),
             fetch(`/api/analyses/${analysisId}/artifacts/issue_comments`),
@@ -329,6 +332,7 @@ export default function InvestigationPage() {
             fetch(`/api/analyses/${analysisId}/artifacts/evidence`),
             fetch(`/api/analyses/${analysisId}/artifacts/solution`),
             fetch(`/api/analyses/${analysisId}/artifacts/patch`),
+            fetch(`/api/analyses/${analysisId}/artifacts/source_files`),
           ]);
           if (cancelled) return;
           if (filesRes.ok) {
@@ -392,6 +396,23 @@ export default function InvestigationPage() {
               });
             }
           }
+          if (sourceRes.ok) {
+            const data = await sourceRes.json();
+            const unavailable = data.artifact?.data?.unavailableFiles;
+            if (Array.isArray(unavailable)) {
+              setUnavailableSourceFiles(
+                unavailable
+                  .filter(
+                    (entry: UnavailableSourceFile) =>
+                      entry && typeof entry.path === 'string' && typeof entry.reason === 'string'
+                  )
+                  .map((entry: UnavailableSourceFile) => ({
+                    path: entry.path,
+                    reason: entry.reason,
+                  }))
+              );
+            }
+          }
         } catch { /* ignore */ }
       };
       load();
@@ -410,6 +431,25 @@ export default function InvestigationPage() {
       setRecord(data.analysis);
     }
   };
+
+  // The push response already carries everything the patch tab needs, so the
+  // branch and clone panel appear without another round trip.
+  const handleApplied = useCallback((result: ApplyFixResult) => {
+    setRecord((prev) =>
+      prev
+        ? {
+            ...prev,
+            patch_status: 'applied',
+            created_branch: result.branch,
+            commit_sha: result.commitSha,
+            commit_message: result.commitMessage,
+            changed_files: result.filesChanged,
+            pull_request_url: result.pullRequestUrl || null,
+            applied_at: new Date().toISOString(),
+          }
+        : prev
+    );
+  }, []);
 
   const handleStartDiscovery = async () => {
     setStartingDiscovery(true);
@@ -584,7 +624,7 @@ export default function InvestigationPage() {
 
           {!loading && !error && showMainContent && record && (
             <>
-              <AnalysisHeader analysis={analysis} />
+              <AnalysisHeader analysis={analysis} record={record} />
 
               {(isComplete || record.status === 'ready_for_analysis' || record.status === 'relevant_files_ready' || isDiscoveryRunning) && (
                 <div className="mb-6 p-4 rounded-lg bg-surface border border-green-500/30 bg-green-500/5">
@@ -802,8 +842,10 @@ export default function InvestigationPage() {
                 record={record}
                 repositoryFiles={repositoryFiles}
                 relevantFiles={relevantFiles}
+                unavailableSourceFiles={unavailableSourceFiles}
                 issueContext={issueContext}
                 comments={comments}
+                onApplied={handleApplied}
               />
             </>
           )}

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
-import { signOut, useGitHubAuthValidity } from '@/lib/auth/client-session';
+import { signOut, useAuthSource, useGitHubAuthValidity } from '@/lib/auth/client-session';
 import { GitHubUser } from '@/types';
 import { toast } from 'sonner';
 import { BugWiserLogo } from './BugWiserLogo';
@@ -18,6 +18,7 @@ interface SidebarProps {
 const navigation = [
   { label: 'Dashboard', href: '/dashboard', icon: '◈' },
   { label: 'New Analysis', href: '/analysis/new', icon: '⊕' },
+  { label: 'Public Import', href: '/public', icon: '◇' },
   { label: 'AI Models', href: '/models', icon: '◪' },
 ];
 
@@ -25,6 +26,8 @@ export function Sidebar({ className, user }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const authValid = useGitHubAuthValidity();
+  const authSource = useAuthSource();
+  const isGuest = authSource === 'guest';
 
   const handleSignOut = async () => {
     await signOut(router);
@@ -79,7 +82,28 @@ export function Sidebar({ className, user }: SidebarProps) {
       <Separator className="my-2 bg-border" />
 
       <div className="px-3 py-2 space-y-1">
-        {authValid ? (
+        {authValid && isGuest ? (
+          <>
+            <div className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach cursor-default">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span className="text-xs font-mono uppercase tracking-wider">Guest Session</span>
+            </div>
+
+            <Link href="/auth/github" className="block px-3 py-2">
+              <Button className="w-full justify-center btn-bw-primary font-medium cursor-pointer">
+                Sign in with GitHub
+              </Button>
+            </Link>
+
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach hover:bg-surface-dim hover:text-error-default cursor-pointer transition-colors w-full"
+            >
+              <span className="text-base">↗</span>
+              <span>Sign Out</span>
+            </button>
+          </>
+        ) : authValid ? (
           <>
             <div className="flex items-center gap-3 px-3 py-2 rounded text-sm text-bw-peach cursor-default">
               <span className="w-2 h-2 rounded-full bg-green-500" />

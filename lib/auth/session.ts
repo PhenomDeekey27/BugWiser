@@ -32,8 +32,12 @@ export interface AuthUser {
   login: string;
   name: string | null;
   avatarUrl: string;
-  /** Which mechanism authenticated this request. */
-  source: 'github_app' | 'supabase';
+  /**
+   * Which mechanism authenticated this request. `guest` is a signed-cookie
+   * session backed by a provisioned Supabase user: it can own analyses but has
+   * no GitHub identity, installation, or write access.
+   */
+  source: 'github_app' | 'supabase' | 'guest';
 }
 
 export interface AppSession extends AuthUser {
@@ -132,9 +136,11 @@ export async function readAppSession(): Promise<AppSession | null> {
   const payload = verifySignedToken(raw, secret, 'session');
   if (!payload) return null;
 
-  const { uid, gid, login, name, avatar, sid } = payload;
+  const { uid, gid, login, name, avatar, sid, src } = payload;
   if (typeof uid !== 'string' || uid.length === 0) return null;
   if (typeof sid !== 'string' || sid.length < 16) return null;
+
+  const source = src === 'guest' ? 'guest' : src === 'supabase' ? 'supabase' : 'github_app';
 
   return {
     userId: uid,
@@ -142,7 +148,7 @@ export async function readAppSession(): Promise<AppSession | null> {
     login: typeof login === 'string' && login.length > 0 ? login : 'user',
     name: typeof name === 'string' ? name : null,
     avatarUrl: typeof avatar === 'string' ? avatar : '',
-    source: 'github_app',
+    source,
     sid,
     iat: payload.iat,
     exp: payload.exp,
@@ -195,6 +201,7 @@ export function buildSessionToken(user: AuthUser, nowMs: number = Date.now()): s
       login: user.login,
       name: user.name,
       avatar: user.avatarUrl,
+      src: user.source,
       sid: randomToken(24),
     },
     secret,
