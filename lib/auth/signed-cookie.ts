@@ -1,32 +1,21 @@
-// Pure signed-cookie helpers. No Next.js or Supabase imports so this module is
-// unit-testable without a request context.
+// Pure signed-cookie helpers for the OAuth `state` cookie. No Next.js imports so
+// this module is unit-testable without a request context.
 //
 // Format: base64url(JSON payload) + "." + base64url(HMAC-SHA256(payload))
-// The payload always carries a `typ` marker plus `iat`/`exp`, so one cookie can
-// never be replayed as another kind of cookie.
+// The payload always carries a `typ` marker plus `iat`/`exp`, so a state value
+// can never be replayed as another kind of cookie.
 
 import crypto from 'node:crypto';
-import {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_TTL_SECONDS,
-  PENDING_INSTALL_COOKIE,
-  PENDING_INSTALL_TTL_SECONDS,
-  SESSION_COOKIE,
-  SESSION_ROTATE_AFTER_SECONDS,
-  SESSION_TTL_SECONDS,
-} from './cookie-names.ts';
+import { OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_SECONDS } from './cookie-names.ts';
 
-export {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_TTL_SECONDS,
-  PENDING_INSTALL_COOKIE,
-  PENDING_INSTALL_TTL_SECONDS,
-  SESSION_COOKIE,
-  SESSION_ROTATE_AFTER_SECONDS,
-  SESSION_TTL_SECONDS,
-};
+export { OAUTH_STATE_COOKIE, OAUTH_STATE_TTL_SECONDS };
 
-export type SignedTokenType = 'session' | 'oauth_state' | 'pending_install';
+/**
+ * The session itself is sealed (encrypted), not merely signed: see
+ * `session-token.ts`. The HMAC type here exists only for short-lived values that
+ * carry no credential.
+ */
+export type SignedTokenType = 'oauth_state';
 
 export interface SignedTokenPayload {
   typ: SignedTokenType;
@@ -136,7 +125,10 @@ export function safeReturnTo(value: string | null | undefined, fallback = '/dash
   return value;
 }
 
-export function constantTimeEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+export function constantTimeEqual(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
   if (!a || !b) return false;
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');

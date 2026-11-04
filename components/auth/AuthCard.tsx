@@ -1,19 +1,19 @@
 'use client';
 
 import { useState } from 'react';
+import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { createClient } from '@/lib/supabase/client';
-import { BugWiserLogo } from '@/components/layout/BugWiserLogo';
 
 const permissions = [
-  'Read repository contents and metadata',
-  'Read issues',
-  'Read and write pull requests and branches (only when you apply a fix)',
+  'Read your GitHub profile',
+  'Read public, private, and organization repositories you can already access',
+  'Read issues and repository contents',
+  'Write pull requests and branches only when you apply a fix',
 ];
 
 function safeReturnTo(value: string | null): string {
-  if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\\\')) {
     return '/dashboard';
   }
   return value;
@@ -21,31 +21,21 @@ function safeReturnTo(value: string | null): string {
 
 export function AuthCard() {
   const [redirecting, setRedirecting] = useState(false);
-  const [legacyLoading, setLegacyLoading] = useState(false);
   const searchParams = useSearchParams();
   const error = searchParams.get('error');
+  // Correlation id from the server logs. Never contains a secret: it is only
+  // useful for quoting when reporting a sign-in failure.
+  const errorRef = searchParams.get('ref');
   const returnTo = safeReturnTo(searchParams.get('returnTo'));
 
   const startUrl = `/api/auth/github/start?returnTo=${encodeURIComponent(returnTo)}`;
 
   const handleGitHubLogin = () => {
     setRedirecting(true);
+    // A full page load is required: /api/auth/github/start answers with a 302 to
+    // github.com. Client-side navigation would try to render it as a page.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign(startUrl);
-  };
-
-  const handleLegacyLogin = async () => {
-    setLegacyLoading(true);
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithOAuth({
-      provider: 'github',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        scopes: 'repo read:user user:email',
-      },
-    });
-    if (authError) {
-      setLegacyLoading(false);
-    }
   };
 
   return (
@@ -66,13 +56,18 @@ export function AuthCard() {
               className="mb-6 p-3 rounded-lg border border-error-default/30 bg-error-container/10"
             >
               <p className="text-sm text-error-default text-center">{error}</p>
+              {errorRef && (
+                <p className="mt-2 text-center font-mono text-[11px] text-bw-dusty-rose">
+                  Reference: {errorRef}
+                </p>
+              )}
             </div>
           )}
 
           <p className="text-sm text-bw-peach text-center mb-6 leading-relaxed">
-            BugWiser signs you in with GitHub, then asks you to install the BugWiser
-            GitHub App on the repositories you choose. Only those repositories are
-            accessible.
+            BugWiser signs you in with GitHub OAuth. It can read the repositories your
+            GitHub account already has access to — public, private, and organization
+            repositories you belong to.
           </p>
 
           <div className="mb-6 p-4 rounded-xl bg-surface/50 border border-[rgba(70,50,40,0.08)]">
@@ -98,9 +93,8 @@ export function AuthCard() {
           <Button
             className="w-full btn-bw-primary h-11 font-medium cursor-pointer rounded-lg"
             onClick={handleGitHubLogin}
-            disabled={redirecting || legacyLoading}
           >
-            {redirecting ? 'Redirecting to GitHub…' : 'Continue with GitHub'}
+            Continue with GitHub
           </Button>
 
           {redirecting && (
@@ -115,17 +109,8 @@ export function AuthCard() {
 
           <div className="mt-6 pt-4 border-t border-[rgba(70,50,40,0.08)]">
             <p className="text-xs text-bw-dusty-rose mb-2">
-              Existing account with a GitHub sign-in? Use the legacy session while
-              the new GitHub App sign-in rolls out.
+              Sign in with GitHub to connect your account.
             </p>
-            <Button
-              variant="ghost"
-              className="w-full text-xs font-medium cursor-pointer"
-              onClick={handleLegacyLogin}
-              disabled={redirecting || legacyLoading}
-            >
-              {legacyLoading ? 'Connecting…' : 'Use legacy GitHub sign-in'}
-            </Button>
           </div>
 
           <p className="text-xs text-bw-dusty-rose text-center mt-4">

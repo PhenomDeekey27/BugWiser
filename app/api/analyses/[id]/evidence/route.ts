@@ -2,6 +2,7 @@ import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runEvidenceExtraction } from '@/lib/analysis/evidence';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 // See root-cause route: must outlive a relayed local-model generation.
 export const maxDuration = 300;
@@ -33,7 +34,7 @@ export async function POST(
     );
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json(
       { error: 'Forbidden' },
       { status: 403 }

@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/auth/session';
+import {
+  applyCredentialRefresh,
+  githubAuthErrorResponse,
+  resolveGitHubCredential,
+} from '@/lib/auth/github-token';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { Repository, Issue } from '@/types';
-import { resolveRepositoryAccess } from '@/lib/github/app/access';
-import { githubErrorResponse } from '@/lib/github/app/http';
+import { resolveRepositoryAccess } from '@/lib/github/access';
+import { githubErrorResponse } from '@/lib/github/http';
 import {
   ANALYSIS_IDEMPOTENCY_HEADER,
   isMissingSchema,
@@ -48,10 +52,14 @@ async function findExistingAnalysis(
 
 export async function POST(request: Request) {
   try {
-    const user = await getAuthenticatedUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    // An analysis reads the repository with the caller's own GitHub token, so a
+    // guest session (public imports only) and a revoked token are both refused
+    // here rather than starting a job that cannot read its source.
+    const credential = await resolveGitHubCredential();
+    if (!credential.ok) {
+      return githubAuthErrorResponse(credential.reason);
     }
+    const userId = credential.session.userId;
 
     let body: CreateAnalysisBody;
     try {
@@ -89,7 +97,7 @@ export async function POST(request: Request) {
     // Same operation retried (double submit / network retry): return the
     // analysis that already exists instead of inserting a second row.
     if (idempotencyKey) {
-      const existing = await findExistingAnalysis(db, user.userId, idempotencyKey);
+      const existing = await findExistingAnalysis(db, userId, idempotencyKey);
       if (existing) {
         return NextResponse.json({
           analysisId: existing.id,
@@ -99,19 +107,22 @@ export async function POST(request: Request) {
       }
     }
 
-    // Never trust the client's repository id/owner/name: resolve the repository
-    // through the signed-in user's GitHub App installation.
+    // Never trust the client's repository id/owner/name: GitHub decides whether
+    // this user can see the repository, and the resolved record is what we store.
     let access;
     try {
-      access = await resolveRepositoryAccess(user.userId, repository.fullName);
+      access = await resolveRepositoryAccess(
+        credential.credential.accessToken,
+        repository.fullName
+      );
     } catch (error) {
-      return githubErrorResponse(error);
+      return applyCredentialRefresh(githubErrorResponse(error), credential);
     }
 
     const { data: preference } = await db
       .from('user_model_preferences')
       .select('selected_strategy')
-      .eq('user_id', user.userId)
+      .eq('user_id', userId)
       .maybeSingle();
 
     const rawStrategy = preference?.selected_strategy || 'auto';
@@ -121,17 +132,19 @@ export async function POST(request: Request) {
     const { data: insertedRows, error: insertError } = await db
       .from('analyses')
       .insert({
-        user_id: user.userId,
+        user_id: userId,
         repository_id: String(access.repository.repoId),
         repository_full_name: access.repository.fullName,
         repository_owner: access.repository.owner,
         repository_name: access.repository.name,
+        repository_source: 'github',
         issue_number: issue.number,
         issue_title: issue.title,
         status: 'queued',
         current_stage: 'issue_context',
         model_strategy: modelStrategy,
-        github_installation_id: access.installationId,
+        // OAuth App authentication has no installation to record.
+        github_installation_id: null,
         idempotency_key: idempotencyKey,
       })
       .select();
@@ -140,7 +153,7 @@ export async function POST(request: Request) {
       // Concurrent double submit: the other request won the unique index.
       // Treat the loser exactly like a sequential retry.
       if (idempotencyKey && isUniqueViolation(insertError)) {
-        const existing = await findExistingAnalysis(db, user.userId, idempotencyKey);
+        const existing = await findExistingAnalysis(db, userId, idempotencyKey);
         if (existing) {
           return NextResponse.json({
             analysisId: existing.id,
@@ -181,7 +194,7 @@ export async function POST(request: Request) {
       .from('analyses')
       .select('*')
       .eq('id', insertedId)
-      .eq('user_id', user.userId)
+      .eq('user_id', userId)
       .single();
 
     if (fetchError || !analysis) {

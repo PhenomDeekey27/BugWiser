@@ -1,12 +1,16 @@
-// Cookie names and lifetimes shared by the session, the proxy (edge runtime)
-// and the OAuth/setup flows. Kept free of Node-only imports so it can be used
-// from middleware as well as route handlers.
+// Cookie names and lifetimes shared by the session, the proxy and the OAuth
+// flow. Kept free of Node-only imports so it can be used from `proxy.ts` as well
+// as route handlers.
 
+/** Sealed, HttpOnly application session (AES-256-GCM). */
 export const SESSION_COOKIE = 'bw_session';
-export const OAUTH_STATE_COOKIE = 'bw_oauth';
-export const PENDING_INSTALL_COOKIE = 'bw_pending_install';
 
-export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
-export const SESSION_ROTATE_AFTER_SECONDS = 24 * 60 * 60;
+/**
+ * Signed OAuth `state` for one authorization attempt. The callback accepts a
+ * state only if it matches this cookie, which binds the response to the browser
+ * that started the flow.
+ */
+export const OAUTH_STATE_COOKIE = 'bw_oauth_state';
+
+/** An authorization attempt must be completed within ten minutes. */
 export const OAUTH_STATE_TTL_SECONDS = 10 * 60;
-export const PENDING_INSTALL_TTL_SECONDS = 15 * 60;

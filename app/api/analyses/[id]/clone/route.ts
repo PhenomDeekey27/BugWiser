@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
+import {
+  applyCredentialRefresh,
+  resolveGitHubCredential,
+  type GitHubCredentialResult,
+} from '@/lib/auth/github-token';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
-import { getRepositoryAccessToken } from '@/lib/github/app/access';
 import { publicReadToken } from '@/lib/analysis/repository-source';
 import {
   buildClonePlan,
   loadCloneContext,
   loadCompareFiles,
 } from '@/lib/analysis/clone-instructions';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,28 +49,36 @@ export async function GET(
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  // Public imports never leave BugWiser, so their reads are anonymous. An
-  // installation analysis uses its token to read a private repository, and
-  // falls back to anonymous reads when the installation is gone: the clone
-  // commands themselves never carry credentials either way.
-  let token: string | null = null;
-  if (analysis.repository_source === 'public') {
-    token = publicReadToken();
-  } else {
-    try {
-      const access = await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
-      token = access.token.token;
-    } catch (error) {
+  // Public imports are read anonymously. An authenticated analysis uses the
+  // session's token for private repositories and falls back to anonymous reads
+  // when there is none: the clone commands never carry credentials either way.
+  let token: string | null = analysis.repository_source === 'public' ? publicReadToken() : null;
+  let credential: GitHubCredentialResult | null = null;
+
+  if (analysis.repository_source !== 'public') {
+    const resolved = await resolveGitHubCredential();
+    if (resolved.ok) {
+      credential = resolved;
+      token = resolved.credential.accessToken;
+    } else {
       console.warn(
-        '[api/analyses/clone] Falling back to anonymous reads:',
-        error instanceof Error ? error.message : String(error)
+        '[api/analyses/clone] No GitHub credential (%s); falling back to anonymous reads.',
+        resolved.reason
       );
+      token = publicReadToken();
     }
   }
+
+  // Every response below may carry a rotated GitHub credential, so one helper
+  // re-seals the session whenever a refresh happened.
+  const respond = (body: unknown, status = 200): NextResponse => {
+    const response = NextResponse.json(body, { status, headers: NO_STORE });
+    return credential ? applyCredentialRefresh(response, credential) : response;
+  };
 
   let context;
   try {
@@ -82,9 +95,9 @@ export async function GET(
       '[api/analyses/clone] Could not resolve the repository:',
       error instanceof Error ? error.message : String(error)
     );
-    return NextResponse.json(
+    return respond(
       { error: 'Could not resolve the repository for this analysis.', code: 'clone_lookup_failed' },
-      { status: 502, headers: NO_STORE }
+      502
     );
   }
 
@@ -99,21 +112,18 @@ export async function GET(
   });
 
   if (!plan.ok) {
-    return NextResponse.json(
-      { error: plan.message, code: plan.code },
-      { status: 400, headers: NO_STORE }
-    );
+    return respond({ error: plan.message, code: plan.code }, 400);
   }
 
   if (new URL(request.url).searchParams.get('diff') !== '1') {
-    return NextResponse.json({ plan: plan.plan }, { headers: NO_STORE });
+    return respond({ plan: plan.plan });
   }
 
   // A fork-hosted branch cannot be compared through this repository's compare
   // endpoint, and guessing an owner:branch form is not worth the risk. The plan
   // already carries git commands and a GitHub compare URL for that case.
   if (!plan.plan.compare.serverSide) {
-    return NextResponse.json(
+    return respond(
       {
         error:
           plan.plan.fixIsFork
@@ -122,7 +132,7 @@ export async function GET(
         code: 'compare_unavailable',
         compare: plan.plan.compare,
       },
-      { status: 409, headers: NO_STORE }
+      409
     );
   }
 
@@ -134,11 +144,11 @@ export async function GET(
   });
 
   if (!outcome.ok) {
-    return NextResponse.json(
+    return respond(
       { error: outcome.message, code: outcome.code },
-      { status: outcome.code === 'not_found' ? 404 : 502, headers: NO_STORE }
+      outcome.code === 'not_found' ? 404 : 502
     );
   }
 
-  return NextResponse.json({ compare: outcome.result }, { headers: NO_STORE });
+  return respond({ compare: outcome.result });
 }

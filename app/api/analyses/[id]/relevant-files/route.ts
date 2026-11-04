@@ -1,9 +1,14 @@
 import { NextResponse, after } from 'next/server';
+import {
+  applyCredentialRefresh,
+  githubAuthErrorResponse,
+  resolveGitHubCredential,
+  type GitHubCredentialResult,
+} from '@/lib/auth/github-token';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runRelevantFileDiscovery } from '@/lib/analysis/relevant-files';
-import { getRepositoryAccessToken } from '@/lib/github/app/access';
-import { githubErrorResponse } from '@/lib/github/app/http';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 // See root-cause route: must outlive a relayed local-model generation.
 export const maxDuration = 300;
@@ -31,7 +36,7 @@ export async function POST(
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -44,12 +49,18 @@ export async function POST(
     );
   }
 
+  // Discovery reads the pinned commit through this user's token. Resolve it
+  // before scheduling the stage so a dead credential is a visible 401 instead of
+  // a background failure.
+  let credential: GitHubCredentialResult | null = null;
+  let githubToken: string | null = null;
   if (analysis.repository_source !== 'public') {
-    try {
-      await getRepositoryAccessToken(user.userId, analysis.repository_full_name);
-    } catch (error) {
-      return githubErrorResponse(error);
+    const resolved = await resolveGitHubCredential();
+    if (!resolved.ok) {
+      return githubAuthErrorResponse(resolved.reason);
     }
+    credential = resolved;
+    githubToken = resolved.credential.accessToken;
   }
 
   if (analysis.status === 'failed') {
@@ -69,7 +80,7 @@ export async function POST(
   // A bare floating promise is frozen as soon as the response is sent.
   after(async () => {
     try {
-      await runRelevantFileDiscovery(id, user.userId);
+      await runRelevantFileDiscovery(id, user.userId, githubToken);
     } catch (err) {
       console.error('[api/relevant-files] Background discovery failed:', err);
       try {
@@ -90,5 +101,6 @@ export async function POST(
     }
   });
 
-  return NextResponse.json({ started: true });
+  const response = NextResponse.json({ started: true });
+  return credential ? applyCredentialRefresh(response, credential) : response;
 }

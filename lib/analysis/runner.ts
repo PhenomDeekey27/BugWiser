@@ -97,7 +97,11 @@ async function storeRepositoryFiles(
   }
 }
 
-export async function runAnalysisInitialization(analysisId: string, actorUserId: string): Promise<void> {
+export async function runAnalysisInitialization(
+  analysisId: string,
+  actorUserId: string,
+  githubToken: string | null
+): Promise<void> {
   console.log(`[analysis-runner] Starting analysis ${analysisId}`);
 
   try {
@@ -118,9 +122,9 @@ export async function runAnalysisInitialization(analysisId: string, actorUserId:
       throw new Error('Analysis does not belong to the requesting user');
     }
 
-    // Resolve the exact source of truth once: installation or public, and pin
+    // Resolve the exact source of truth once: authenticated or public, and pin
     // the commit SHA that every later stage must read from.
-    const snapshot = await resolveRepositorySnapshot(analysis, actorUserId);
+    const snapshot = await resolveRepositorySnapshot(analysis, { githubToken });
     console.log(
       `[analysis-runner] Source ${snapshot.source} ${snapshot.fullName}@${snapshot.commitSha.slice(0, 12)}`
     );
@@ -129,7 +133,7 @@ export async function runAnalysisInitialization(analysisId: string, actorUserId:
       repository_branch: snapshot.branch,
       repository_default_branch: snapshot.defaultBranch,
       repository_commit: snapshot.commitSha,
-      github_installation_id: snapshot.installationId,
+      github_installation_id: null,
     });
 
     // Step 1: Fetch Issue Context

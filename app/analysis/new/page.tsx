@@ -40,9 +40,7 @@ export default function NewAnalysisPage() {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
-  const [requiresInstallation, setRequiresInstallation] = useState(false);
-  const [requiresRepositorySelection, setRequiresRepositorySelection] = useState(false);
-  const [installUrl, setInstallUrl] = useState<string | null>(null);
+  const [requiresGitHub, setRequiresGitHub] = useState(false);
   const [manageUrl, setManageUrl] = useState<string | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
@@ -140,7 +138,7 @@ export default function NewAnalysisPage() {
         const data = await response.json().catch(() => null);
 
         if (!response.ok) {
-          // The server distinguishes "no installation" (200) from a real
+          // The server distinguishes "no GitHub identity" (200) from a real
           // failure (5xx). Never render a failure as an empty repository list.
           setReposError(
             data?.error || `We couldn't load your repositories (${response.status}).`
@@ -149,9 +147,7 @@ export default function NewAnalysisPage() {
         }
 
         setRepositories(data?.repositories || []);
-        setRequiresInstallation(Boolean(data?.requiresInstallation));
-        setRequiresRepositorySelection(Boolean(data?.requiresRepositorySelection));
-        setInstallUrl(data?.installUrl || null);
+        setRequiresGitHub(Boolean(data?.requiresGitHub));
         setManageUrl(data?.manageUrl || null);
       } catch {
         setReposError("We couldn't load your repositories. Please try again later.");
@@ -326,9 +322,7 @@ export default function NewAnalysisPage() {
               repositories={repositories}
               loading={reposLoading}
               error={reposError}
-              requiresInstallation={requiresInstallation}
-              requiresRepositorySelection={requiresRepositorySelection}
-              installUrl={installUrl}
+              requiresGitHub={requiresGitHub}
               manageUrl={manageUrl}
             />
           </div>

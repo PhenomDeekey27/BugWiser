@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import { clearAuthCookies } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
+import { logAuthEvent } from '@/lib/auth/log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * Signs out by clearing the session cookie.
+ *
+ * There is no server-side session row to revoke: the sealed cookie IS the
+ * session, and deleting it on the client is the whole operation. The GitHub
+ * token inside it can also be revoked at any time from GitHub's settings, which
+ * is the only revocation that matters if a cookie was ever copied.
+ */
 export async function POST() {
   const response = NextResponse.json(
     { ok: true },
@@ -12,15 +20,7 @@ export async function POST() {
   );
 
   clearAuthCookies(response);
-
-  // End the optional Supabase fallback session too. Failure here must not keep
-  // the BugWiser session alive, so it is best-effort.
-  try {
-    const supabase = await createClient();
-    await supabase.auth.signOut();
-  } catch {
-    // Ignore.
-  }
+  logAuthEvent('logout', 'session_ended');
 
   return response;
 }

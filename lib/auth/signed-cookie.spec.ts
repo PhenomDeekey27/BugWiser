@@ -37,62 +37,75 @@ const { test, suite, run } = (() => {
 
 const SECRET = 'a'.repeat(48);
 const NOW = 1_800_000_000_000;
+const TYPE = 'oauth_state' as const;
 
 suite('Signed cookie', () => {
   test('round-trips its payload', () => {
-    const token = signSignedToken({ uid: 'user-1', sid: 'session-1' }, SECRET, 'session', 60, NOW);
-    const payload = verifySignedToken(token, SECRET, 'session', NOW + 1000);
+    const token = signSignedToken(
+      { state: 'state-1', returnTo: '/dashboard', binding: 'b1' },
+      SECRET,
+      TYPE,
+      60,
+      NOW
+    );
+    const payload = verifySignedToken(token, SECRET, TYPE, NOW + 1000);
     assert.ok(payload);
-    assert.equal(payload.uid, 'user-1');
-    assert.equal(payload.sid, 'session-1');
-    assert.equal(payload.typ, 'session');
+    assert.equal(payload.state, 'state-1');
+    assert.equal(payload.returnTo, '/dashboard');
+    assert.equal(payload.binding, 'b1');
+    assert.equal(payload.typ, TYPE);
   });
 
   test('rejects a tampered payload', () => {
-    const token = signSignedToken({ uid: 'user-1' }, SECRET, 'session', 60, NOW);
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
     const [encoded, signature] = token.split('.');
     const forged = Buffer.from(
-      JSON.stringify({ typ: 'session', iat: NOW / 1000, exp: NOW / 1000 + 60, uid: 'admin' })
+      JSON.stringify({ typ: TYPE, iat: NOW / 1000, exp: NOW / 1000 + 60, state: 'attacker' })
     ).toString('base64url');
-    assert.equal(verifySignedToken(`${forged}.${signature}`, SECRET, 'session', NOW + 1000), null);
+    assert.equal(verifySignedToken(`${forged}.${signature}`, SECRET, TYPE, NOW + 1000), null);
     // Sanity: the original still verifies.
-    assert.ok(verifySignedToken(`${encoded}.${signature}`, SECRET, 'session', NOW + 1000));
+    assert.ok(verifySignedToken(`${encoded}.${signature}`, SECRET, TYPE, NOW + 1000));
   });
 
   test('rejects a tampered signature', () => {
-    const token = signSignedToken({ uid: 'user-1' }, SECRET, 'session', 60, NOW);
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
     const [encoded] = token.split('.');
-    assert.equal(verifySignedToken(`${encoded}.${'A'.repeat(43)}`, SECRET, 'session', NOW), null);
+    assert.equal(verifySignedToken(`${encoded}.${'A'.repeat(43)}`, SECRET, TYPE, NOW), null);
   });
 
   test('rejects the wrong secret', () => {
-    const token = signSignedToken({ uid: 'user-1' }, SECRET, 'session', 60, NOW);
-    assert.equal(verifySignedToken(token, 'b'.repeat(48), 'session', NOW), null);
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
+    assert.equal(verifySignedToken(token, 'b'.repeat(48), TYPE, NOW), null);
   });
 
   test('rejects an expired token', () => {
-    const token = signSignedToken({ uid: 'user-1' }, SECRET, 'session', 60, NOW);
-    assert.equal(verifySignedToken(token, SECRET, 'session', NOW + 61_000), null);
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
+    assert.equal(verifySignedToken(token, SECRET, TYPE, NOW + 61_000), null);
   });
 
-  test('rejects a token replayed as another cookie type', () => {
-    const token = signSignedToken({ state: 'x' }, SECRET, 'oauth_state', 60, NOW);
-    assert.equal(verifySignedToken(token, SECRET, 'session', NOW), null);
+  test('rejects a token whose type marker does not match', () => {
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
+    const [encoded, signature] = token.split('.');
+    const otherType = Buffer.from(
+      JSON.stringify({ typ: 'sealed_session', iat: NOW / 1000, exp: NOW / 1000 + 60 })
+    ).toString('base64url');
+    assert.equal(verifySignedToken(`${otherType}.${signature}`, SECRET, TYPE, NOW), null);
+    assert.ok(verifySignedToken(`${encoded}.${signature}`, SECRET, TYPE, NOW));
   });
 
   test('rejects a token issued in the future', () => {
-    const token = signSignedToken({ uid: 'user-1' }, SECRET, 'session', 60, NOW);
-    assert.equal(verifySignedToken(token, SECRET, 'session', NOW - 5 * 60_000), null);
+    const token = signSignedToken({ state: 'state-1' }, SECRET, TYPE, 60, NOW);
+    assert.equal(verifySignedToken(token, SECRET, TYPE, NOW - 5 * 60_000), null);
   });
 
   test('refuses to sign with a short secret', () => {
-    assert.throws(() => signSignedToken({ uid: 'x' }, 'short', 'session', 60, NOW));
-    assert.equal(verifySignedToken('a.b', 'short', 'session', NOW), null);
+    assert.throws(() => signSignedToken({ state: 'x' }, 'short', TYPE, 60, NOW));
+    assert.equal(verifySignedToken('a.b', 'short', TYPE, NOW), null);
   });
 
   test('never verifies empty or malformed input', () => {
     for (const value of [null, undefined, '', 'abc', 'a.b.c', '.']) {
-      assert.equal(verifySignedToken(value, SECRET, 'session', NOW), null);
+      assert.equal(verifySignedToken(value, SECRET, TYPE, NOW), null);
     }
   });
 });

@@ -103,8 +103,13 @@ export function AnalysisTabContent({
         <div>
           <WorkspacePanel
             analysisId={record.id}
+            repositoryFullName={record.repository_full_name}
             repositorySource={record.repository_source}
+            repositoryBranch={record.repository_branch ?? null}
+            repositoryCommit={record.repository_commit ?? null}
             patchStatus={record.patch_status}
+            createdBranch={record.created_branch}
+            commitSha={record.commit_sha}
             onApplied={onApplied}
           />
           <PatchViewer

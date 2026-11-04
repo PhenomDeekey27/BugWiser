@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolveOrCreateGuest } from '@/lib/auth/guest';
-import { setSessionCookie } from '@/lib/auth/session';
+import { guestSessionInput, setSessionCookie } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { publicErrorResponse } from '@/lib/github/public-http';
 import {
@@ -258,7 +258,7 @@ export async function POST(request: Request) {
       issueSource,
     });
 
-    if (guestCreated && cookieUser) setSessionCookie(response, cookieUser);
+    if (guestCreated && cookieUser) setSessionCookie(response, guestSessionInput(cookieUser));
     return response;
   } catch (error) {
     if (error instanceof PublicRepositoryError) {

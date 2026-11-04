@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/auth/session';
-import { fetchIssues, isPullRequest } from '@/lib/github/issues';
 import {
-  assertTokenPermissions,
-  getRepositoryAccessToken,
-} from '@/lib/github/app/access';
-import { githubErrorResponse } from '@/lib/github/app/http';
+  applyCredentialRefresh,
+  githubAuthErrorResponse,
+  resolveGitHubCredential,
+} from '@/lib/auth/github-token';
+import { fetchIssues, isPullRequest } from '@/lib/github/issues';
+import { githubErrorResponse } from '@/lib/github/http';
+import { parseRepositoryFullName } from '@/lib/github/repository-name';
 import { Issue } from '@/types';
 
 export const runtime = 'nodejs';
@@ -29,19 +30,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'page must be a positive integer' }, { status: 400 });
   }
 
-  const user = await getAuthenticatedUser();
-  if (!user) {
-    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const parsed = parseRepositoryFullName(`${owner}/${repo}`);
+  if (!parsed.ok) {
+    return NextResponse.json({ error: 'Invalid repository name' }, { status: 400 });
+  }
+
+  const credential = await resolveGitHubCredential();
+  if (!credential.ok) {
+    return githubAuthErrorResponse(credential.reason);
   }
 
   try {
-    const { token } = await getRepositoryAccessToken(user.userId, `${owner}/${repo}`);
-    assertTokenPermissions(token, { issues: 'read' });
-
+    // GitHub remains the authority on visibility: a repository this token cannot
+    // read answers 404, which the shared error mapping reports as not_found.
     const { issues: githubIssues } = await fetchIssues(
-      token.token,
-      owner,
-      repo,
+      credential.credential.accessToken,
+      parsed.owner,
+      parsed.repo,
       state || 'open',
       page,
       30
@@ -66,8 +71,11 @@ export async function GET(request: NextRequest) {
         repositoryId: `${owner}/${repo}`,
       }));
 
-    return NextResponse.json({ issues }, { headers: { 'Cache-Control': 'no-store' } });
+    return applyCredentialRefresh(
+      NextResponse.json({ issues }, { headers: { 'Cache-Control': 'no-store' } }),
+      credential
+    );
   } catch (error) {
-    return githubErrorResponse(error);
+    return applyCredentialRefresh(githubErrorResponse(error), credential);
   }
 }

@@ -8,12 +8,18 @@ import {
   stageAnalysisWorkspace,
 } from '@/lib/analysis/workspace';
 import {
-  assertTokenPermissions,
-  getRepositoryAccessToken,
-} from '@/lib/github/app/access';
-import { githubErrorResponse } from '@/lib/github/app/http';
+  applyCredentialRefresh,
+  githubAuthErrorResponse,
+  resolveGitHubCredential,
+} from '@/lib/auth/github-token';
+import {
+  assertRepositoryWriteAccess,
+  resolveRepositoryAccess,
+} from '@/lib/github/access';
+import { githubErrorResponse } from '@/lib/github/http';
 import { normalizeCommitSha } from '@/lib/github/public';
 import { Patch, ApplyFixError } from '@/types';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,8 +36,9 @@ interface ApplyBody {
  *
  *  1. default  -> stage the diff in the isolated analysis workspace (no remote write)
  *  2. push:true -> create a branch from the pinned commit, write the files, and
- *                  optionally open a pull request. Requires GitHub App write
- *                  access and is impossible for public-only analyses.
+ *                  optionally open a pull request. Requires write access with the
+ *                  user's own GitHub token and is impossible for public-only
+ *                  analyses.
  *
  * A bare POST is treated as step 1, never as a remote write.
  */
@@ -73,7 +80,7 @@ export async function POST(
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -170,15 +177,22 @@ export async function POST(
     );
   }
 
+  // GitHub decides whether this token may push. A repository the token cannot
+  // see is a 404; a visible repository without push permission is a 403.
+  const credential = await resolveGitHubCredential();
+  if (!credential.ok) {
+    return githubAuthErrorResponse(credential.reason);
+  }
+
   let repositoryAccess;
   try {
-    repositoryAccess = await getRepositoryAccessToken(
-      user.userId,
+    repositoryAccess = await resolveRepositoryAccess(
+      credential.credential.accessToken,
       analysis.repository_full_name
     );
-    assertTokenPermissions(repositoryAccess.token, { contents: 'write' });
+    assertRepositoryWriteAccess(repositoryAccess.repository);
   } catch (error) {
-    return githubErrorResponse(error);
+    return applyCredentialRefresh(githubErrorResponse(error), credential);
   }
 
   await db
@@ -190,7 +204,7 @@ export async function POST(
   const { owner, name: repo } = repositoryAccess.repository;
 
   const result = await applyPatchToGitHub({
-    token: repositoryAccess.token.token,
+    token: credential.credential.accessToken,
     owner,
     repo,
     analysisId: id,
@@ -211,12 +225,15 @@ export async function POST(
     const isPermissionError =
       errorResult.error?.includes('404') || errorResult.error?.includes('403');
 
-    return NextResponse.json(
-      {
-        ...errorResult,
-        code: isPermissionError ? 'insufficient_permissions' : errorResult.code,
-      },
-      { status: 400 }
+    return applyCredentialRefresh(
+      NextResponse.json(
+        {
+          ...errorResult,
+          code: isPermissionError ? 'insufficient_permissions' : errorResult.code,
+        },
+        { status: 400 }
+      ),
+      credential
     );
   }
 
@@ -230,10 +247,11 @@ export async function POST(
       changed_files: result.filesChanged,
       applied_at: new Date().toISOString(),
       pull_request_url: result.pullRequestUrl || null,
-      github_installation_id: repositoryAccess.installationId,
+      // OAuth App authentication has no installation to record.
+      github_installation_id: null,
     })
     .eq('id', id)
     .eq('user_id', user.userId);
 
-  return NextResponse.json({ mode: 'pushed', ...result });
+  return applyCredentialRefresh(NextResponse.json({ mode: 'pushed', ...result }), credential);
 }

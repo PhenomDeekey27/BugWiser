@@ -317,8 +317,11 @@ export interface AnalysisRecord {
     | 'completed';
   model_strategy: AnalysisModelStrategy | null;
 
-  /** Where repository data came from. Legacy rows are 'installation'. */
-  repository_source?: 'installation' | 'public';
+  /**
+   * Where repository data came from. `github` is a token-authenticated read;
+   * `installation` only appears on rows created by the former GitHub App flow.
+   */
+  repository_source?: 'github' | 'installation' | 'public';
   repository_url?: string | null;
   repository_branch?: string | null;
   repository_default_branch?: string | null;

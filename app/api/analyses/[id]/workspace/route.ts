@@ -7,6 +7,7 @@ import {
   stageAnalysisWorkspace,
 } from '@/lib/analysis/workspace';
 import type { Patch } from '@/types';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,7 +76,7 @@ export async function POST(
   if (analysisError || !analysis) {
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

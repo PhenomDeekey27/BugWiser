@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolveOrCreateGuest } from '@/lib/auth/guest';
-import { setSessionCookie } from '@/lib/auth/session';
+import { guestSessionInput, setSessionCookie } from '@/lib/auth/session';
 import { publicErrorResponse } from '@/lib/github/public-http';
 import {
   fetchPublicBranches,
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
       { headers: { 'Cache-Control': 'no-store' } }
     );
 
-    if (guestCreated && cookieUser) setSessionCookie(response, cookieUser);
+    if (guestCreated && cookieUser) setSessionCookie(response, guestSessionInput(cookieUser));
     return response;
   } catch (error) {
     return publicErrorResponse(error);

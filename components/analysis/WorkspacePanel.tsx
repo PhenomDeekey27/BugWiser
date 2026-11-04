@@ -4,15 +4,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { UnifiedDiffView } from '@/components/code/UnifiedDiffView';
+import { LocalTestPanel } from '@/components/analysis/LocalTestPanel';
 import { toast } from 'sonner';
 import type { ApplyFixError, ApplyFixResult, WorkspaceSummary } from '@/types';
 
 interface WorkspacePanelProps {
   analysisId: string;
-  repositorySource?: 'installation' | 'public' | null;
+  repositoryFullName: string;
+  repositorySource?: 'github' | 'installation' | 'public' | null;
+  repositoryBranch?: string | null;
+  repositoryCommit?: string | null;
   patchStatus?: 'none' | 'pending' | 'applied' | 'failed' | null;
+  createdBranch?: string | null;
+  commitSha?: string | null;
   onApplied?: (result: ApplyFixResult) => void;
 }
+
+/** Which GitHub action the confirmation panel is currently asking about. */
+type PushIntent = 'branch' | 'pull_request';
 
 interface StageResponse {
   ok: boolean;
@@ -24,16 +33,20 @@ interface StageResponse {
 
 export function WorkspacePanel({
   analysisId,
+  repositoryFullName,
   repositorySource,
+  repositoryBranch,
+  repositoryCommit,
   patchStatus,
+  createdBranch,
+  commitSha,
   onApplied,
 }: WorkspacePanelProps) {
   const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [staging, setStaging] = useState(false);
   const [pushing, setPushing] = useState(false);
-  const [confirmPush, setConfirmPush] = useState(false);
-  const [openPullRequest, setOpenPullRequest] = useState(false);
+  const [pendingPush, setPendingPush] = useState<PushIntent | null>(null);
   const [pushed, setPushed] = useState<ApplyFixResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,7 +122,7 @@ export function WorkspacePanel({
         setError(`Could not discard the workspace (${response.status}).`);
         return;
       }
-      setConfirmPush(false);
+      setPendingPush(null);
       await loadWorkspace();
       toast.success('Workspace discarded');
     } catch {
@@ -117,7 +130,7 @@ export function WorkspacePanel({
     }
   };
 
-  const handlePush = async () => {
+  const handlePush = async (intent: PushIntent) => {
     setPushing(true);
     setError(null);
     try {
@@ -127,7 +140,7 @@ export function WorkspacePanel({
         body: JSON.stringify({
           confirm: true,
           push: true,
-          createPullRequest: openPullRequest,
+          createPullRequest: intent === 'pull_request',
         }),
       });
       const data = await response.json().catch(() => null);
@@ -136,9 +149,11 @@ export function WorkspacePanel({
         setError(failure?.error || `Could not push the branch (${response.status}).`);
         return;
       }
-      setConfirmPush(false);
+      setPendingPush(null);
       setPushed(data as ApplyFixResult);
-      toast.success('Branch pushed to GitHub');
+      toast.success(
+        intent === 'pull_request' ? 'Branch pushed and pull request opened' : 'Branch pushed to GitHub'
+      );
       onApplied?.(data as ApplyFixResult);
     } catch {
       setError('Could not push the branch. Check your connection and try again.');
@@ -155,14 +170,14 @@ export function WorkspacePanel({
     <div className="rounded-lg border border-border bg-surface p-4 mb-4 card-depth">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-bw-peach-light">Isolated Workspace</h3>
+          <h3 className="text-sm font-semibold text-bw-peach-light">Apply Fix</h3>
           <Badge
             variant="outline"
             className={`text-[10px] font-mono ${
               staged ? 'border-green-500/50 text-green-400' : 'border-border text-bw-peach'
             }`}
           >
-            {loading ? 'loading' : staged ? 'staged' : 'empty'}
+            {loading ? 'loading' : staged ? 'applied in workspace' : 'not applied'}
           </Badge>
           {workspace?.baseCommit && (
             <span className="text-[10px] font-mono text-bw-peach" title={workspace.baseCommit}>
@@ -171,7 +186,7 @@ export function WorkspacePanel({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {staged && !alreadyApplied && (
             <Button
               size="sm"
@@ -185,19 +200,79 @@ export function WorkspacePanel({
           )}
           <Button
             size="sm"
-            className="btn-bw-primary font-medium"
+            variant={staged ? 'outline' : 'default'}
+            className={staged ? 'border-border text-bw-peach' : 'btn-bw-primary font-medium'}
             onClick={() => void handleStage()}
             disabled={staging || pushing || alreadyApplied}
           >
-            {staging ? 'Staging…' : staged ? 'Re-stage patch' : 'Stage in workspace'}
+            {staging ? 'Applying…' : staged ? 'Re-apply fix' : 'Apply Fix'}
           </Button>
+
+          {staged && !alreadyApplied && !isPublic && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-border text-bw-peach"
+                onClick={() => setPendingPush('branch')}
+                disabled={pushing || staging}
+              >
+                Push branch
+              </Button>
+              <Button
+                size="sm"
+                className="btn-bw-primary font-medium"
+                onClick={() => setPendingPush('pull_request')}
+                disabled={pushing || staging}
+              >
+                Raise PR
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
       <p className="mt-2 text-xs text-bw-peach leading-relaxed">
-        The patch is applied to the exact commit above. GitHub is not modified until
-        you explicitly push.
+        Apply Fix writes the patch into an isolated workspace pinned to the commit above.
+        GitHub is not modified until you push a branch or raise a pull request.
       </p>
+
+      {pendingPush && (
+        <div className="mt-3 rounded border border-primary-container/40 bg-surface-dim p-3 space-y-2">
+          <p className="text-xs text-bw-peach-light leading-relaxed">
+            {pendingPush === 'pull_request'
+              ? 'Push the staged files to a new branch and open a pull request against '
+              : 'Push the staged files to a new branch created from '}
+            <span className="font-mono">{repositoryBranch || workspace?.baseCommit?.slice(0, 10)}</span>?
+            {pendingPush === 'branch' && ' The default branch is never modified.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="btn-bw-primary font-medium"
+              onClick={() => void handlePush(pendingPush)}
+              disabled={pushing}
+            >
+              {pushing
+                ? pendingPush === 'pull_request'
+                  ? 'Raising PR…'
+                  : 'Pushing…'
+                : pendingPush === 'pull_request'
+                  ? 'Confirm & raise PR'
+                  : 'Confirm push'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-border text-bw-peach"
+              onClick={() => setPendingPush(null)}
+              disabled={pushing}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="mt-3 rounded border border-error-container/50 bg-error-container/20 p-2">
@@ -300,51 +375,21 @@ export function WorkspacePanel({
                 This patch has already been pushed to a branch on GitHub.
               </p>
             </div>
-          ) : confirmPush ? (
-            <div className="rounded border border-primary-container/40 bg-surface-dim p-3 space-y-2">
-              <p className="text-xs text-bw-peach-light leading-relaxed">
-                Push the staged files to a new branch created from{' '}
-                <span className="font-mono">{workspace?.baseCommit?.slice(0, 10)}</span>? The
-                default branch is never modified.
-              </p>
-              <label className="flex items-center gap-2 text-xs text-bw-peach">
-                <input
-                  type="checkbox"
-                  checked={openPullRequest}
-                  onChange={(event) => setOpenPullRequest(event.target.checked)}
-                />
-                Also open a pull request
-              </label>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  className="btn-bw-primary font-medium"
-                  onClick={() => void handlePush()}
-                  disabled={pushing}
-                >
-                  {pushing ? 'Pushing…' : 'Confirm push'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-border text-bw-peach"
-                  onClick={() => setConfirmPush(false)}
-                  disabled={pushing}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <Button
-              size="sm"
-              className="btn-bw-primary font-medium"
-              onClick={() => setConfirmPush(true)}
-              disabled={pushing}
-            >
-              Push branch to GitHub
-            </Button>
-          )}
+          ) : null}
+        </div>
+      )}
+
+      {(staged || alreadyApplied) && (
+        <div className="mt-3">
+          <LocalTestPanel
+            repositoryFullName={repositoryFullName}
+            baseBranch={repositoryBranch ?? null}
+            baseCommit={workspace?.baseCommit ?? repositoryCommit ?? null}
+            fixBranch={createdBranch ?? null}
+            fixCommit={commitSha ?? null}
+            stagedFiles={staged ? files.map((file) => ({ path: file.path, diff: file.diff })) : null}
+            verification={verification ? { commands: verification.commands } : null}
+          />
         </div>
       )}
     </div>

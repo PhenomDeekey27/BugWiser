@@ -6,13 +6,17 @@ import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import { StatsGrid } from '@/components/dashboard/StatsGrid';
 import { RecentAnalyses } from '@/components/dashboard/RecentAnalyses';
 import { WelcomeToast } from '@/components/dashboard/WelcomeToast';
-import { GitHubStatusToast } from '@/components/dashboard/GitHubStatusToast';
-import { GitHubConnectionCard, type GitHubInstallationView } from '@/components/dashboard/GitHubConnectionCard';
+import {
+  GitHubConnectionCard,
+  type ConnectionCheck,
+} from '@/components/dashboard/GitHubConnectionCard';
 import { Button } from '@/components/ui/button';
-import { getAuthenticatedUser, viewerFromAuthUser } from '@/lib/auth/session';
+import { authUserFromSession, readAppSession, viewerFromAuthUser } from '@/lib/auth/session';
+import { isGitHubCredentialExpired } from '@/lib/auth/session-token';
 import { createBackgroundClient } from '@/lib/supabase/background';
-import { getInstallationStatus } from '@/lib/github/app/access';
-import { githubAppInstallUrl } from '@/lib/github/app/config';
+import { listAccessibleRepositories } from '@/lib/github/access';
+import { GitHubError } from '@/lib/github/errors';
+import { githubOAuthManageUrl, isGitHubOAuthConfigured } from '@/lib/github/oauth/config';
 import { summarizeAnalyses } from '@/lib/analysis/dashboard-analyses';
 import { Analysis, AnalysisRecord } from '@/types';
 
@@ -61,44 +65,45 @@ function recordToAnalysis(record: AnalysisRecord): Analysis {
 }
 
 export default async function DashboardPage() {
-  const user = await getAuthenticatedUser();
-  if (!user) {
+  const session = await readAppSession();
+  if (!session) {
     // Backup for the middleware's protected-route redirect — same destination.
     redirect('/auth/github');
   }
 
+  const user = authUserFromSession(session);
   const githubUser = viewerFromAuthUser(user);
 
-  let repoCount: string | number = '—';
-  let installation: {
-    configured: boolean;
-    installations: GitHubInstallationView[];
-    repositoryCount: number;
-    installUrl: string | null;
-    manageUrl: string;
-  } = {
-    configured: false,
-    installations: [],
-    repositoryCount: 0,
-    installUrl: githubAppInstallUrl(),
-    manageUrl: 'https://github.com/settings/installations',
-  };
+  // GitHub itself is the authority on how many repositories this account can
+  // read. The credential is used as-is here: a server component cannot write
+  // cookies, so a refresh belongs to `/api/auth/session`, not to this render.
+  let repositoryCount: number | null = null;
+  let connectionCheck: ConnectionCheck = 'not_checked';
 
-  try {
-    const status = await getInstallationStatus(user.userId);
-    repoCount = status.repositoryCount;
-    installation = {
-      configured: status.configured,
-      installations: status.installations,
-      repositoryCount: status.repositoryCount,
-      installUrl: status.installUrl || githubAppInstallUrl(),
-      manageUrl: status.manageUrl,
-    };
-  } catch (error) {
-    // GitHub tables unavailable or a transient read failure: keep the card
-    // honest ("not configured") instead of failing the whole dashboard.
-    console.error('[dashboard] Failed to read GitHub installation status:', (error as Error).message);
+  if (user.source === 'github') {
+    if (!session.github || isGitHubCredentialExpired(session.github)) {
+      connectionCheck = 'reauth_required';
+    } else {
+      try {
+        const { repositories } = await listAccessibleRepositories(
+          session.github.accessToken
+        );
+        repositoryCount = repositories.length;
+        connectionCheck = repositories.length === 0 ? 'empty' : 'ok';
+      } catch (error) {
+        connectionCheck =
+          error instanceof GitHubError && error.code === 'auth_rejected'
+            ? 'reauth_required'
+            : 'sync_failed';
+        console.error(
+          '[dashboard] Failed to list GitHub repositories:',
+          error instanceof Error ? error.message : 'unknown error'
+        );
+      }
+    }
   }
+
+  const repoCount: string | number = repositoryCount ?? '—';
 
   let issuesAnalyzed = 0;
   let patchesGenerated = 0;
@@ -129,7 +134,6 @@ export default async function DashboardPage() {
     <AppShell user={githubUser} gradient="dashboard">
       <Suspense>
         <WelcomeToast />
-        <GitHubStatusToast />
       </Suspense>
       <div className="p-6 max-w-4xl mx-auto">
         <DashboardHeader userName={githubUser?.login || 'developer'} />
@@ -143,11 +147,12 @@ export default async function DashboardPage() {
         <RecentAnalyses analyses={recentAnalyses} />
 
         <GitHubConnectionCard
-          configured={installation.configured}
-          installations={installation.installations}
-          repositoryCount={installation.repositoryCount}
-          installUrl={installation.installUrl}
-          manageUrl={installation.manageUrl}
+          configured={isGitHubOAuthConfigured()}
+          connected={user.source === 'github'}
+          repositoryCount={repositoryCount}
+          manageUrl={githubOAuthManageUrl()}
+          check={connectionCheck}
+          login={githubUser?.login || null}
         />
 
         <div className="mt-8">

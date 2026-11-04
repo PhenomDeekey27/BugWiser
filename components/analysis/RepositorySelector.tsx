@@ -10,11 +10,9 @@ interface RepositorySelectorProps {
   repositories: Repository[];
   loading?: boolean;
   error?: string | null;
-  /** No GitHub App installation is linked to this account yet. */
-  requiresInstallation?: boolean;
-  /** An installation exists, but it has no selected repositories. */
-  requiresRepositorySelection?: boolean;
-  installUrl?: string | null;
+  /** The session has no GitHub identity (guest): public imports only. */
+  requiresGitHub?: boolean;
+  /** Where the user reviews which applications may read their repositories. */
   manageUrl?: string | null;
 }
 
@@ -24,9 +22,7 @@ export function RepositorySelector({
   repositories,
   loading = false,
   error = null,
-  requiresInstallation = false,
-  requiresRepositorySelection = false,
-  installUrl = null,
+  requiresGitHub = false,
   manageUrl = null,
 }: RepositorySelectorProps) {
   return (
@@ -55,47 +51,36 @@ export function RepositorySelector({
         </div>
       )}
 
-      {!loading && !error && repositories.length === 0 && requiresInstallation && (
+      {!loading && !error && repositories.length === 0 && requiresGitHub && (
         <div className="p-8 rounded-lg bg-surface border border-border text-center">
           <p className="text-sm text-bw-peach">
-            No GitHub App installation is linked to your account yet. Install the
-            App and choose the repositories BugWiser may access.
+            Sign in with GitHub to analyze issues. BugWiser can then read the public,
+            private, and organization repositories your account already has access to.
           </p>
-          {installUrl && (
-            <a href={installUrl} rel="noreferrer" className="inline-block mt-4">
-              <Button className="btn-bw-primary font-medium">Install GitHub App</Button>
-            </a>
-          )}
+          <a
+            href="/auth/github?returnTo=%2Fanalysis%2Fnew"
+            className="inline-block mt-4"
+          >
+            <Button className="btn-bw-primary font-medium">Sign in with GitHub</Button>
+          </a>
         </div>
       )}
 
-      {!loading && !error && repositories.length === 0 && requiresRepositorySelection && (
+      {!loading && !error && repositories.length === 0 && !requiresGitHub && (
         <div className="p-8 rounded-lg bg-surface border border-border text-center">
           <p className="text-sm text-bw-peach">
-            Your GitHub App installation has no repositories selected. Choose at
-            least one repository on GitHub, then reload this page.
+            No repositories found. Make sure your GitHub account has access to
+            repositories, then reload this page.
           </p>
           {manageUrl && (
             <a href={manageUrl} target="_blank" rel="noreferrer" className="inline-block mt-4">
               <Button variant="outline" className="font-medium">
-                Manage repository access
+                Review GitHub access
               </Button>
             </a>
           )}
         </div>
       )}
-
-      {!loading &&
-        !error &&
-        repositories.length === 0 &&
-        !requiresInstallation &&
-        !requiresRepositorySelection && (
-          <div className="p-8 rounded-lg bg-surface border border-border text-center">
-            <p className="text-sm text-bw-peach">
-              No repositories found. Make sure your GitHub account has access to repositories.
-            </p>
-          </div>
-        )}
 
       {!loading && !error && repositories.length > 0 && (
         <div className="space-y-2 max-h-125 overflow-y-auto pr-1 scrollbar-thin cursor-pointer">

@@ -2,6 +2,7 @@ import { NextResponse, after } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
 import { runRootCauseAnalysis } from '@/lib/analysis/root-cause';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 // A local-model generation may wait up to RELAY_GENERATION_TIMEOUT_MS on the
 // browser relay (lib/ai/connection/relay.ts) — the stage must outlive that
@@ -35,7 +36,7 @@ export async function POST(
     );
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json(
       { error: 'Forbidden' },
       { status: 403 }

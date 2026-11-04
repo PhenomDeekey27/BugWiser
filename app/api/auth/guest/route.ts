@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { GuestSessionError, resolveOrCreateGuest } from '@/lib/auth/guest';
-import { setSessionCookie } from '@/lib/auth/session';
+import { guestSessionInput, setSessionCookie } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
  * Starts (or reuses) a session for a visitor without a GitHub account. The
- * browser never receives a token: only a signed HttpOnly cookie.
+ * browser never receives a token: only a sealed HttpOnly cookie.
  */
 export async function POST() {
   try {
@@ -28,7 +28,10 @@ export async function POST() {
       { headers: { 'Cache-Control': 'no-store' } }
     );
 
-    if (created) setSessionCookie(response, user);
+    if (created) {
+      setSessionCookie(response, guestSessionInput(user));
+    }
+
     return response;
   } catch (error) {
     if (error instanceof GuestSessionError) {

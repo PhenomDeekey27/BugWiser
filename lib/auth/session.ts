@@ -1,30 +1,44 @@
-// Server-side BugWiser application session.
+// BugWiser application session.
 //
-// The session is a stateless, signed, HttpOnly cookie. It contains only the
-// minimum identity needed by server handlers (BugWiser user UUID + GitHub
-// numeric id/login/avatar). It NEVER contains GitHub tokens, installation
-// tokens, client secrets, or private keys.
+// ONE COOKIE, NO DATABASE READ
+// The session is a single AES-256-GCM sealed cookie (see `session-token.ts`).
+// Reading it performs zero I/O, so a suspended Neon compute cannot decide whether
+// a user is signed in: GitHub already answered that question during the OAuth
+// exchange.
 //
-// Supabase Auth remains a supported fallback: when no BugWiser session exists
-// but a valid Supabase session does, the Supabase user is returned and can be
-// bridged into a BugWiser session by the legacy callback or a protected route.
+// What the cookie carries:
+//   * the display identity (user id, GitHub id, login, name, avatar, source),
+//   * the GitHub credential this session acts with, encrypted inside the seal,
+//   * whether the `users` row has been written yet, plus the retry schedule for
+//     that write when Neon was unavailable at sign-in time.
+//
+// What it must never carry in the clear: nothing. HttpOnly + Secure (in
+// production) + SameSite=Lax keep it away from JavaScript and from cross-site
+// requests, and the GCM auth tag rejects any edit.
+//
+// Persistence is therefore *after* authentication and never gates it: a failed
+// `users` write produces a pending session that retries on a backoff schedule
+// (see `persistence.ts`), not a failed sign-in.
 
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { resolveAppBaseUrl, resolveGitHubCallbackUrl } from './app-url';
+import { OAUTH_STATE_COOKIE, SESSION_COOKIE } from './cookie-names';
 import {
-  OAUTH_STATE_COOKIE,
-  OAUTH_STATE_TTL_SECONDS,
-  PENDING_INSTALL_COOKIE,
-  PENDING_INSTALL_TTL_SECONDS,
-  SESSION_COOKIE,
-  SESSION_ROTATE_AFTER_SECONDS,
   SESSION_TTL_SECONDS,
-  signSignedToken,
-  verifySignedToken,
-  randomToken,
-  type SignedTokenPayload,
-} from './signed-cookie';
+  openSession,
+  sealSession,
+  sessionNeedsRefresh,
+  sessionTtlFor,
+  type AppSession,
+  type GitHubCredential,
+  type SessionIdentity,
+} from './session-token';
+
+export type { AppSession, GitHubCredential, SessionIdentity };
+
+/** How the caller proved who they are. A guest has no GitHub credential. */
+export type AuthSource = 'github' | 'guest';
 
 export interface AuthUser {
   userId: string;
@@ -33,37 +47,45 @@ export interface AuthUser {
   name: string | null;
   avatarUrl: string;
   /**
-   * Which mechanism authenticated this request. `guest` is a signed-cookie
-   * session backed by a provisioned Supabase user: it can own analyses but has
-   * no GitHub identity, installation, or write access.
+   * `guest` means a session provisioned without GitHub: it can own analyses of
+   * public repositories but has no GitHub identity, no token, and no write
+   * access.
    */
-  source: 'github_app' | 'supabase' | 'guest';
+  source: AuthSource;
 }
 
-export interface AppSession extends AuthUser {
-  sid: string;
-  iat: number;
-  exp: number;
+export interface NewSessionInput {
+  identity: SessionIdentity;
+  github: GitHubCredential | null;
+  persisted: boolean;
+  persistAttempts?: number;
+  nextPersistAt?: number;
 }
 
-export interface PendingInstallation {
-  installationId: number;
-  setupAction: string;
-  returnTo: string;
-}
+export const SESSION_MAX_AGE_SECONDS = SESSION_TTL_SECONDS;
 
-/** Display-only viewer for the app shell; never includes tokens. */
-export function viewerFromAuthUser(
-  user: AuthUser | null
-): { login: string; name: string | null; avatarUrl: string } | null {
-  if (!user) return null;
-  return { login: user.login, name: user.name, avatarUrl: user.avatarUrl };
-}
-
-export interface OAuthFlowState {
-  state: string;
-  codeVerifier: string;
-  returnTo: string;
+/**
+ * Session input for a freshly provisioned guest.
+ *
+ * A guest has no GitHub credential by definition, so this is the only place a
+ * `github: null` session is created. Keeping it in one helper prevents a caller
+ * from accidentally seeding a guest cookie with a token.
+ */
+export function guestSessionInput(
+  user: Pick<AuthUser, 'userId' | 'login' | 'name' | 'avatarUrl'>
+): NewSessionInput {
+  return {
+    identity: {
+      userId: user.userId,
+      githubUserId: null,
+      login: user.login,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      source: 'guest',
+    },
+    github: null,
+    persisted: true,
+  };
 }
 
 export function getSessionSecret(): string | null {
@@ -76,224 +98,219 @@ export function isProductionRuntime(): boolean {
 }
 
 export function appBaseUrl(requestUrl?: string): string {
-  const configured =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.APP_URL ||
-    (process.env.VERCEL_PROJECT_PRODUCTION_URL
-      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-      : '');
-  if (configured) return configured.replace(/\/+$/, '');
-  if (requestUrl) return new URL(requestUrl).origin;
-  return 'http://localhost:3000';
+  return resolveAppBaseUrl(process.env, requestUrl);
 }
 
 export function githubCallbackUrl(requestUrl?: string): string {
-  const configured = process.env.GITHUB_APP_CALLBACK_URL;
-  if (configured) return configured;
-  return `${appBaseUrl(requestUrl)}/api/auth/callback`;
+  return resolveGitHubCallbackUrl(process.env, requestUrl);
 }
 
-function sessionCookieOptions(maxAge: number) {
+function cookieOptions(maxAge: number) {
   return {
     httpOnly: true,
+    // `secure` would make the cookie unusable on http://localhost in
+    // development, so it follows the runtime rather than a hardcoded value.
     secure: isProductionRuntime(),
+    // `lax` still sends the cookie on the top-level redirect back from GitHub,
+    // which is exactly the one cross-site navigation the flow needs.
     sameSite: 'lax' as const,
     path: '/',
     maxAge,
   };
 }
 
-function metadataValue(meta: Record<string, unknown> | undefined, keys: string[]): string {
-  if (!meta) return '';
-  for (const key of keys) {
-    const value = meta[key];
-    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
-  }
-  return '';
+/** Display-only viewer for the app shell; never includes tokens. */
+export function viewerFromAuthUser(
+  user: AuthUser | null
+): { login: string; name: string | null; avatarUrl: string } | null {
+  if (!user) return null;
+  return { login: user.login, name: user.name, avatarUrl: user.avatarUrl };
 }
 
-export function authUserFromSupabaseUser(user: {
-  id: string;
-  user_metadata?: Record<string, unknown>;
-}): AuthUser {  const meta = user.user_metadata;
-  const gid = metadataValue(meta, ['sub', 'provider_id']);
+export function authUserFromSession(session: AppSession): AuthUser {
   return {
-    userId: user.id,
-    githubUserId: /^\d+$/.test(gid) ? gid : null,
-    login: metadataValue(meta, ['user_name', 'preferred_username', 'login']) || 'user',
-    name: metadataValue(meta, ['full_name', 'name']) || null,
-    avatarUrl: metadataValue(meta, ['avatar_url']) || '',
-    source: 'supabase',
+    userId: session.userId,
+    githubUserId: session.githubUserId,
+    login: session.login,
+    name: session.name,
+    avatarUrl: session.avatarUrl,
+    source: session.source,
   };
 }
 
+export function sessionIdentity(session: AppSession): SessionIdentity {
+  return {
+    userId: session.userId,
+    githubUserId: session.githubUserId,
+    login: session.login,
+    name: session.name,
+    avatarUrl: session.avatarUrl,
+    source: session.source,
+  };
+}
+
+/**
+ * Resolves the caller's session, or null when there is none.
+ *
+ * No database and no network: an unreadable, edited, expired, or foreign cookie
+ * is simply "no session", and the caller decides what that means.
+ */
 export async function readAppSession(): Promise<AppSession | null> {
   const secret = getSessionSecret();
   if (!secret) return null;
 
   const store = await cookies();
   const raw = store.get(SESSION_COOKIE)?.value;
-  const payload = verifySignedToken(raw, secret, 'session');
-  if (!payload) return null;
+  return openSession(raw, secret);
+}
 
-  const { uid, gid, login, name, avatar, sid, src } = payload;
-  if (typeof uid !== 'string' || uid.length === 0) return null;
-  if (typeof sid !== 'string' || sid.length < 16) return null;
-
-  const source = src === 'guest' ? 'guest' : src === 'supabase' ? 'supabase' : 'github_app';
-
-  return {
-    userId: uid,
-    githubUserId: typeof gid === 'string' && /^\d+$/.test(gid) ? gid : null,
-    login: typeof login === 'string' && login.length > 0 ? login : 'user',
-    name: typeof name === 'string' ? name : null,
-    avatarUrl: typeof avatar === 'string' ? avatar : '',
-    source,
-    sid,
-    iat: payload.iat,
-    exp: payload.exp,
-  };
+/** Request identity, resolved only from a live BugWiser session cookie. */
+export async function getAuthenticatedUser(): Promise<AuthUser | null> {
+  const session = await readAppSession();
+  return session ? authUserFromSession(session) : null;
 }
 
 /**
- * Resolve the request identity. A valid BugWiser session wins; otherwise the
- * existing Supabase session is used so users mid-rollout keep working.
+ * Writes a brand-new session cookie. The lifetime is bounded by the GitHub
+ * credential so the cookie can never outlive the token it carries.
  */
-export async function getAuthenticatedUser(): Promise<AuthUser | null> {
-  const appSession = await readAppSession();
-  if (appSession) {
-    return {
-      userId: appSession.userId,
-      githubUserId: appSession.githubUserId,
-      login: appSession.login,
-      name: appSession.name,
-      avatarUrl: appSession.avatarUrl,
-      source: appSession.source,
-    };
-  }
-
-  try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return null;
-    return authUserFromSupabaseUser(user);
-  } catch {
-    return null;
-  }
-}
-
-export function shouldRotateSession(session: AppSession): boolean {
-  const now = Math.floor(Date.now() / 1000);
-  return now - session.iat >= SESSION_ROTATE_AFTER_SECONDS;
-}
-
-export function buildSessionToken(user: AuthUser, nowMs: number = Date.now()): string {
+export function setSessionCookie(
+  response: NextResponse,
+  input: NewSessionInput,
+  nowMs: number = Date.now()
+): void {
   const secret = getSessionSecret();
   if (!secret) {
     throw new Error('BUGWISER_SESSION_SECRET is not configured');
   }
-  return signSignedToken(
+
+  const ttl = sessionTtlFor(input.github, SESSION_TTL_SECONDS, nowMs);
+  const token = sealSession(
     {
-      uid: user.userId,
-      gid: user.githubUserId,
-      login: user.login,
-      name: user.name,
-      avatar: user.avatarUrl,
-      src: user.source,
-      sid: randomToken(24),
+      ...input.identity,
+      persisted: input.persisted,
+      persistAttempts: input.persistAttempts ?? 0,
+      nextPersistAt: input.nextPersistAt ?? 0,
+      github: input.github,
     },
     secret,
-    'session',
-    SESSION_TTL_SECONDS,
+    ttl,
     nowMs
   );
+
+  response.cookies.set(SESSION_COOKIE, token, cookieOptions(ttl));
 }
 
-export function setSessionCookie(response: NextResponse, user: AuthUser): void {
-  response.cookies.set(SESSION_COOKIE, buildSessionToken(user), sessionCookieOptions(SESSION_TTL_SECONDS));
-}
-
-export function clearAuthCookies(response: NextResponse): void {
-  for (const name of [SESSION_COOKIE, OAUTH_STATE_COOKIE, PENDING_INSTALL_COOKIE]) {
-    response.cookies.set(name, '', { ...sessionCookieOptions(0), maxAge: 0 });
-  }
-}
-
-export function setOAuthStateCookie(
+/**
+ * Re-seals an existing session with its remaining lifetime. Used for the sliding
+ * refresh and for persistence retries, which must not extend the session.
+ */
+export function resealSessionCookie(
   response: NextResponse,
-  flow: OAuthFlowState
-): void {
-  const secret = getSessionSecret();
-  if (!secret) return;
-  const token = signSignedToken(
-    { state: flow.state, codeVerifier: flow.codeVerifier, returnTo: flow.returnTo },
-    secret,
-    'oauth_state',
-    OAUTH_STATE_TTL_SECONDS
-  );
-  response.cookies.set(OAUTH_STATE_COOKIE, token, sessionCookieOptions(OAUTH_STATE_TTL_SECONDS));
-}
-
-export async function readOAuthState(): Promise<OAuthFlowState | null> {
-  const secret = getSessionSecret();
-  if (!secret) return null;
-  const store = await cookies();
-  const raw = store.get(OAUTH_STATE_COOKIE)?.value;
-  const payload = verifySignedToken(raw, secret, 'oauth_state');
-  if (!payload) return null;
-  if (typeof payload.state !== 'string' || typeof payload.codeVerifier !== 'string') return null;
-  if (typeof payload.returnTo !== 'string') return null;
-  return {
-    state: payload.state,
-    codeVerifier: payload.codeVerifier,
-    returnTo: payload.returnTo,
-  };
-}
-
-export function setPendingInstallCookie(
-  response: NextResponse,
-  pending: PendingInstallation
+  session: AppSession,
+  nowMs: number = Date.now()
 ): boolean {
   const secret = getSessionSecret();
   if (!secret) return false;
-  const token = signSignedToken(
+
+  const remaining = session.exp - Math.floor(nowMs / 1000);
+  if (remaining <= 0) return false;
+
+  const token = sealSession(
     {
-      installationId: pending.installationId,
-      setupAction: pending.setupAction,
-      returnTo: pending.returnTo,
+      ...sessionIdentity(session),
+      persisted: session.persisted,
+      persistAttempts: session.persistAttempts,
+      nextPersistAt: session.nextPersistAt,
+      github: session.github,
     },
     secret,
-    'pending_install',
-    PENDING_INSTALL_TTL_SECONDS
+    remaining,
+    nowMs
   );
-  response.cookies.set(PENDING_INSTALL_COOKIE, token, sessionCookieOptions(PENDING_INSTALL_TTL_SECONDS));
+
+  response.cookies.set(SESSION_COOKIE, token, cookieOptions(remaining));
   return true;
 }
 
-export async function readPendingInstall(): Promise<PendingInstallation | null> {
+/**
+ * Re-seals a session after its GitHub credential changed (a refresh), extending
+ * it to the new credential's lifetime. A refreshed token is proof the session is
+ * still in active use, so sliding the expiry forward is correct here.
+ */
+export function resealSessionWithCredential(
+  response: NextResponse,
+  session: AppSession,
+  credential: GitHubCredential,
+  nowMs: number = Date.now()
+): boolean {
   const secret = getSessionSecret();
-  if (!secret) return null;
-  const store = await cookies();
-  const raw = store.get(PENDING_INSTALL_COOKIE)?.value;
-  const payload: SignedTokenPayload | null = verifySignedToken(raw, secret, 'pending_install');
-  if (!payload) return null;
+  if (!secret) return false;
 
-  const installationId = Number(payload.installationId);
-  if (!Number.isSafeInteger(installationId) || installationId <= 0) return null;
+  const ttl = sessionTtlFor(credential, SESSION_TTL_SECONDS, nowMs);
+  const token = sealSession(
+    {
+      ...sessionIdentity(session),
+      persisted: session.persisted,
+      persistAttempts: session.persistAttempts,
+      nextPersistAt: session.nextPersistAt,
+      github: credential,
+    },
+    secret,
+    ttl,
+    nowMs
+  );
 
-  return {
-    installationId,
-    setupAction: typeof payload.setupAction === 'string' ? payload.setupAction : 'install',
-    returnTo: typeof payload.returnTo === 'string' ? payload.returnTo : '/dashboard',
-  };
+  response.cookies.set(SESSION_COOKIE, token, cookieOptions(ttl));
+  return true;
 }
 
-export function clearPendingInstallCookie(response: NextResponse): void {
-  response.cookies.set(PENDING_INSTALL_COOKIE, '', { ...sessionCookieOptions(0), maxAge: 0 });
+/** True when the session should be re-sealed to keep it from expiring mid-use. */
+export function shouldRefreshSession(
+  session: AppSession,
+  nowMs: number = Date.now()
+): boolean {
+  return sessionNeedsRefresh(session, nowMs);
 }
 
-export function clearOAuthStateCookie(response: NextResponse): void {
-  response.cookies.set(OAUTH_STATE_COOKIE, '', { ...sessionCookieOptions(0), maxAge: 0 });
+/**
+ * Slides an active session forward. Used only after the caller proved it is
+ * still in use (a rendered app shell), so an idle cookie still expires.
+ */
+export function extendSessionCookie(
+  response: NextResponse,
+  session: AppSession,
+  nowMs: number = Date.now()
+): boolean {
+  const secret = getSessionSecret();
+  if (!secret) return false;
+
+  const ttl = sessionTtlFor(session.github, SESSION_TTL_SECONDS, nowMs);
+  const token = sealSession(
+    {
+      ...sessionIdentity(session),
+      persisted: session.persisted,
+      persistAttempts: session.persistAttempts,
+      nextPersistAt: session.nextPersistAt,
+      github: session.github,
+    },
+    secret,
+    ttl,
+    nowMs
+  );
+
+  response.cookies.set(SESSION_COOKIE, token, cookieOptions(ttl));
+  return true;
+}
+
+/**
+ * Clears every auth cookie. There is no server-side session row to revoke: the
+ * cookie is the session, so deleting it ends the session. A copied cookie stays
+ * valid until it expires — which is why its lifetime is bounded and why the
+ * GitHub token inside it can be revoked from GitHub at any time.
+ */
+export function clearAuthCookies(response: NextResponse): void {
+  for (const name of [SESSION_COOKIE, OAUTH_STATE_COOKIE]) {
+    response.cookies.set(name, '', { ...cookieOptions(0), maxAge: 0 });
+  }
 }

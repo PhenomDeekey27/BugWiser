@@ -1,66 +1,105 @@
 import { NextResponse } from 'next/server';
 import {
-  getAuthenticatedUser,
+  extendSessionCookie,
   readAppSession,
-  setSessionCookie,
-  shouldRotateSession,
+  resealSessionCookie,
+  resealSessionWithCredential,
+  shouldRefreshSession,
 } from '@/lib/auth/session';
-import { getInstallationStatus } from '@/lib/github/app/access';
-import { githubAppInstallUrl } from '@/lib/github/app/config';
-import { logGitHubError } from '@/lib/github/app/log';
+import { refreshCredentialIfExpired } from '@/lib/auth/github-token';
+import { retryPendingPersistence } from '@/lib/auth/persistence';
+import { GitHubError } from '@/lib/github/errors';
+import { logAuthFailure, logAuthEvent } from '@/lib/auth/log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Session + GitHub installation status for the UI. Never returns tokens. */
+/**
+ * Session view for the UI, and the one place background session maintenance
+ * happens. Never returns tokens.
+ *
+ * Three maintenance tasks run here, in this order:
+ *   1. renew an expiring GitHub credential (no database involved);
+ *   2. retry a `users` row write that failed at sign-in time (durable backoff
+ *      stored in the cookie, so a cold start cannot lose it);
+ *   3. slide the session expiry forward while the user is active.
+ */
 export async function GET() {
-  const user = await getAuthenticatedUser();
-  const response = NextResponse.json(
-    { authenticated: Boolean(user), user: null, installation: null },
-    { headers: { 'Cache-Control': 'no-store' } }
-  );
+  const original = await readAppSession();
+  if (!original) {
+    return NextResponse.json(
+      { authenticated: false, user: null, github: null },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
+  }
 
-  if (!user) return response;
+  let session = original;
+  let credentialRefreshed = false;
+  let reauthRequired = false;
+  let persistenceChanged = false;
 
-  let installation = null;
   try {
-    const status = await getInstallationStatus(user.userId);
-    installation = {
-      ...status,
-      installUrl: status.installUrl || githubAppInstallUrl(),
-      needsInstallation: status.installations.length === 0,
-    };
+    const refresh = await refreshCredentialIfExpired(session);
+    if (refresh.refreshed) {
+      session = { ...session, github: refresh.credential };
+      credentialRefreshed = true;
+    } else if (refresh.reauthRequired) {
+      reauthRequired = true;
+    }
   } catch (error) {
-    logGitHubError('api/auth/session', 'installation status failed', error);
-    installation = {
-      configured: false,
-      installations: [],
-      repositoryCount: 0,
-      installUrl: githubAppInstallUrl(),
-      manageUrl: 'https://github.com/settings/installations',
-      needsInstallation: true,
-    };
+    // A transient GitHub failure must not sign the user out: keep the session
+    // and let the next request try again.
+    logAuthFailure('session_read', 'credential_refresh_failed', {
+      github_code: error instanceof GitHubError ? error.code : 'unexpected',
+    });
   }
 
-  // Rotate the signed session periodically while the user is active.
-  const session = await readAppSession();
-  if (session && shouldRotateSession(session)) {
-    setSessionCookie(response, user);
+  if (!reauthRequired) {
+    try {
+      const outcome = await retryPendingPersistence(session);
+      if (outcome.changed) {
+        session = outcome.session;
+        persistenceChanged = true;
+      }
+    } catch (error) {
+      logAuthFailure('session_read', 'persistence_retry_failed', {
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
   }
 
-  return NextResponse.json(
+  const response = NextResponse.json(
     {
       authenticated: true,
       user: {
-        id: user.userId,
-        githubUserId: user.githubUserId,
-        login: user.login,
-        name: user.name,
-        avatarUrl: user.avatarUrl,
-        authSource: user.source,
+        id: session.userId,
+        githubUserId: session.githubUserId,
+        login: session.login,
+        name: session.name,
+        avatarUrl: session.avatarUrl,
+        authSource: session.source,
       },
-      installation,
+      github: {
+        connected: session.source === 'github',
+        scopes: session.github?.scopes ?? [],
+        /** Only a fresh GitHub authorization can fix this. */
+        reauthRequired,
+        /** False while the `users` row is still waiting to be written. */
+        persisted: session.persisted,
+        expiresAt: session.github?.expiresAt ?? 0,
+      },
     },
     { headers: { 'Cache-Control': 'no-store' } }
   );
+
+  if (credentialRefreshed && session.github) {
+    resealSessionWithCredential(response, session, session.github);
+  } else if (persistenceChanged) {
+    resealSessionCookie(response, session);
+  } else if (shouldRefreshSession(session)) {
+    extendSessionCookie(response, session);
+    logAuthEvent('session_read', 'session extended', { user: session.userId });
+  }
+
+  return response;
 }

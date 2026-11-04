@@ -1,17 +1,17 @@
-import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@/lib/auth/cookie-names';
-import { verifySignedToken } from '@/lib/auth/signed-cookie';
+import { openSession } from '@/lib/auth/session-token';
 
 /**
  * Route protection and cross-site request rejection.
  *
- * The BugWiser session is an HttpOnly signed cookie. The proxy runs on the
- * Node.js runtime, so it verifies the signature and expiry before letting a
- * protected page render. When there is no valid BugWiser session it falls back
- * to the legacy Supabase session, which keeps users working during rollout.
- * Pages and API routes still authorise server-side; this is a UX boundary on
- * top of that, never the only check.
+ * The proxy verifies the sealed session cookie — decryption, auth tag, and
+ * expiry — which is cheap (no I/O) and enough to reject forged or stale cookies
+ * before a page renders. It does NOT prove the GitHub credential is still
+ * accepted by GitHub; every API route and page re-checks what it needs.
+ *
+ * This file runs on the Node.js runtime (Next.js default for `proxy.ts`), so it
+ * can use `node:crypto`. It must never import the database layer.
  */
 
 const PROTECTED_PREFIXES = ['/dashboard', '/analysis', '/models'];
@@ -87,50 +87,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // A valid BugWiser session is enough. Anything else (missing, expired,
-  // tampered) falls through to the Supabase fallback before redirecting.
   const rawSession = request.cookies.get(SESSION_COOKIE)?.value;
-  const sessionValid = Boolean(
-    rawSession &&
-      process.env.BUGWISER_SESSION_SECRET &&
-      verifySignedToken(rawSession, process.env.BUGWISER_SESSION_SECRET, 'session')
-  );
-  if (sessionValid) {
+  const session = openSession(rawSession, process.env.BUGWISER_SESSION_SECRET);
+  if (session) {
     return NextResponse.next();
   }
-
-  // Legacy Supabase session fallback (rollout support).
-  let supabaseResponse = NextResponse.next({ request });
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
-
-  let signedIn = false;
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    signedIn = Boolean(user);
-  } catch {
-    signedIn = false;
-  }
-
-  if (signedIn) return supabaseResponse;
 
   const redirect = NextResponse.redirect(signInUrl(request));
   if (rawSession) {

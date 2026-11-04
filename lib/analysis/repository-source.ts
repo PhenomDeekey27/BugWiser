@@ -1,11 +1,11 @@
 // One abstraction for "where does repository data come from".
 //
-// An analysis either belongs to a GitHub App installation or to a public
-// repository read anonymously. Everything downstream (indexing, source
-// retrieval, workspace staging) resolves the snapshot once and pins to a single
-// commit SHA, so a branch moving mid-analysis cannot mix versions.
+// An analysis either belongs to a repository read with the signed-in user's
+// GitHub token, or to a public repository read anonymously. Everything
+// downstream (indexing, source retrieval, workspace staging) resolves the
+// snapshot once and pins to a single commit SHA, so a branch moving mid-analysis
+// cannot mix versions.
 
-import { getRepositoryAccessToken } from '@/lib/github/app/access';
 import { githubFetch } from '@/lib/github/client';
 import {
   PUBLIC_REPOSITORY_LIMITS,
@@ -30,17 +30,22 @@ export interface AnalysisSourceRow {
 }
 
 export interface RepositorySnapshot {
-  source: 'installation' | 'public';
+  /** `github` = read with the user's token; `public` = anonymous pinned read. */
+  source: 'github' | 'public';
   owner: string;
   repo: string;
   fullName: string;
   branch: string;
   defaultBranch: string;
   commitSha: string;
-  installationId: number | null;
-  /** Installation token for private snapshots; null for public reads. */
+  /** User token for authenticated snapshots; null for public reads. */
   token: string | null;
   htmlUrl: string;
+}
+
+/** The credential the caller may use for this analysis, or null for public. */
+export interface RepositoryAccessInput {
+  githubToken: string | null;
 }
 
 export interface SnapshotFile {
@@ -63,7 +68,7 @@ export function publicReadToken(): string | null {
   return process.env.GITHUB_PUBLIC_READ_TOKEN || null;
 }
 
-async function resolveInstallationCommitSha(
+async function resolveCommitSha(
   token: string,
   owner: string,
   repo: string,
@@ -106,13 +111,17 @@ async function resolveInstallationCommitSha(
 /**
  * Resolves the exact commit and credentials for an analysis. A stored
  * `repository_commit` always wins; it is what makes workspace staging safe.
+ *
+ * The GitHub token is supplied by the caller (resolved from the session), never
+ * read from here: an analysis job must not depend on being able to read request
+ * cookies after the response has been sent.
  */
 export async function resolveRepositorySnapshot(
   analysis: AnalysisSourceRow,
-  actorUserId: string
+  access: RepositoryAccessInput
 ): Promise<RepositorySnapshot> {
   const { owner, repo } = splitFullName(analysis.repository_full_name);
-  const source = analysis.repository_source === 'public' ? 'public' : 'installation';
+  const source = analysis.repository_source === 'public' ? 'public' : 'github';
 
   if (source === 'public') {
     const pinned = normalizeCommitSha(analysis.repository_commit || '');
@@ -142,23 +151,27 @@ export async function resolveRepositorySnapshot(
       branch: analysis.repository_branch || defaultBranch,
       defaultBranch,
       commitSha: pinned,
-      installationId: null,
       token: null,
       htmlUrl: `https://github.com/${owner}/${repo}/tree/${pinned}`,
     };
   }
 
-  const access = await getRepositoryAccessToken(actorUserId, analysis.repository_full_name);
-  const token = access.token.token;
+  const token = access.githubToken;
+  if (!token) {
+    throw new Error(
+      'This analysis needs a GitHub credential, but the session has none. Sign in with GitHub again.'
+    );
+  }
+
   const requestedRef =
-    analysis.repository_branch || access.repository.defaultBranch || 'main';
+    analysis.repository_branch || analysis.repository_default_branch || 'main';
 
   let commitSha = normalizeCommitSha(analysis.repository_commit || '');
   let branch = requestedRef;
-  let defaultBranch = access.repository.defaultBranch || requestedRef;
+  let defaultBranch = analysis.repository_default_branch || requestedRef;
 
   if (!commitSha) {
-    const resolved = await resolveInstallationCommitSha(token, owner, repo, requestedRef);
+    const resolved = await resolveCommitSha(token, owner, repo, requestedRef);
     commitSha = resolved.commitSha;
     branch = resolved.branch;
     defaultBranch = resolved.defaultBranch;
@@ -172,7 +185,6 @@ export async function resolveRepositorySnapshot(
     branch,
     defaultBranch,
     commitSha,
-    installationId: access.installationId,
     token,
     htmlUrl: `https://github.com/${owner}/${repo}/tree/${commitSha}`,
   };
@@ -191,7 +203,7 @@ export async function fetchSnapshotTree(
     return { tree: result.tree, truncated: result.truncated };
   }
 
-  if (!snapshot.token) throw new Error('Missing installation token for repository tree.');
+  if (!snapshot.token) throw new Error('Missing GitHub credential for repository tree.');
 
   const response = await githubFetch<{
     tree: PublicTreeEntry[];
@@ -247,7 +259,7 @@ export async function fetchSnapshotFile(
     }
   }
 
-  if (!snapshot.token) throw new Error('Missing installation token for source retrieval.');
+  if (!snapshot.token) throw new Error('Missing GitHub credential for source retrieval.');
 
   const encodedPath = relative
     .split('/')
@@ -297,7 +309,7 @@ export async function fetchSnapshotIssue(
     }
   }
 
-  if (!snapshot.token) throw new Error('Missing installation token for issue retrieval.');
+  if (!snapshot.token) throw new Error('Missing GitHub credential for issue retrieval.');
 
   const response = await fetch(
     `https://api.github.com/repos/${snapshot.owner}/${snapshot.repo}/issues/${issueNumber}`,

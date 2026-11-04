@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/auth/session';
 import { createBackgroundClient } from '@/lib/supabase/background';
+import { isAnalysisVisibleTo } from '@/lib/analysis/ownership';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,7 +45,7 @@ export async function GET(
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
 
-  if (analysis.user_id !== user.userId) {
+  if (!isAnalysisVisibleTo(analysis.user_id, user.userId)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

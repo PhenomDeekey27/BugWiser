@@ -96,7 +96,11 @@ async function getRepositoryFiles(analysisId: string): Promise<RepositoryFileRec
   return (data as RepositoryFileRecord[]) || [];
 }
 
-export async function runRelevantFileDiscovery(analysisId: string, actorUserId: string): Promise<void> {
+export async function runRelevantFileDiscovery(
+  analysisId: string,
+  actorUserId: string,
+  githubToken: string | null
+): Promise<void> {
   console.log(`[relevant-files] Starting relevant file discovery for ${analysisId}`);
 
   try {
@@ -117,10 +121,10 @@ export async function runRelevantFileDiscovery(analysisId: string, actorUserId: 
       throw new Error('Analysis does not belong to the requesting user');
     }
 
-    // The snapshot is resolved inside the job (installation token or public
-    // read), and every file is fetched at the SAME pinned commit the index was
-    // built from — never at a moving branch head.
-    const snapshot = await resolveRepositorySnapshot(analysis, actorUserId);
+    // The snapshot is resolved inside the job (user token or public read), and
+    // every file is fetched at the SAME pinned commit the index was built from —
+    // never at a moving branch head.
+    const snapshot = await resolveRepositorySnapshot(analysis, { githubToken });
     console.log(
       `[relevant-files] Snapshot ${snapshot.fullName}@${snapshot.commitSha.slice(0, 12)} (${snapshot.source})`
     );

@@ -1,22 +1,22 @@
 // Guest sessions for public repository analysis.
 //
 // A visitor without a GitHub account still needs a durable owner for the rows
-// they create: `analyses.user_id` references `auth.users`. We therefore
-// provision a Supabase auth user with the service role and then issue the same
-// signed HttpOnly BugWiser cookie a GitHub sign-in uses. The guest:
+// they create: `analyses.user_id` references `users.id`. A guest is therefore an
+// ordinary `users` row with `identity_source = 'guest'`, provisioned in Neon with
+// an app-generated UUID, and the same sealed HttpOnly BugWiser session cookie a
+// GitHub sign-in uses.
 //
-//   * has no GitHub identity, token, or installation,
+//   * no GitHub identity, token, or repository access,
 //   * can only see and act on its own analyses (existing ownership checks),
 //   * can never push a branch or open a pull request.
+//
+// Unlike a GitHub sign-in, guest provisioning has no separate authority to fall
+// back on: the row IS the identity. When Neon is unreachable the request fails
+// cleanly and the visitor can retry — no half-created session is ever issued.
 
 import { randomUUID } from 'node:crypto';
-import { createBackgroundClient } from '@/lib/supabase/background';
-import {
-  getAuthenticatedUser,
-  getSessionSecret,
-  setSessionCookie,
-  type AuthUser,
-} from './session';
+import { getAuthenticatedUser, getSessionSecret, type AuthUser } from './session';
+import { createGuestUser } from './neon-user-store';
 
 export interface GuestSessionResult {
   user: AuthUser;
@@ -24,7 +24,7 @@ export interface GuestSessionResult {
 }
 
 export class GuestSessionError extends Error {
-  code: 'session_secret_missing' | 'provisioning_failed' | 'service_role_missing';
+  code: 'session_secret_missing' | 'provisioning_failed';
 
   constructor(message: string, code: GuestSessionError['code']) {
     super(message);
@@ -33,11 +33,29 @@ export class GuestSessionError extends Error {
   }
 }
 
-/**
- * Creates the backing auth user. Nothing is written to a public schema: this is
- * an ordinary `auth.users` row with guest metadata, deleted by the same cascade
- * as any other user.
- */
+export interface GuestProfile {
+  userId: string;
+  login: string;
+  email: string | null;
+  metadata: Record<string, unknown>;
+}
+
+/** Pure: the identity a guest session is given. `email` stays null on purpose. */
+export function buildGuestProfile(nonce: string = randomUUID()): GuestProfile {
+  const compact = nonce.replace(/-/g, '');
+  const login = `guest-${compact.slice(0, 8)}`;
+  return {
+    userId: nonce,
+    login,
+    email: null,
+    metadata: {
+      bugwiser_guest: true,
+      user_name: login,
+      full_name: 'Guest',
+    },
+  };
+}
+
 export async function provisionGuestUser(): Promise<AuthUser> {
   if (!getSessionSecret()) {
     throw new GuestSessionError(
@@ -46,30 +64,15 @@ export async function provisionGuestUser(): Promise<AuthUser> {
     );
   }
 
-  // The service role is required because the visitor is not signed in yet.
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new GuestSessionError(
-      'Guest sessions require SUPABASE_SERVICE_ROLE_KEY to provision an owner.',
-      'service_role_missing'
-    );
-  }
-
-  const token = randomUUID().replace(/-/g, '');
-  const login = `guest-${token.slice(0, 8)}`;
-  const db = createBackgroundClient();
-
-  const { data, error } = await db.auth.admin.createUser({
-    email: `${login}@guests.bugwiser.app`,
-    email_confirm: true,
-    user_metadata: {
-      bugwiser_guest: true,
-      user_name: login,
-      full_name: 'Guest',
-    },
+  const profile = buildGuestProfile();
+  const { error } = await createGuestUser({
+    id: profile.userId,
+    email: profile.email,
+    metadata: profile.metadata,
   });
 
-  if (error || !data.user) {
-    console.error('[auth/guest] Failed to provision guest user:', error?.message);
+  if (error) {
+    console.error('[auth/guest] Failed to provision guest user:', error.message);
     throw new GuestSessionError(
       'Could not create a guest session. Try again later.',
       'provisioning_failed'
@@ -77,9 +80,9 @@ export async function provisionGuestUser(): Promise<AuthUser> {
   }
 
   return {
-    userId: data.user.id,
+    userId: profile.userId,
     githubUserId: null,
-    login,
+    login: profile.login,
     name: 'Guest',
     avatarUrl: '',
     source: 'guest',
@@ -96,11 +99,4 @@ export async function resolveOrCreateGuest(): Promise<GuestSessionResult> {
 
   const user = await provisionGuestUser();
   return { user, created: true };
-}
-
-export function applyGuestCookie(
-  response: Parameters<typeof setSessionCookie>[0],
-  user: AuthUser
-): void {
-  setSessionCookie(response, user);
 }

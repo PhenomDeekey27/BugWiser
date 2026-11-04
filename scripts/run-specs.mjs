@@ -12,18 +12,25 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const specs = [
   'lib/analysis/clone-instructions.spec.ts',
+  'lib/analysis/local-test.spec.ts',
+  'lib/analysis/ownership.spec.ts',
   'lib/analysis/evidence-verify.spec.ts',
   'lib/analysis/filter.spec.ts',
   'lib/analysis/public-request.spec.ts',
   'lib/analysis/repository-context.spec.ts',
   'lib/analysis/workspace-core.spec.ts',
   'lib/auth/signed-cookie.spec.ts',
+  'lib/auth/session-token.spec.ts',
+  'lib/auth/oauth-state-core.spec.ts',
+  'lib/auth/identity-core.spec.ts',
+  'lib/auth/persistence-core.spec.ts',
   'lib/github/public.spec.ts',
-  'lib/github/app/config.spec.ts',
-  'lib/github/app/errors.spec.ts',
-  'lib/github/app/jwt.spec.ts',
-  'lib/github/app/repository-sync.spec.ts',
-  'lib/github/app/token-cache.spec.ts',
+  'lib/github/errors.spec.ts',
+  'lib/github/repositories-core.spec.ts',
+  'lib/github/repository-name.spec.ts',
+  'lib/github/oauth/authorize.spec.ts',
+  'lib/github/oauth/config.spec.ts',
+  'lib/github/oauth/token.spec.ts',
 ];
 
 let failed = 0;

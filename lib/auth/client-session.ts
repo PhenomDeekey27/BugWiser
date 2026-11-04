@@ -16,31 +16,30 @@ export interface ClientAuthUser {
   login: string;
   name: string | null;
   avatarUrl: string;
-  authSource: 'github_app' | 'supabase' | 'guest';
+  /** `guest` has no GitHub identity: public repositories only. */
+  authSource: 'github' | 'guest';
 }
 
-export interface ClientInstallationSummary {
-  installationId: number;
-  accountLogin: string;
-  accountType: string;
-  repositorySelection: string | null;
-  suspended: boolean;
-  htmlUrl: string | null;
-}
-
-export interface ClientInstallationStatus {
-  configured: boolean;
-  installations: ClientInstallationSummary[];
-  repositoryCount: number;
-  installUrl: string | null;
-  manageUrl: string;
-  needsInstallation: boolean;
+/**
+ * The GitHub side of the session. There is no installation to describe: an
+ * OAuth App grant is per user, so "connected" simply means this session carries
+ * a usable GitHub credential.
+ */
+export interface ClientGitHubState {
+  connected: boolean;
+  scopes: string[];
+  /** Only a fresh GitHub authorization can fix this. */
+  reauthRequired: boolean;
+  /** False while the `users` row is still waiting to be written. */
+  persisted: boolean;
+  /** Unix seconds; 0 means the token does not expire. */
+  expiresAt: number;
 }
 
 export interface ClientAuthSession {
   authenticated: boolean;
   user: ClientAuthUser | null;
-  installation: ClientInstallationStatus | null;
+  github: ClientGitHubState | null;
 }
 
 export const SESSION_EXPIRED_MESSAGE = 'Your GitHub session has expired. Please sign in again.';
