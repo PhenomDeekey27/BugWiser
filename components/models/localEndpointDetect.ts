@@ -23,6 +23,7 @@
 
 import { probeLocalModelsList, type FetchLike } from '@/lib/ai/connection/testConnection';
 import { diagnoseFetchFailure } from '@/lib/ai/connection/reachability';
+import { localAddressSpace, type LocalAddressSpace } from '@/lib/ai/connection/relayTarget';
 
 /** Common ports: Ollama, LM Studio, llama.cpp & friends, vLLM, text-gen-webui, LOCALAI, ollama-alt, TGI. */
 export const DETECT_PORTS = [11434, 1234, 8080, 8000, 5000, 7860, 1337, 30000, 5001] as const;
@@ -67,8 +68,18 @@ export async function detectLocalEndpoint(options: DetectOptions = {}): Promise<
   const hosts = options.hosts ?? DETECT_HOSTS;
   const ports = options.ports ?? DETECT_PORTS;
   const timeoutMs = options.timeoutMs ?? 1_000;
-  const fetchFn = options.fetchFn ?? (globalThis.fetch as FetchLike | undefined);
-  if (!fetchFn) return { endpoint: null, blocked: [] };
+  const rawFetch = options.fetchFn ?? (globalThis.fetch as FetchLike | undefined);
+  if (!rawFetch) return { endpoint: null, blocked: [] };
+
+  // Chrome's Local Network Access blocks a public https page from contacting
+  // the user's machine unless the request declares the target address space;
+  // without this probe every live local server looks unreachable.
+  const fetchFn: FetchLike = (url, init = {}) => {
+    const addressSpace = localAddressSpace(url);
+    const next: RequestInit & { targetAddressSpace?: LocalAddressSpace } = { ...init };
+    if (addressSpace) next.targetAddressSpace = addressSpace;
+    return rawFetch(url, next);
+  };
 
   const candidates: { baseUrl: string; index: number }[] = [];
   let index = 0;

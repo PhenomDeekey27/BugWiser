@@ -57,6 +57,41 @@ export function isLocalNetworkHost(hostname: string): boolean {
 }
 
 /**
+ * Address-space declaration a browser needs before it may contact a local
+ * target from a public https page (Chrome Local Network Access). Omitting it
+ * makes Chrome reject the request before it leaves the browser — which is
+ * indistinguishable from "server down" unless the option is set.
+ */
+export type LocalAddressSpace = 'loopback' | 'local';
+
+function isLoopbackHost(host: string): boolean {
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  if (isIpv4(host)) {
+    const octets = host.split('.').map((o) => Number(o));
+    if (octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return false;
+    // 127.0.0.0/8 and INADDR_ANY are this machine.
+    return octets[0] === 127 || (octets[0] === 0 && octets[1] === 0 && octets[2] === 0 && octets[3] === 0);
+  }
+  return false;
+}
+
+/** `loopback` for this machine, `local` for the LAN, null for public targets. */
+export function localAddressSpace(rawUrl: string): LocalAddressSpace | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  const host = hostnameOf(url);
+  if (isLoopbackHost(host)) return 'loopback';
+  if (isLocalNetworkHost(host)) return 'local';
+  return null;
+}
+
+/**
  * True when the URL is an http(s) address only the user's browser can reach
  * (local network host). This is the precondition for relaying: the server
  * would fail the fetch itself, and only the user's own machine can succeed.

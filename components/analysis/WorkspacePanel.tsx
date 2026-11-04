@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { UnifiedDiffView } from '@/components/code/UnifiedDiffView';
 import { LocalTestPanel } from '@/components/analysis/LocalTestPanel';
+import { FixWorkflowPanel } from '@/components/analysis/FixWorkflowPanel';
+import { WorkspaceReview } from '@/components/analysis/WorkspaceReview';
 import { toast } from 'sonner';
-import type { ApplyFixError, ApplyFixResult, WorkspaceSummary } from '@/types';
+import type { ApplyFixError, ApplyFixResult, FixStatus, WorkspaceSummary } from '@/types';
 
 interface WorkspacePanelProps {
   analysisId: string;
@@ -17,6 +18,13 @@ interface WorkspacePanelProps {
   patchStatus?: 'none' | 'pending' | 'applied' | 'failed' | null;
   createdBranch?: string | null;
   commitSha?: string | null;
+  fixStatus?: FixStatus | null;
+  fixError?: string | null;
+  fixTargetRepository?: string | null;
+  fixBaseBranch?: string | null;
+  fixUsedFork?: boolean | null;
+  pullRequestUrl?: string | null;
+  pullRequestNumber?: number | null;
   onApplied?: (result: ApplyFixResult) => void;
 }
 
@@ -40,6 +48,13 @@ export function WorkspacePanel({
   patchStatus,
   createdBranch,
   commitSha,
+  fixStatus,
+  fixError,
+  fixTargetRepository,
+  fixBaseBranch,
+  fixUsedFork,
+  pullRequestUrl,
+  pullRequestNumber,
   onApplied,
 }: WorkspacePanelProps) {
   const [workspace, setWorkspace] = useState<WorkspaceSummary | null>(null);
@@ -49,6 +64,10 @@ export function WorkspacePanel({
   const [pendingPush, setPendingPush] = useState<PushIntent | null>(null);
   const [pushed, setPushed] = useState<ApplyFixResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  // The server persists the failed stage; mirror it locally so the workflow
+  // panel updates without waiting for a record refresh.
+  const [localFix, setLocalFix] = useState<{ status: FixStatus; error: string } | null>(null);
 
   const isPublic = repositorySource === 'public';
   const alreadyApplied = patchStatus === 'applied';
@@ -145,11 +164,28 @@ export function WorkspacePanel({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        const failure = data as ApplyFixError | null;
+        // A pull-request failure answers 502 while the branch and commit are
+        // real; show the pushed branch and the exact failed step.
+        const partial = data as ApplyFixResult | null;
+        if (partial?.success === true && partial.branch) {
+          setPendingPush(null);
+          setPushed(partial);
+          setError(partial.pullRequestError || 'The branch was pushed, but the pull request failed.');
+          onApplied?.(partial);
+          return;
+        }
+        const failure = data as (ApplyFixError & { loginUrl?: string }) | null;
+        if (failure?.loginUrl) setAuthUrl(failure.loginUrl);
         setError(failure?.error || `Could not push the branch (${response.status}).`);
+        setLocalFix({
+          status: failure?.stage || 'failed',
+          error: failure?.error || 'The GitHub write failed.',
+        });
         return;
       }
       setPendingPush(null);
+      setAuthUrl(null);
+      setLocalFix(null);
       setPushed(data as ApplyFixResult);
       toast.success(
         intent === 'pull_request' ? 'Branch pushed and pull request opened' : 'Branch pushed to GitHub'
@@ -208,7 +244,7 @@ export function WorkspacePanel({
             {staging ? 'Applying…' : staged ? 'Re-apply fix' : 'Apply Fix'}
           </Button>
 
-          {staged && !alreadyApplied && !isPublic && (
+          {staged && !alreadyApplied && (
             <>
               <Button
                 size="sm"
@@ -235,16 +271,19 @@ export function WorkspacePanel({
       <p className="mt-2 text-xs text-bw-peach leading-relaxed">
         Apply Fix writes the patch into an isolated workspace pinned to the commit above.
         GitHub is not modified until you push a branch or raise a pull request.
+        {isPublic &&
+          ' This repository was imported without GitHub access — sign-in is only needed when you push.'}
       </p>
 
       {pendingPush && (
         <div className="mt-3 rounded border border-primary-container/40 bg-surface-dim p-3 space-y-2">
           <p className="text-xs text-bw-peach-light leading-relaxed">
             {pendingPush === 'pull_request'
-              ? 'Push the staged files to a new branch and open a pull request against '
-              : 'Push the staged files to a new branch created from '}
+              ? `Push the staged files to a fix branch and open a pull request against ${repositoryFullName} at `
+              : 'Push the staged files to a fix branch created from '}
             <span className="font-mono">{repositoryBranch || workspace?.baseCommit?.slice(0, 10)}</span>?
             {pendingPush === 'branch' && ' The default branch is never modified.'}
+            {isPublic && ' If your account cannot write to this repository, the branch goes to your fork.'}
           </p>
           <div className="flex items-center gap-2">
             <Button
@@ -277,106 +316,42 @@ export function WorkspacePanel({
       {error && (
         <div className="mt-3 rounded border border-error-container/50 bg-error-container/20 p-2">
           <p className="text-xs text-error-default">{error}</p>
+          {authUrl && (
+            <a href={authUrl} className="mt-2 inline-flex">
+              <Button size="sm" className="btn-bw-primary font-medium">
+                Authorize with GitHub →
+              </Button>
+            </a>
+          )}
         </div>
       )}
 
+      <FixWorkflowPanel
+        fixStatus={pushed?.fixStatus ?? localFix?.status ?? fixStatus}
+        fixError={localFix?.error ?? fixError}
+        branch={pushed?.branch ?? createdBranch}
+        commitSha={pushed?.commitSha ?? commitSha}
+        pullRequestUrl={pushed?.pullRequestUrl ?? pullRequestUrl}
+        pullRequestNumber={pushed?.pullRequestNumber ?? pullRequestNumber}
+        targetRepository={pushed?.repositoryFullName ?? fixTargetRepository}
+        baseBranch={pushed?.defaultBranch ?? fixBaseBranch}
+        usedFork={pushed?.usedFork ?? fixUsedFork}
+        loginUrl={
+          authUrl ??
+          `/api/auth/github/start?returnTo=${encodeURIComponent(`/analysis/${analysisId}`)}&force=1`
+        }
+        retrying={pushing}
+        onRetryPullRequest={() => void handlePush('pull_request')}
+        onRetry={() => void handlePush('branch')}
+      />
+
       {staged && (
-        <div className="mt-4 space-y-3">
-          <div className="space-y-2">
-            {files.map((file) => (
-              <details key={file.path} className="rounded border border-border bg-surface-dim">
-                <summary className="flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer">
-                  <span className="font-mono text-[11px] text-bw-peach-light truncate">{file.path}</span>
-                  <span className="font-mono text-[10px] whitespace-nowrap">
-                    <span className="text-green-400">+{file.additions}</span>{' '}
-                    <span className="text-red-400">-{file.deletions}</span>
-                  </span>
-                </summary>
-                <div className="p-2 border-t border-border">
-                  <UnifiedDiffView diff={file.diff} />
-                </div>
-              </details>
-            ))}
-          </div>
-
-          <div className="rounded border border-border bg-surface-dim p-3">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-bw-peach">
-                Verification
-              </span>
-              <Badge variant="outline" className="text-[10px] font-mono border-amber-500/50 text-amber-400">
-                {verification?.status === 'not_run' || !verification ? 'not run' : verification.status}
-              </Badge>
-            </div>
-            <p className="mt-1 text-xs text-bw-peach leading-relaxed">
-              {verification?.reason ||
-                'No verification plan was generated for this repository, so no checks were executed.'}
-            </p>
-            {verification?.commands?.length ? (
-              <ul className="mt-2 space-y-1">
-                {verification.commands.map((command) => (
-                  <li key={`${command.name}-${command.command}`} className="font-mono text-[11px] text-bw-peach-light">
-                    <span className="text-bw-peach">{command.name}:</span> {command.command}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {verification?.regressionTests?.length ? (
-              <p className="mt-2 text-[11px] font-mono text-bw-peach">
-                Regression tests: {verification.regressionTests.join(', ')}
-              </p>
-            ) : null}
-            <p className="mt-2 text-[10px] text-bw-peach">
-              A staged patch is not a verified fix. Only completed checks can be reported as passing.
-            </p>
-          </div>
-
-          {pushed ? (
-            <div className="rounded border border-green-500/30 bg-green-500/5 p-3">
-              <p className="text-xs text-green-400">
-                Pushed {pushed.filesChanged.length} file
-                {pushed.filesChanged.length === 1 ? '' : 's'} to{' '}
-                <span className="font-mono">{pushed.branch}</span>.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {pushed.htmlUrl && (
-                  <a
-                    href={pushed.htmlUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] font-mono text-primary-container hover:underline"
-                  >
-                    View branch →
-                  </a>
-                )}
-                {pushed.pullRequestUrl && (
-                  <a
-                    href={pushed.pullRequestUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[11px] font-mono text-primary-container hover:underline"
-                  >
-                    View pull request →
-                  </a>
-                )}
-              </div>
-            </div>
-          ) : isPublic ? (
-            <div className="rounded border border-border bg-surface-dim p-3">
-              <p className="text-xs text-bw-peach leading-relaxed">
-                This repository was imported without GitHub access, so the staged
-                changes cannot be pushed automatically. Copy the patch or apply it
-                in your own fork.
-              </p>
-            </div>
-          ) : alreadyApplied ? (
-            <div className="rounded border border-green-500/30 bg-green-500/5 p-3">
-              <p className="text-xs text-green-400">
-                This patch has already been pushed to a branch on GitHub.
-              </p>
-            </div>
-          ) : null}
-        </div>
+        <WorkspaceReview
+          files={files}
+          verification={verification}
+          pushed={pushed}
+          alreadyApplied={alreadyApplied}
+        />
       )}
 
       {(staged || alreadyApplied) && (

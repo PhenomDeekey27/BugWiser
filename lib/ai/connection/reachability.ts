@@ -8,9 +8,13 @@
 // Called only after a CORS-mode failure, a resolve therefore means "the
 // server is up and refused us on origin policy (CORS)".
 
+import { localAddressSpace, type LocalAddressSpace } from './relayTarget';
+
 export type ReachabilityVerdict = 'reachable-blocked' | 'unreachable' | 'unknown';
 
 const DIAGNOSE_TIMEOUT_MS = 3_000;
+
+type AddressSpaceInit = RequestInit & { targetAddressSpace?: LocalAddressSpace };
 
 /**
  * No-cors follow-up probe. Resolves → the address is up but blocking this
@@ -23,7 +27,11 @@ export async function diagnoseFetchFailure(
   timeoutMs = DIAGNOSE_TIMEOUT_MS
 ): Promise<ReachabilityVerdict> {
   try {
-    const init: RequestInit = {};
+    const init: AddressSpaceInit = {};
+    // Without this, Chrome's Local Network Access blocks the probe itself and
+    // a perfectly healthy local server is reported as unreachable.
+    const addressSpace = localAddressSpace(url);
+    if (addressSpace) init.targetAddressSpace = addressSpace;
     if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
       init.signal = AbortSignal.timeout(timeoutMs);
     }

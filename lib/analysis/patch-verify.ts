@@ -2,7 +2,7 @@ import {
   applyHunksDetailed,
   type ApplyOutcome,
   type PatchHunkInput,
-} from './patch-lines';
+} from './patch-lines.ts';
 
 export interface PatchFileLike {
   path: string;

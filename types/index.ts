@@ -181,22 +181,55 @@ export interface StructuredPatch {
   files: StructuredPatchFile[];
 }
 
+/**
+ * Stages of the fix workflow that are persisted in `analyses.fix_status`.
+ *
+ * The names describe what the server has actually finished, never what it is
+ * about to attempt, so a refreshed page can resume from the right place.
+ */
+export type FixStatus =
+  | 'none'
+  | 'awaiting_authorization'
+  | 'branch_creating'
+  | 'branch_created'
+  | 'committing'
+  | 'committed'
+  | 'pushing'
+  | 'pushed'
+  | 'creating_pr'
+  | 'pr_created'
+  | 'pr_failed'
+  | 'failed';
+
+export type FixMode = 'branch' | 'pull_request';
+
 export interface ApplyFixResult {
   success: boolean;
   branch: string;
   commitSha: string;
   commitMessage: string;
   filesChanged: string[];
+  /** Repository the branch was pushed to (a fork when one was used). */
   repositoryFullName: string;
+  /** Repository the pull request targets (the original upstream repository). */
+  upstreamFullName?: string;
   defaultBranch: string;
   htmlUrl?: string;
   pullRequestUrl?: string;
+  pullRequestNumber?: number;
+  /** Present when the branch and commit succeeded but the PR did not. */
+  pullRequestError?: string;
+  usedFork?: boolean;
+  headOwner?: string;
+  fixStatus?: FixStatus;
 }
 
 export interface ApplyFixError {
   success: false;
   error: string;
   code: ApplyFixErrorCode;
+  /** Exact stage that failed, so the UI can point at it. */
+  stage?: FixStatus;
 }
 
 export type ApplyFixErrorCode =
@@ -207,7 +240,16 @@ export type ApplyFixErrorCode =
   | 'file_changed'
   | 'patch_validation_failed'
   | 'commit_failed'
+  | 'push_failed'
+  | 'pull_request_failed'
   | 'repository_not_found'
+  | 'fork_unavailable'
+  | 'missing_base_branch'
+  | 'stale_base_commit'
+  | 'workspace_not_staged'
+  | 'fix_in_progress'
+  | 'requires_github_login'
+  | 'rate_limited'
   | 'token_expired'
   | 'insufficient_permissions';
 
@@ -357,6 +399,20 @@ export interface AnalysisRecord {
   applied_at: string | null;
   /** Set only when the fix was opened as a pull request. */
   pull_request_url?: string | null;
+  /** Fix workflow bookkeeping. Present after migration 024; optional on old rows. */
+  fix_status?: FixStatus | null;
+  fix_mode?: FixMode | null;
+  fix_target_repository?: string | null;
+  fix_target_owner?: string | null;
+  fix_head_repository?: string | null;
+  fix_base_branch?: string | null;
+  fix_base_commit?: string | null;
+  fix_used_fork?: boolean | null;
+  fix_error?: string | null;
+  fix_updated_at?: string | null;
+  pull_request_number?: number | null;
+  pull_request_state?: string | null;
+  pull_request_created_at?: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

@@ -17,7 +17,7 @@
 //     message leads with it — always with concrete fix steps for common local
 //     servers. It never includes headers/keys/bodies.
 
-import { isRelayableTarget } from './relayTarget';
+import { isRelayableTarget, localAddressSpace, type LocalAddressSpace } from './relayTarget';
 import { blockedLocalTargetReason, isPlainHttpNonLoopback } from './local';
 import { appOrigin, diagnoseFetchFailure, serverCorsHint, type ReachabilityVerdict } from './reachability';
 
@@ -138,20 +138,21 @@ export async function executeRelayJob(
     if (typeof value === 'string') headers[name] = value;
   }
 
-  const init: RequestInit & { targetAddressSpace?: 'local' } = {
+  const init: RequestInit & { targetAddressSpace?: LocalAddressSpace } = {
     method,
     headers,
     body: method === 'GET' || method === 'HEAD' ? undefined : job.body ?? undefined,
     redirect: 'follow',
   };
-  // Chrome (138+) only: mark plain-http requests to LAN addresses as targeting
-  // the local network so they are not blocked as mixed content from the https
-  // app origin (the user may be prompted once). Loopback is exempt from mixed
-  // content already — and claiming 'local' for it would mismatch its
-  // 'loopback' address space — so only NON-loopback local hosts qualify.
-  // Unknown dictionary members are ignored by other browsers.
-  if (isPlainHttpNonLoopback(job.url)) {
-    init.targetAddressSpace = 'local';
+  // Chrome (138+) Local Network Access: a public https page must DECLARE that
+  // it is contacting the user's machine, otherwise the request is blocked
+  // before it leaves the browser (surfacing as an opaque "Failed to fetch",
+  // identical to a dead server). `loopback` is this machine, `local` the LAN;
+  // claiming the wrong one is also rejected. Unknown dictionary members are
+  // ignored by other browsers.
+  const addressSpace = localAddressSpace(job.url);
+  if (addressSpace) {
+    init.targetAddressSpace = addressSpace;
   }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     init.signal = AbortSignal.timeout(RELAY_JOB_FETCH_TIMEOUT_MS);

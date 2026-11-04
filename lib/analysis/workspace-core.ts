@@ -65,7 +65,7 @@ export type StagePatchResult =
 const MAX_WORKSPACE_FILES = 20;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 
-function isSafeRepositoryPath(path: string): boolean {
+export function isSafeRepositoryPath(path: string): boolean {
   if (typeof path !== 'string' || path.length === 0 || path.length > 500) return false;
   if (path.startsWith('/') || path.includes('\\') || path.includes('\u0000')) return false;
   return path.split('/').every((part) => part !== '' && part !== '.' && part !== '..');

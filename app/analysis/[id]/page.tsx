@@ -446,6 +446,13 @@ export default function InvestigationPage() {
             changed_files: result.filesChanged,
             pull_request_url: result.pullRequestUrl || null,
             applied_at: new Date().toISOString(),
+            fix_status: result.fixStatus ?? (result.pullRequestUrl ? 'pr_created' : 'pushed'),
+            fix_error: result.pullRequestError || null,
+            fix_target_repository: result.repositoryFullName,
+            fix_target_owner: result.headOwner ?? null,
+            fix_base_branch: result.defaultBranch,
+            fix_used_fork: result.usedFork ?? false,
+            pull_request_number: result.pullRequestNumber ?? null,
           }
         : prev
     );

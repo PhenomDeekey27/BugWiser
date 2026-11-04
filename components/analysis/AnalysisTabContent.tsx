@@ -110,6 +110,13 @@ export function AnalysisTabContent({
             patchStatus={record.patch_status}
             createdBranch={record.created_branch}
             commitSha={record.commit_sha}
+            fixStatus={record.fix_status ?? null}
+            fixError={record.fix_error ?? null}
+            fixTargetRepository={record.fix_target_repository ?? null}
+            fixBaseBranch={record.fix_base_branch ?? null}
+            fixUsedFork={record.fix_used_fork ?? null}
+            pullRequestUrl={record.pull_request_url ?? null}
+            pullRequestNumber={record.pull_request_number ?? null}
             onApplied={onApplied}
           />
           <PatchViewer

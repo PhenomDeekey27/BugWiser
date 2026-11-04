@@ -6,8 +6,14 @@ import {
   verifyOAuthStateToken,
 } from '@/lib/auth/oauth-state';
 import { resolveGitHubIdentity } from '@/lib/auth/identity';
-import { setSessionCookie, getSessionSecret, githubCallbackUrl } from '@/lib/auth/session';
+import {
+  readAppSession,
+  setSessionCookie,
+  getSessionSecret,
+  githubCallbackUrl,
+} from '@/lib/auth/session';
 import { safeReturnTo } from '@/lib/auth/signed-cookie';
+import { shouldTransferGuestAnalyses, transferGuestAnalyses } from '@/lib/auth/guest-transfer';
 import { fetchGitHubUser } from '@/lib/github/api';
 import { GitHubError } from '@/lib/github/errors';
 import { requireGitHubOAuthConfig } from '@/lib/github/oauth/config';
@@ -107,6 +113,9 @@ export async function GET(request: NextRequest) {
   }
 
   const target = safeReturnTo(verification.returnTo);
+  // Captured before the new session replaces it: a guest session is the proof
+  // that this browser owns the public-import analyses created before sign-in.
+  const previousSession = await readAppSession();
 
   let grant: GitHubTokenGrant;
   try {
@@ -141,6 +150,19 @@ export async function GET(request: NextRequest) {
     const identity = await resolveGitHubIdentity(profile);
     if (identity.status === 'invalid') {
       return fail('identity_failed', { reason: 'invalid_github_id' });
+    }
+
+    // Signing in from a public-import session must not orphan that analysis.
+    // Best effort: a storage failure leaves sign-in fully working.
+    if (
+      shouldTransferGuestAnalyses({
+        guestUserId: previousSession?.userId,
+        githubUserId: identity.userId,
+        previousSource: previousSession?.source,
+        identityStatus: identity.status,
+      })
+    ) {
+      await transferGuestAnalyses(previousSession!.userId, identity.userId);
     }
 
     const destination = new URL(target, request.url);

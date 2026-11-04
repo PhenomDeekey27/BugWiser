@@ -23,6 +23,14 @@ export interface GitHubApiRepository {
   html_url: string;
   pushed_at: string | null;
   updated_at: string;
+  /** True for a repository that is a fork of another repository. */
+  fork?: boolean;
+  /** Present on a fork: the repository it was forked from. */
+  parent?: {
+    full_name: string;
+    owner: { login: string };
+    default_branch?: string;
+  } | null;
   permissions?: {
     admin?: boolean;
     maintain?: boolean;

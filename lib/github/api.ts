@@ -3,8 +3,8 @@ import {
   isRateLimited,
   retryAfterSeconds,
   sanitizeGitHubMessage,
-} from './errors';
-import type { GitHubApiRepository, GitHubApiUser } from './types';
+} from './errors.ts';
+import type { GitHubApiRepository, GitHubApiUser } from './types.ts';
 
 const GITHUB_API_BASE = 'https://api.github.com';
 
