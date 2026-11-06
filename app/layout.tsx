@@ -38,6 +38,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
+      // ThemeScript sets `class` and `style.color-scheme` on <html> before
+      // hydration so the first paint has the right theme. React cannot know
+      // those attributes were intentional, so it is told to accept them.
+      suppressHydrationWarning
       className={`${inter.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable} ${manrope.variable} h-full antialiased`}
     >
       <head>

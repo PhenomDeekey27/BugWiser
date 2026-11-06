@@ -5,6 +5,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { CatalogProvider } from '@/app/models/page';
 import { mixedContentHint, normalizeLocalBaseUrl } from '@/lib/ai/connection/local';
+import {
+  localNetworkDeniedMessage,
+  primeLocalNetworkAccess,
+} from '@/lib/ai/connection/localNetworkAccess';
 import { appOrigin, serverCorsHint } from '@/lib/ai/connection/reachability';
 import { createConnectGate } from './connectState';
 import { detectLocalEndpoint } from './localEndpointDetect';
@@ -173,6 +177,17 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     if (!validation.ok) {
       dispatch({ type: 'test-failure', error: validation.error });
       return { ok: false, modelIds: [], baseUrl: '', error: validation.error };
+    }
+    // Chrome 142+ gates every https→127.0.0.1 request behind the loopback
+    // network permission. The test itself reaches the server through the relay
+    // worker, which runs AFTER the click and therefore cannot raise the
+    // permission prompt; ask for it here, while the click is still live, and
+    // stop early when this site was already blocked (nothing recovers from
+    // that on its own).
+    if ((await primeLocalNetworkAccess(validation.baseUrl)) === 'denied') {
+      const blockedError = localNetworkDeniedMessage(validation.baseUrl);
+      dispatch({ type: 'test-failure', error: blockedError });
+      return { ok: false, modelIds: [], baseUrl: validation.baseUrl, error: blockedError };
     }
     const outcome = await runTestRequest(validation.baseUrl, state.apiKey);
     if (!outcome.ok) {

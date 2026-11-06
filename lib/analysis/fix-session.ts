@@ -178,7 +178,14 @@ function legacyColumns(patch: FixStatePatch): Record<string, unknown> {
   if (patch.branch !== undefined) row.created_branch = patch.branch;
   if (patch.commitSha !== undefined) row.commit_sha = patch.commitSha;
   if (patch.commitMessage !== undefined) row.commit_message = patch.commitMessage;
-  if (patch.filesChanged !== undefined) row.changed_files = patch.filesChanged;
+  // `changed_files` is JSONB. node-postgres turns a JS array into a Postgres
+  // array literal (`{"src/a.js"}`), which jsonb rejects with "invalid input
+  // syntax for type json", so the array is sent as JSON text instead. `null`
+  // stays SQL NULL rather than becoming the JSON literal `null`.
+  if (patch.filesChanged !== undefined) {
+    row.changed_files =
+      patch.filesChanged === null ? null : JSON.stringify(patch.filesChanged);
+  }
   if (patch.appliedAt !== undefined) row.applied_at = patch.appliedAt;
   if (patch.pullRequest?.url !== undefined) row.pull_request_url = patch.pullRequest.url;
   return row;

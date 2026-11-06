@@ -20,6 +20,12 @@
 import { isRelayableTarget, localAddressSpace, type LocalAddressSpace } from './relayTarget';
 import { blockedLocalTargetReason, isPlainHttpNonLoopback } from './local';
 import { appOrigin, diagnoseFetchFailure, serverCorsHint, type ReachabilityVerdict } from './reachability';
+import {
+  localNetworkDeniedMessage,
+  localNetworkPromptNote,
+  queryLocalNetworkPermission,
+  type LocalNetworkPermissionState,
+} from './localNetworkAccess';
 
 /** Hard cap for the worker's own fetch — slightly beyond the server's longest wait budget (generation). */
 export const RELAY_JOB_FETCH_TIMEOUT_MS = 260_000;
@@ -56,7 +62,11 @@ const BROWSER_CONTROLLED_REQUEST_HEADERS = new Set([
  * the 'unknown' fallback (timeout/abort, no diagnosis) keeps the combined
  * guidance. Concrete fixes for popular local servers in every branch.
  */
-export function relayReachFailureMessage(rawUrl: string, verdict: ReachabilityVerdict = 'unknown'): string {
+export function relayReachFailureMessage(
+  rawUrl: string,
+  verdict: ReachabilityVerdict = 'unknown',
+  permission: LocalNetworkPermissionState = 'unsupported'
+): string {
   let host = 'your local endpoint';
   try {
     host = new URL(rawUrl).host;
@@ -65,6 +75,9 @@ export function relayReachFailureMessage(rawUrl: string, verdict: ReachabilityVe
   }
   const origin = appOrigin();
   const hint = serverCorsHint(rawUrl);
+  // A still-`prompt` permission means the browser rejected the request without
+  // an allow/deny on record (dismissed prompt, or no gesture to prompt from).
+  const permissionNote = permission === 'prompt' ? localNetworkPromptNote(rawUrl) : '';
   const mixedContentNote = isPlainHttpNonLoopback(rawUrl)
     ? ' Browsers also block plain http requests to non-loopback addresses from an https page — use 127.0.0.1/localhost, or serve the endpoint over https.'
     : '';
@@ -80,7 +93,7 @@ export function relayReachFailureMessage(rawUrl: string, verdict: ReachabilityVe
       `Could not reach ${host} from this browser tab — no server answered at that address (or the ` +
       `browser blocked the request). Confirm your local LLM server is running and that the host and ` +
       `port are correct; if this site asked for local-network permission, allow it. If the server is ` +
-      `up, it must also allow ${origin} (CORS): ${hint}.${mixedContentNote}`
+      `up, it must also allow ${origin} (CORS): ${hint}.${permissionNote}${mixedContentNote}`
     );
   }
   return (
@@ -176,9 +189,19 @@ export async function executeRelayJob(
     if (name === 'TimeoutError' || name === 'AbortError') {
       return { ok: false, error: relayReachFailureMessage(job.url) };
     }
-    // Opaque rejection: disambiguate with a no-cors probe — a resolve means
-    // the server is up and refused us on origin policy (CORS).
+    // A DENIED local-network permission rejects the request inside the browser
+    // (identical TypeError to a dead server) and never recovers on its own, so
+    // it must not be reported as "server down / CORS".
+    const addressSpace = localAddressSpace(job.url);
+    const permission = addressSpace
+      ? await queryLocalNetworkPermission(addressSpace)
+      : 'unsupported';
+    if (permission === 'denied') {
+      return { ok: false, error: localNetworkDeniedMessage(job.url) };
+    }
+    // Otherwise disambiguate with a no-cors probe — a resolve means the server
+    // is up and refused us on origin policy (CORS).
     const verdict = await diagnoseFetchFailure(job.url, fetchFn);
-    return { ok: false, error: relayReachFailureMessage(job.url, verdict) };
+    return { ok: false, error: relayReachFailureMessage(job.url, verdict, permission) };
   }
 }

@@ -18,6 +18,7 @@ const specs = [
   'lib/analysis/filter.spec.ts',
   'lib/analysis/public-request.spec.ts',
   'lib/ai/connection/localAddressSpace.spec.ts',
+  'lib/ai/connection/localNetworkAccess.spec.ts',
   'lib/analysis/fix-branch.spec.ts',
   'lib/analysis/apply-github-flow.spec.ts',
   'lib/analysis/repository-context.spec.ts',
