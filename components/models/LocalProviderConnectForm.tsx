@@ -181,14 +181,18 @@ export function LocalProviderConnectForm({ provider, onConnect }: LocalProviderC
     // Chrome 142+ gates every https→127.0.0.1 request behind the loopback
     // network permission. The test itself reaches the server through the relay
     // worker, which runs AFTER the click and therefore cannot raise the
-    // permission prompt; ask for it here, while the click is still live, and
-    // stop early when this site was already blocked (nothing recovers from
-    // that on its own).
-    if ((await primeLocalNetworkAccess(validation.baseUrl)) === 'denied') {
+    // permission prompt. We prompt the user here, while the click is still live,
+    // so the permission prompt appears naturally. If the user had already denied
+    // the permission, show the remediation message and stop early.
+    const permissionState = await primeLocalNetworkAccess(validation.baseUrl);
+    if (permissionState === 'denied') {
       const blockedError = localNetworkDeniedMessage(validation.baseUrl);
       dispatch({ type: 'test-failure', error: blockedError });
       return { ok: false, modelIds: [], baseUrl: validation.baseUrl, error: blockedError };
     }
+    // If the permission is `prompt` or `granted`, proceed with the test request.
+    // The `primeLocalNetworkAccess` function already handled the priming request
+    // above, so we just continue to runTestRequest.
     const outcome = await runTestRequest(validation.baseUrl, state.apiKey);
     if (!outcome.ok) {
       dispatch({ type: 'test-failure', error: outcome.error ?? 'Connection test failed.' });
